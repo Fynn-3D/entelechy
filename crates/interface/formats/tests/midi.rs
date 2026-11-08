@@ -189,7 +189,7 @@ fn a_score_read_live_is_the_score_imported() {
     assert_eq!(live, from_file, "{detail}");
     assert_eq!(live.domain(), entelechy_host::Domain::Rows(3));
     // Written out again, it reads back as the same rows.
-    let written = entelechy_formats::encode(&live, "mid", None).unwrap();
+    let written = entelechy_formats::encode(&live, "mid", None, None).unwrap();
     let again = entelechy_formats::midi::field(&read::read(&written).unwrap()).unwrap();
     assert_eq!(again.domain(), live.domain());
 }
@@ -205,20 +205,20 @@ fn a_field_that_does_not_fit_a_format_says_what_it_is_not() {
     )
     .unwrap();
     assert_eq!(
-        entelechy_formats::encode(&rows, "png", None),
+        entelechy_formats::encode(&rows, "png", None, None),
         Err(EncodeError::Unfit("not a grid"))
     );
     assert_eq!(
-        entelechy_formats::encode(&rows, "mid", None),
+        entelechy_formats::encode(&rows, "mid", None, None),
         Err(EncodeError::Unfit(
             "not rows of a note (start, duration, pitch, velocity, channel)"
         ))
     );
     assert_eq!(
-        entelechy_formats::encode(&rows, "pdf", None),
+        entelechy_formats::encode(&rows, "pdf", None, None),
         Err(EncodeError::Unknown)
     );
-    assert!(entelechy_formats::encode(&rows, "wav", Some(8000)).is_ok());
+    assert!(entelechy_formats::encode(&rows, "wav", Some(8000), None).is_ok());
 }
 
 #[test]

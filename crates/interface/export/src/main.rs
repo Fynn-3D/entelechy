@@ -246,7 +246,7 @@ fn export(args: &[String]) -> Result<String, String> {
                 "png" => None,
                 _ => beats,
             };
-            let bytes = entelechy_formats::encode(&data, format, rate)
+            let bytes = entelechy_formats::encode(&data, format, rate, None)
                 .map_err(|why| format!("{}: {why}", input.display()))?;
             std::fs::write(&out, bytes).map_err(|e| format!("{}: {e}", out.display()))?;
             let domain = data.domain();

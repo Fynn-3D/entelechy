@@ -68,7 +68,8 @@ entelechy-player editor.esn --input disk=~/code/thing/ --output done=~/code/thin
 
 Evaluates a scene once. `--save <node.port>=<file>` writes a node's
 output (a node of a placed graph by its path, the port after the last
-dot), which is how an asset is made. `--input` and `--output` place a
+dot), which is how an asset is made; rows go out as a `.csv` or `.json`
+table a scene reads back. `--input` and `--output` place a
 scene's inputs and outputs elsewhere, its text unchanged. Writes land
 only where `--allow` says; `--profile` prints each node's time, backend
 and transfers, waiting for the device after each, and each Kernel's

@@ -563,6 +563,65 @@ fn a_replay_says_ok_or_what_failed() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Rows are written as the data tables a scene reads: `--save` and an
+/// output `to` a `.csv` or `.json` name each column by the element's
+/// numbers, and the table reads back as the rows it was.
+#[test]
+fn rows_are_written_as_tables_and_read_back() {
+    let entelechy = env!("CARGO_BIN_EXE_entelechy");
+    let dir = scratch("tables");
+    let stat = "struct Stat { id: Int; power: Float; pos: Vec2; on: Bool; }";
+    std::fs::write(
+        dir.join("made.esn"),
+        format!(
+            "node stats: kernel {{ requires {{ field.write; }} {stat} output result: Rows<Stat>; domain = 3; compute {{ let i = element(); return Stat {{ id: i, power: float(i) * 0.5, pos: vec2(float(i), 0.1), on: i == 1 }}; }} }}\noutput kept <- stats.result to \"kept.json\";\n"
+        ),
+    )
+    .unwrap();
+    let output = Command::new(entelechy)
+        .arg("run")
+        .arg(dir.join("made.esn"))
+        .arg("--save")
+        .arg(format!("stats.result={}", dir.join("saved.csv").display()))
+        .arg("--allow")
+        .arg(format!("file.write={}", dir.display()))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("saved.csv")).unwrap(),
+        "id,power,pos.x,pos.y,on\n0,0,0,0.1,false\n1,0.5,1,0.1,true\n2,1,2,0.1,false\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("kept.json")).unwrap(),
+        "[\n  {\"id\": 0, \"power\": 0, \"pos\": {\"x\": 0, \"y\": 0.1}, \"on\": false},\n  {\"id\": 1, \"power\": 0.5, \"pos\": {\"x\": 1, \"y\": 0.1}, \"on\": true},\n  {\"id\": 2, \"power\": 1, \"pos\": {\"x\": 2, \"y\": 0.1}, \"on\": false}\n]\n"
+    );
+    // Each reads back as the rows it was.
+    for table in ["saved.csv", "kept.json"] {
+        std::fs::write(
+            dir.join("read.esn"),
+            format!(
+                "input back: Rows<Stat> = \"{table}\";\nnode sum: kernel {{ requires {{ field.read; field.write; }} {stat} input back: Rows<Stat> <- back; output result: Rows<Float>; domain = 1; compute {{ return loop count(back) with s = 0.0 {{ let b = at(back, index()); s + float(b.id) + b.power + b.pos.x + b.pos.y + if b.on {{ 100.0 }} else {{ 0.0 }} }}; }} }}\noutput result <- sum.result;\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("read.replay"),
+            "scene read.esn\nframe 0\nexpect sum.result[0] = 107.8 0.0001\n",
+        )
+        .unwrap();
+        let output = Command::new(entelechy)
+            .arg("replay")
+            .arg(dir.join("read.replay"))
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{table}: {stdout}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Whether `text` lists `id`'s preparing: under the heading, a line naming
 /// the Kernel after its compiling and its building in milliseconds.
 fn lists_preparing(text: &str, id: &str) -> bool {

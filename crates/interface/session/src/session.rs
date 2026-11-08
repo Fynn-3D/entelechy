@@ -1817,11 +1817,33 @@ impl Session {
     /// to files. Overlapping, that is the frame before: a write never waits
     /// for the frame in flight.
     fn write_confirmed(&mut self) {
+        // A data table names its columns by the numbers of the output's
+        // element.
+        let named: Vec<(String, Result<Vec<String>, String>)> = self
+            .scene
+            .files()
+            .writes
+            .iter()
+            .filter(|write| {
+                entelechy_formats::table::is_table(&entelechy_formats::extension(&write.path))
+            })
+            .map(|write| {
+                let output = entelechy_graph::NodeId(write.output.clone().into());
+                (write.output.clone(), self.element_names(&output, "result"))
+            })
+            .collect();
+        let names = |output: &str| {
+            named.iter().find(|(name, _)| name == output).map_or_else(
+                || Err(format!("no output `{output}`")),
+                |(_, names)| names.clone(),
+            )
+        };
         self.writes.after(
             self.scene.store().as_ref(),
             &self.scene.files().writes,
             self.evaluator.confirmed(),
             &mut self.runtime,
+            &names,
         );
     }
 
@@ -2273,7 +2295,9 @@ impl Session {
     /// Writes an evaluated, pinned node's output as a file: `.field` for
     /// any Field, `.png`/`.ppm` for pixels (a `Grid<Float>` as gray),
     /// `.pgm` for a `Grid<Float>`, `.wav` at 48 kHz for rows of one or two
-    /// floats, `.mid` for rows of notes. Only where
+    /// floats, `.mid` for rows of notes, `.csv`/`.json` for rows as the
+    /// data table a scene's input reads, a column for each number of the
+    /// element the node's Kernel declares. Only where
     /// [`Session::allowed_write`] allows, whoever asks.
     pub fn save(
         &mut self,
@@ -2465,8 +2489,9 @@ impl Session {
     }
 
     /// Writes a Field to a file in the format its extension names, as
-    /// [`Session::save`] does. Only where [`Session::allowed_write`]
-    /// allows, whoever asks.
+    /// [`Session::save`] does, but for a data table, whose columns only a
+    /// node's Kernel names. Only where [`Session::allowed_write`] allows,
+    /// whoever asks.
     pub fn export(&mut self, handle: Handle, path: &Path) -> Result<(), SessionError> {
         let path = self.allowed_write(path).map_err(SessionError::Observe)?;
         observe::write(
@@ -2474,6 +2499,7 @@ impl Session {
             &mut self.runtime,
             handle,
             &path,
+            None,
         )
         .map_err(|why| match why {
             observe::Written::Io(path, e) => SessionError::Io(path, e),

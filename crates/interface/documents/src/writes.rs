@@ -129,13 +129,15 @@ impl Writes {
     }
 
     /// Writes every output a confirmed evaluation changed, `outputs` as it
-    /// left them by name.
+    /// left them by name; `names` gives an output's element's numbers by
+    /// name, which a data table names its columns by.
     pub fn after(
         &mut self,
         store: &dyn Store,
         writes: &[entelechy_scene::Write],
         outputs: &[(String, Handle)],
         runtime: &mut Runtime,
+        names: &dyn Fn(&str) -> Result<Vec<String>, String>,
     ) {
         for write in writes {
             let Some(handle) = outputs
@@ -159,7 +161,8 @@ impl Writes {
             }
             let outcome = self.place_in(store, &write.path, false).and_then(|target| {
                 let data = words(&mut self.asked, &write.path, handle, runtime)?;
-                encode(&data, &write.path, write.bytes).map(|b| (target, b))
+                encode(&data, &write.path, write.bytes, &|| names(&write.output))
+                    .map(|b| (target, b))
             });
             let (target, bytes) = match outcome {
                 Ok(ready) => ready,
@@ -426,17 +429,26 @@ fn words<'r>(
         .map_err(|e| e.to_string())
 }
 
-fn encode(data: &FieldData, path: &Path, bytes: bool) -> Result<Vec<u8>, String> {
+fn encode(
+    data: &FieldData,
+    path: &Path,
+    bytes: bool,
+    names: &dyn Fn() -> Result<Vec<String>, String>,
+) -> Result<Vec<u8>, String> {
     if bytes {
         return entelechy_formats::encode_bytes(data);
     }
-    entelechy_formats::encode(data, &entelechy_formats::extension(path), None).map_err(|why| {
-        match why {
-            entelechy_formats::EncodeError::Unknown => why.to_string(),
-            entelechy_formats::EncodeError::Unfit(what) => {
-                format!("the output is {what}; write it as .field")
-            }
+    let extension = entelechy_formats::extension(path);
+    let names = if entelechy_formats::table::is_table(&extension) {
+        Some(names()?)
+    } else {
+        None
+    };
+    entelechy_formats::encode(data, &extension, None, names.as_deref()).map_err(|why| match why {
+        entelechy_formats::EncodeError::Unfit(what) => {
+            format!("the output is {what}; write it as .field")
         }
+        other => other.to_string(),
     })
 }
 

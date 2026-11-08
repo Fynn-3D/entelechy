@@ -131,7 +131,13 @@ pub(crate) fn save(
     let Some(handle) = evaluator.cached(node, port) else {
         return Err(why_no_value(graph, evaluator, None, node, port));
     };
-    write(store, runtime, handle, path).map_err(|why| match why {
+    // A data table names its columns by the numbers of the element.
+    let names = if entelechy_formats::table::is_table(&entelechy_formats::extension(path)) {
+        Some(element_names(graph, runtime, (node, port))?)
+    } else {
+        None
+    };
+    write(store, runtime, handle, path, names.as_deref()).map_err(|why| match why {
         Written::Unfit(what) => format!("`{node}.{port}` is {what}; save it as .field"),
         other => other.to_string(),
     })
@@ -141,8 +147,8 @@ pub(crate) fn save(
 pub(crate) enum Written {
     /// Reading the Field back from the device failed.
     Observe(String),
-    /// The file's extension names no format.
-    Unknown(entelechy_formats::EncodeError),
+    /// The file's extension names no format, or a table cannot be made.
+    Encode(entelechy_formats::EncodeError),
     /// The Field does not fit the format the extension names.
     Unfit(&'static str),
     /// The store refused it.
@@ -153,7 +159,7 @@ impl std::fmt::Display for Written {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Observe(why) => f.write_str(why),
-            Self::Unknown(why) => write!(f, "{why}"),
+            Self::Encode(why) => write!(f, "{why}"),
             Self::Unfit(what) => write!(f, "it is {what}"),
             Self::Io(path, e) => write!(f, "{}: {e}", path.display()),
         }
@@ -162,12 +168,13 @@ impl std::fmt::Display for Written {
 
 /// Materializes a Field and writes it to `path` in the format its
 /// extension names, through `store`: the session's one Field-to-file
-/// path, for `save` and `export`.
+/// path, for `save` and `export`; `names` names a data table's columns.
 pub(crate) fn write(
     store: &dyn crate::Store,
     runtime: &mut Runtime,
     handle: Handle,
     path: &Path,
+    names: Option<&[String]>,
 ) -> Result<(), Written> {
     runtime
         .materialize(handle)
@@ -176,11 +183,11 @@ pub(crate) fn write(
         .host()
         .data(handle)
         .map_err(|e| Written::Observe(e.to_string()))?;
-    let bytes = entelechy_formats::encode(data, &entelechy_formats::extension(path), None)
+    let bytes = entelechy_formats::encode(data, &entelechy_formats::extension(path), None, names)
         .map_err(|why| match why {
-            entelechy_formats::EncodeError::Unfit(what) => Written::Unfit(what),
-            unknown => Written::Unknown(unknown),
-        })?;
+        entelechy_formats::EncodeError::Unfit(what) => Written::Unfit(what),
+        other => Written::Encode(other),
+    })?;
     store
         .write(path, &bytes)
         .map_err(|e| Written::Io(path.to_path_buf(), e))

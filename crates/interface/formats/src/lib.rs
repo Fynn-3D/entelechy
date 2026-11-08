@@ -30,10 +30,10 @@ use std::path::Path;
 use entelechy_host::{Domain, FieldData, Scalar, Schema, Shape};
 
 /// The extensions [`read`] and [`encode`] know, as an error names them.
-const KNOWN: &str = "use .field, .png, .ppm, .pgm, .wav, or .mid";
+const KNOWN: &str = "use .field, .png, .ppm, .pgm, .wav, .mid, or a data table, .csv or .json";
 
 /// The formats a scene's input reads besides those [`encode`] writes.
-const READ_TOO: &str = "or a light's photometry, .ies, or a data table, .csv or .json";
+const READ_TOO: &str = "or a light's photometry, .ies";
 
 /// A picture's sample (`0..=1`, clamped) as the byte every 8-bit form of
 /// it holds: what a PNG or PPM writes and the pointer a scene draws
@@ -49,7 +49,9 @@ pub const DEFAULT_RATE: u32 = 48_000;
 pub const DEFAULT_BEATS: f32 = 120.0;
 
 /// The extensions [`encode`] writes.
-pub const WRITTEN: [&str; 7] = ["field", "png", "ppm", "pgm", "wav", "mid", "midi"];
+pub const WRITTEN: [&str; 9] = [
+    "field", "png", "ppm", "pgm", "wav", "mid", "midi", "csv", "json",
+];
 
 /// Whether [`encode`] writes a file of `path`'s extension; the error says
 /// which extensions it writes.
@@ -237,17 +239,24 @@ pub fn encode_bytes(data: &FieldData) -> Result<Vec<u8>, String> {
 }
 
 /// A Field as the file `extension` names. `rate` is a WAV's frames a
-/// second or a MIDI file's quarter notes a minute.
+/// second or a MIDI file's quarter notes a minute; `names` the name of
+/// each number of an element, as a data table's columns name them, which
+/// only a table needs.
 pub fn encode(
     data: &FieldData,
     extension: &str,
     rate: Option<u32>,
+    names: Option<&[String]>,
 ) -> Result<Vec<u8>, EncodeError> {
     let unfit = |why: &'static str| Err(EncodeError::Unfit(why));
     let domain = data.domain();
     let floats = |words: &[u32]| -> Vec<f32> { words.iter().map(|w| f32::from_bits(*w)).collect() };
     match extension {
         "field" => Ok(crate::file::encode_data(data)),
+        "csv" | "json" => {
+            let names = names.ok_or(EncodeError::Unnamed)?;
+            table::encode(data, names, extension).map_err(EncodeError::Table)
+        }
         "ppm" => {
             if !data.schema().is_picture(domain) {
                 return unfit("not a grid of pixels");
@@ -318,6 +327,10 @@ pub enum EncodeError {
     Unknown,
     /// The Field does not fit the format; the words follow "it is".
     Unfit(&'static str),
+    /// A data table was asked for without the names of its columns.
+    Unnamed,
+    /// The rows do not go into the table; why.
+    Table(String),
 }
 
 impl std::fmt::Display for EncodeError {
@@ -325,6 +338,10 @@ impl std::fmt::Display for EncodeError {
         match self {
             Self::Unknown => write!(f, "unknown Field file format; {KNOWN}"),
             Self::Unfit(why) => f.write_str(why),
+            Self::Unnamed => f.write_str(
+                "a data table's columns are named by the numbers of the element its Kernel declares, which the Field alone does not carry; write it from the scene (`--save`, an output `to`)",
+            ),
+            Self::Table(why) => f.write_str(why),
         }
     }
 }

@@ -131,7 +131,7 @@ fn window_flag() -> Flag {
 fn save_flag() -> Flag {
     repeated(
         "--save",
-        "<node.port>=<file.field|.png|.ppm|.pgm|.wav>",
+        "<node.port>=<file.field|.png|.ppm|.pgm|.wav|.mid|.csv|.json>",
         "Writes a node's output to a file, in the format its extension names.",
     )
 }

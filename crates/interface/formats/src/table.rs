@@ -1,7 +1,8 @@
 //! Data tables: CSV and JSON read as rows of the element a Kernel reads
-//! them as. The caller gives the name of each number an element holds
-//! (`pos.x`, `items.0`, `look.race`; one number alone is unnamed) and
-//! the element's layout; a record gives each named number its value.
+//! them as, and rows written as them. The caller gives the name of each
+//! number an element holds (`pos.x`, `items.0`, `look.race`; one number
+//! alone is unnamed) and the element's layout; a record gives each named
+//! number its value.
 //!
 //! A CSV file's first line names its columns; each line after it is a
 //! row, its cells separated by commas, a cell in double quotes holding
@@ -169,6 +170,150 @@ pub fn decode(
         u32::try_from(records.len()).map_err(|_| "the table has too many rows".to_owned())?;
     let domain = Domain::Rows(count);
     FieldData::from_values(element.schema.clone(), domain, &values).map_err(|e| e.to_string())
+}
+
+/// A `Rows` Field as the table `extension` names, each number under
+/// `names` (the element's, as [`Element`] holds them): what [`decode`]
+/// reads back word for word. A CSV's heading line names the columns, one
+/// number alone `value`; a JSON array holds a row an object, the dots
+/// nesting objects and the numbered parts arrays, one number alone a
+/// number. A JSON table cannot hold a NaN or an infinity.
+pub fn encode(data: &FieldData, names: &[String], extension: &str) -> Result<Vec<u8>, String> {
+    if !matches!(data.domain(), Domain::Rows(_)) {
+        return Err("not rows, which a table holds".to_owned());
+    }
+    let scalars = data.schema().scalars();
+    let per_row = data.schema().value_words();
+    let mut at = 0;
+    let mut layout = Vec::with_capacity(names.len());
+    for _ in names {
+        let scalar = *scalars
+            .get(at)
+            .ok_or("the names are more than the element's numbers")?;
+        layout.push((at, scalar));
+        at += scalar.words();
+    }
+    if at != per_row {
+        return Err("the names are fewer than the element's numbers".to_owned());
+    }
+    let values = data.values();
+    let rows = values.chunks_exact(per_row.max(1)).map(|row| {
+        layout
+            .iter()
+            .map(|&(at, scalar)| written(&row[at..at + scalar.words()], scalar))
+    });
+    let unnamed = names.len() == 1 && names[0].is_empty();
+    let mut out = String::new();
+    match extension {
+        "csv" => {
+            out.push_str(&if unnamed {
+                "value".to_owned()
+            } else {
+                names.join(",")
+            });
+            out.push('\n');
+            for row in rows {
+                out.push_str(&row.collect::<Vec<_>>().join(","));
+                out.push('\n');
+            }
+        }
+        "json" => {
+            out.push('[');
+            for (index, row) in rows.enumerate() {
+                let cells: Vec<String> = row.collect();
+                if let Some(bad) = cells
+                    .iter()
+                    .find(|cell| matches!(cell.as_str(), "NaN" | "inf" | "-inf"))
+                {
+                    return Err(format!(
+                        "row {index} holds {bad}, which JSON cannot hold; write it as .csv"
+                    ));
+                }
+                out.push_str(if index == 0 { "" } else { "," });
+                if unnamed {
+                    out.push_str(if index == 0 { "" } else { " " });
+                    out.push_str(&cells[0]);
+                    continue;
+                }
+                let mut object = Json::Object(Vec::new());
+                for (name, cell) in names.iter().zip(cells) {
+                    nest(&mut object, &name.split('.').collect::<Vec<_>>(), cell);
+                }
+                out.push_str("\n  ");
+                written_json(&object, &mut out);
+            }
+            out.push_str(if unnamed || data.domain().count() == 0 {
+                "]\n"
+            } else {
+                "\n]\n"
+            });
+        }
+        other => return Err(format!("`.{other}` is not a data table; use .csv or .json")),
+    }
+    Ok(out.into_bytes())
+}
+
+/// A number's words as a cell: the shortest text that reads back as them.
+fn written(words: &[u32], scalar: Scalar) -> String {
+    let wide = || u64::from(words[0]) | (u64::from(words[1]) << 32);
+    match scalar {
+        Scalar::Float => f32::from_bits(words[0]).to_string(),
+        Scalar::Int => (words[0] as i32).to_string(),
+        Scalar::Bool => (words[0] != 0).to_string(),
+        Scalar::Long => (wide() as i64).to_string(),
+        Scalar::Double => f64::from_bits(wide()).to_string(),
+    }
+}
+
+/// Puts `cell` into `object` at the path `parts` (a number's name, its
+/// dots apart), an object for each part before the last.
+fn nest(object: &mut Json, parts: &[&str], cell: String) {
+    let (Json::Object(fields), [head, rest @ ..]) = (object, parts) else {
+        return;
+    };
+    if rest.is_empty() {
+        fields.push(((*head).to_owned(), Json::Scalar(cell)));
+        return;
+    }
+    let at = match fields.iter().position(|(key, _)| key == head) {
+        Some(at) => at,
+        None => {
+            fields.push(((*head).to_owned(), Json::Object(Vec::new())));
+            fields.len() - 1
+        }
+    };
+    nest(&mut fields[at].1, rest, cell);
+}
+
+/// `value` as JSON text; an object whose keys count from 0 in order is an
+/// array.
+fn written_json(value: &Json, out: &mut String) {
+    match value {
+        Json::Scalar(text) => out.push_str(text),
+        Json::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                out.push_str(if index == 0 { "" } else { ", " });
+                written_json(item, out);
+            }
+            out.push(']');
+        }
+        Json::Object(fields) => {
+            let numbered = fields
+                .iter()
+                .enumerate()
+                .all(|(index, (key, _))| *key == index.to_string());
+            out.push(if numbered { '[' } else { '{' });
+            for (index, (key, item)) in fields.iter().enumerate() {
+                out.push_str(if index == 0 { "" } else { ", " });
+                if !numbered {
+                    out.push_str(&format!("\"{key}\": "));
+                }
+                written_json(item, out);
+            }
+            out.push(if numbered { ']' } else { '}' });
+        }
+    }
 }
 
 /// A whole-number cell written `table:name`: the place of the row so
@@ -748,6 +893,84 @@ mod tests {
         let json = decode(br##"[{"#name": "goblin", "id": 0, "power": 1.5}, {"#name": "cave croc", "id": 11, "power": 2}]"##, "json", &e, usize::MAX, &no_tables).unwrap();
         assert_eq!(csv.values(), json.values());
         assert_eq!(csv.values()[2], 11);
+    }
+
+    #[test]
+    fn written_rows_read_back_word_for_word() {
+        let (names, schema) = element(
+            &[
+                "id", "power", "pos.x", "pos.y", "on", "big", "fine", "items.0", "items.1",
+            ],
+            vec![
+                Scalar::Int,
+                Scalar::Float,
+                Scalar::Float,
+                Scalar::Float,
+                Scalar::Bool,
+                Scalar::Long,
+                Scalar::Long,
+                Scalar::Double,
+                Scalar::Double,
+                Scalar::Int,
+                Scalar::Int,
+            ],
+        );
+        let e = Element {
+            names: &names,
+            schema: &schema,
+        };
+        let row = |id: i32, power: f32, x: f32, big: i64, fine: f64| {
+            let big = big as u64;
+            let fine = fine.to_bits();
+            vec![
+                id as u32,
+                power.to_bits(),
+                x.to_bits(),
+                (-x).to_bits(),
+                u32::from(id % 2 == 0),
+                big as u32,
+                (big >> 32) as u32,
+                fine as u32,
+                (fine >> 32) as u32,
+                7,
+                id as u32,
+            ]
+        };
+        let words: Vec<u32> = [
+            row(3, 0.1, 1e-30, -5_000_000_000, std::f64::consts::PI),
+            row(-4, 3.4e38, 0.0, i64::MAX, -1e300),
+        ]
+        .concat();
+        let rows = FieldData::from_values(schema.clone(), Domain::Rows(2), &words).unwrap();
+        for extension in ["csv", "json"] {
+            let bytes = encode(&rows, &names, extension).unwrap();
+            let back = decode(&bytes, extension, &e, usize::MAX, &no_tables).unwrap();
+            assert_eq!(back.values(), rows.values(), "{extension}");
+        }
+        let csv = String::from_utf8(encode(&rows, &names, "csv").unwrap()).unwrap();
+        assert!(
+            csv.starts_with("id,power,pos.x,pos.y,on,big,fine,items.0,items.1\n3,0.1,"),
+            "{csv}"
+        );
+        let json = String::from_utf8(encode(&rows, &names, "json").unwrap()).unwrap();
+        assert!(
+            json.contains(r#""pos": {"x": "#) && json.contains(r#""items": [7, 3]"#),
+            "{json}"
+        );
+        // One number alone is a CSV's one column and a JSON array of numbers.
+        let one = vec![String::new()];
+        let schema = Schema::new(vec![Scalar::Int]);
+        let rows = FieldData::from_values(schema, Domain::Rows(2), &[5, 6]).unwrap();
+        assert_eq!(encode(&rows, &one, "csv").unwrap(), b"value\n5\n6\n");
+        assert_eq!(encode(&rows, &one, "json").unwrap(), b"[5, 6]\n");
+        // What JSON cannot hold, and what is no table, are said.
+        let schema = Schema::new(vec![Scalar::Float]);
+        let rows =
+            FieldData::from_values(schema.clone(), Domain::Rows(1), &[f32::NAN.to_bits()]).unwrap();
+        assert!(encode(&rows, &one, "json").unwrap_err().contains("NaN"));
+        assert_eq!(encode(&rows, &one, "csv").unwrap(), b"value\nNaN\n");
+        let grid = FieldData::from_values(schema, Domain::Grid(1, 1), &[0]).unwrap();
+        assert!(encode(&grid, &one, "csv").unwrap_err().contains("not rows"));
     }
 
     #[test]
