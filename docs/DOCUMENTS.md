@@ -460,9 +460,14 @@ changes:
   refused; a table
   that cannot be read says the line or row and leaves the input as it
   was. One number alone is unnamed: a CSV's one column, or a JSON array
-  of numbers. Rows are written as such a table by `run --save` and by an
-  output `to` a `.csv` or `.json`, a column for each number of the
-  element the producing Kernel declares, and read back as they were.
+  of numbers. Text goes in an `[Int; N]` (`name: [Int; 16]`), its cell
+  under the array's own name: `goblin,哥布林,30` under
+  `#name,name,hp` is a character's code an element, zeros after, the
+  cell as written; a text longer than N is refused. Rows are written
+  as such a table by `run --save` and by an output `to` a `.csv` or
+  `.json`, a column for each number of the element the producing Kernel
+  declares (an array whose every row holds text, as that text), and
+  read back as they were.
 - `input title: Rows<Int> = text "ENTELECHY";`: the characters' codes, updated
   when the document's text changes. A string writes a new line, a tab, a
   quote and a backslash as `\n`, `\t`, `\"` and `\\`, so one string may

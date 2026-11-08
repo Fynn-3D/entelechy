@@ -732,3 +732,23 @@ measures it, so a word earns its place and its test at once.
 **Where.** [packages](../packages/README.md), *Entry*; the tests each
 package carries, which `cargo xtask packages` holds to reach every
 Kernel.
+
+## A table's text is an array of codes in its row
+
+A data table's cell may hold text, and the text lands in the row it
+belongs to: an `[Int; N]` of the element, a character's code an
+element, zeros after, given under the array's own name. The language
+keeps no string type and the scene no second Field for a table's words.
+
+**Why.** A row stays one element of one typed Field, laid out as the
+Kernel declares it, resident on the device and read by `at(rows,
+i).name[j]` like any number of it; a text pool beside the rows would
+make one table two Fields and a new input form to carry them. Text was
+already codes a row (`text "..."`), so a table's text is the same thing
+in a fixed width, and the width is the Kernel's to declare. Written
+back, an array whose every row is characters then zeros goes out as
+text, which reads back word for word; any other array goes out as its
+numbers, which read back the same.
+
+**Where.** [the table format](../crates/interface/formats/src/table.rs),
+the table input in [DOCUMENTS](DOCUMENTS.md#inputs-from-files).

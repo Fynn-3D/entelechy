@@ -15,6 +15,12 @@
 //! column or key whose name begins with `#` (`#name`) is for whoever
 //! reads the table, and is left out.
 //!
+//! An `[Int; N]` may be given as text under its own name (`name`, not
+//! `name.0`): a character's code an element, zeros after, the cell as
+//! written (a CSV's quotes and a JSON string's escapes taken off); a
+//! text of more than N characters is refused. Written, an array whose
+//! every row holds characters, then zeros, goes out as that text.
+//!
 //! A row's `#name` names it to other tables: a whole-number cell written
 //! `table:name` (`beasts:goblin`) is the place of the row so named in
 //! the table of that name beside this one, counted from 0. A name no row
@@ -101,7 +107,12 @@ pub fn decode(
             }
         })
         .collect();
-    let wanted = wanted_names(element.names);
+    let layout = laid(element.names, element.schema)?;
+    let runs = text_runs(element.names, &layout);
+    let mut wanted = wanted_names(element.names);
+    for run in &runs {
+        wanted.insert(run.name.clone(), run.name.clone());
+    }
     let mut values = Vec::with_capacity(needed);
     let records: Vec<Record> = records
         .into_iter()
@@ -127,9 +138,38 @@ pub fn decode(
                 listed(element.names)
             ));
         }
-        let mut word = 0;
-        for name in element.names {
-            let scalar = element.schema.scalars()[word];
+        let mut place = 0;
+        while place < element.names.len() {
+            // An array given as text: a character's code an element, zeros
+            // after.
+            if let Some(run) = runs.iter().find(|run| run.first == place)
+                && let Some((_, text)) = record.cells.iter().find(|(name, _)| *name == run.name)
+            {
+                let members = &element.names[place..place + run.count];
+                if let Some(member) = members.iter().find(|m| given(record, m).is_some()) {
+                    return Err(format!(
+                        "{}: `{}` is given as text and `{member}` as a number; give one",
+                        record.at, run.name
+                    ));
+                }
+                let codes: Vec<u32> = text.chars().map(u32::from).collect();
+                if codes.len() > run.count {
+                    return Err(format!(
+                        "{}: `{}` holds {} characters, and {text:?} is {}",
+                        record.at,
+                        run.name,
+                        run.count,
+                        codes.len()
+                    ));
+                }
+                values.extend_from_slice(&codes);
+                values.extend(std::iter::repeat_n(0, run.count - codes.len()));
+                place += run.count;
+                continue;
+            }
+            let name = &element.names[place];
+            let scalar = layout[place].1;
+            place += 1;
             let text = given(record, name).ok_or_else(|| {
                 format!(
                     "{}: no {} given",
@@ -142,7 +182,7 @@ pub fn decode(
                 )
             })?;
             let text = &match named_row(text.trim(), scalar, tables) {
-                Some(Ok(place)) => place.to_string(),
+                Some(Ok(row)) => row.to_string(),
                 Some(Err(why)) => {
                     return Err(format!(
                         "{}: `{}` is {:?}: {why}",
@@ -163,7 +203,6 @@ pub fn decode(
                 )
             })?;
             values.extend_from_slice(&words_of[..scalar.words()]);
-            word += scalar.words();
         }
     }
     let count =
@@ -177,13 +216,112 @@ pub fn decode(
 /// reads back word for word. A CSV's heading line names the columns, one
 /// number alone `value`; a JSON array holds a row an object, the dots
 /// nesting objects and the numbered parts arrays, one number alone a
-/// number. A JSON table cannot hold a NaN or an infinity.
+/// number. An `[Int; N]` whose every row holds text (characters, then
+/// zeros) is written as that text under the array's name. A JSON table
+/// cannot hold a NaN or an infinity.
 pub fn encode(data: &FieldData, names: &[String], extension: &str) -> Result<Vec<u8>, String> {
     if !matches!(data.domain(), Domain::Rows(_)) {
         return Err("not rows, which a table holds".to_owned());
     }
-    let scalars = data.schema().scalars();
+    let layout = laid(names, data.schema())?;
     let per_row = data.schema().value_words();
+    let values = data.values();
+    let rows: Vec<&[u32]> = values.chunks_exact(per_row.max(1)).collect();
+    // Each column: a number by its place among the names, or an array's
+    // text.
+    let mut columns: Vec<(String, Option<&TextRun>, usize)> = Vec::new();
+    let runs = text_runs(names, &layout);
+    let mut place = 0;
+    while place < names.len() {
+        let texts = runs.iter().find(|run| {
+            run.first == place
+                && rows
+                    .iter()
+                    .all(|row| text_of(&row[layout[place].0..][..run.count]).is_some())
+                && rows.iter().any(|row| row[layout[place].0] != 0)
+        });
+        match texts {
+            Some(run) => {
+                columns.push((run.name.clone(), Some(run), place));
+                place += run.count;
+            }
+            None => {
+                columns.push((names[place].clone(), None, place));
+                place += 1;
+            }
+        }
+    }
+    let cells = |row: &[u32]| -> Vec<Cell> {
+        columns
+            .iter()
+            .map(|&(_, run, place)| {
+                let (at, scalar) = layout[place];
+                match run {
+                    Some(run) => Cell::Text(text_of(&row[at..][..run.count]).unwrap_or_default()),
+                    None => Cell::Number(written(&row[at..at + scalar.words()], scalar)),
+                }
+            })
+            .collect()
+    };
+    let unnamed = names.len() == 1 && names[0].is_empty();
+    let mut out = String::new();
+    match extension {
+        "csv" => {
+            let headings: Vec<&str> = columns.iter().map(|(name, ..)| name.as_str()).collect();
+            out.push_str(&if unnamed {
+                "value".to_owned()
+            } else {
+                headings.join(",")
+            });
+            out.push('\n');
+            for row in &rows {
+                let row: Vec<String> = cells(row).iter().map(Cell::csv).collect();
+                out.push_str(&row.join(","));
+                out.push('\n');
+            }
+        }
+        "json" => {
+            out.push('[');
+            for (index, row) in rows.iter().enumerate() {
+                let cells = cells(row);
+                if let Some(Cell::Number(bad)) = cells.iter().find(|cell| {
+                    matches!(cell, Cell::Number(n) if matches!(n.as_str(), "NaN" | "inf" | "-inf"))
+                }) {
+                    return Err(format!(
+                        "row {index} holds {bad}, which JSON cannot hold; write it as .csv"
+                    ));
+                }
+                out.push_str(if index == 0 { "" } else { "," });
+                if unnamed {
+                    out.push_str(if index == 0 { "" } else { " " });
+                    out.push_str(&cells[0].json());
+                    continue;
+                }
+                let mut object = Json::Object(Vec::new());
+                for ((name, ..), cell) in columns.iter().zip(&cells) {
+                    nest(
+                        &mut object,
+                        &name.split('.').collect::<Vec<_>>(),
+                        cell.json(),
+                    );
+                }
+                out.push_str("\n  ");
+                written_json(&object, &mut out);
+            }
+            out.push_str(if unnamed || rows.is_empty() {
+                "]\n"
+            } else {
+                "\n]\n"
+            });
+        }
+        other => return Err(format!("`.{other}` is not a data table; use .csv or .json")),
+    }
+    Ok(out.into_bytes())
+}
+
+/// Each name's first word in the element and its scalar.
+fn laid(names: &[String], schema: &Schema) -> Result<Vec<(usize, Scalar)>, String> {
+    let scalars = schema.scalars();
     let mut at = 0;
     let mut layout = Vec::with_capacity(names.len());
     for _ in names {
@@ -193,64 +331,111 @@ pub fn encode(data: &FieldData, names: &[String], extension: &str) -> Result<Vec
         layout.push((at, scalar));
         at += scalar.words();
     }
-    if at != per_row {
+    if at != schema.value_words() {
         return Err("the names are fewer than the element's numbers".to_owned());
     }
-    let values = data.values();
-    let rows = values.chunks_exact(per_row.max(1)).map(|row| {
-        layout
-            .iter()
-            .map(|&(at, scalar)| written(&row[at..at + scalar.words()], scalar))
-    });
-    let unnamed = names.len() == 1 && names[0].is_empty();
-    let mut out = String::new();
-    match extension {
-        "csv" => {
-            out.push_str(&if unnamed {
-                "value".to_owned()
-            } else {
-                names.join(",")
-            });
-            out.push('\n');
-            for row in rows {
-                out.push_str(&row.collect::<Vec<_>>().join(","));
-                out.push('\n');
-            }
-        }
-        "json" => {
-            out.push('[');
-            for (index, row) in rows.enumerate() {
-                let cells: Vec<String> = row.collect();
-                if let Some(bad) = cells
-                    .iter()
-                    .find(|cell| matches!(cell.as_str(), "NaN" | "inf" | "-inf"))
-                {
-                    return Err(format!(
-                        "row {index} holds {bad}, which JSON cannot hold; write it as .csv"
-                    ));
-                }
-                out.push_str(if index == 0 { "" } else { "," });
-                if unnamed {
-                    out.push_str(if index == 0 { "" } else { " " });
-                    out.push_str(&cells[0]);
-                    continue;
-                }
-                let mut object = Json::Object(Vec::new());
-                for (name, cell) in names.iter().zip(cells) {
-                    nest(&mut object, &name.split('.').collect::<Vec<_>>(), cell);
-                }
-                out.push_str("\n  ");
-                written_json(&object, &mut out);
-            }
-            out.push_str(if unnamed || data.domain().count() == 0 {
-                "]\n"
-            } else {
-                "\n]\n"
-            });
-        }
-        other => return Err(format!("`.{other}` is not a data table; use .csv or .json")),
+    Ok(layout)
+}
+
+/// An `[Int; N]` an element holds, which a cell may give as text, a
+/// character's code an element and zeros after: its name, the place of
+/// its first number among the element's names, and N. An array's numbers
+/// are named `name.0` to `name.N-1` and no field of a struct is named by
+/// a number, so a run of Ints so named is an array of them.
+struct TextRun {
+    name: String,
+    first: usize,
+    count: usize,
+}
+
+fn text_runs(names: &[String], layout: &[(usize, Scalar)]) -> Vec<TextRun> {
+    let int = |place: usize| layout.get(place).is_some_and(|(_, s)| *s == Scalar::Int);
+    let mut runs = Vec::new();
+    let mut place = 0;
+    while place < names.len() {
+        let Some(name) = names[place].strip_suffix(".0").filter(|_| int(place)) else {
+            place += 1;
+            continue;
+        };
+        let count = (0..)
+            .take_while(|&k| {
+                int(place + k)
+                    && names
+                        .get(place + k)
+                        .is_some_and(|n| *n == format!("{name}.{k}"))
+            })
+            .count();
+        runs.push(TextRun {
+            name: name.to_owned(),
+            first: place,
+            count,
+        });
+        place += count;
     }
-    Ok(out.into_bytes())
+    runs
+}
+
+/// Whether `code` is a character a text cell holds: a tab, a new line, or
+/// a printable one.
+fn is_character(code: u32) -> bool {
+    matches!(code, 9 | 10) || (code >= 32 && code != 127 && char::from_u32(code).is_some())
+}
+
+/// The text an array's codes hold, characters then zeros; `None` for
+/// numbers that are no text.
+fn text_of(codes: &[u32]) -> Option<String> {
+    let length = codes
+        .iter()
+        .position(|code| *code == 0)
+        .unwrap_or(codes.len());
+    if codes[length..].iter().any(|code| *code != 0) {
+        return None;
+    }
+    codes[..length]
+        .iter()
+        .map(|&code| char::from_u32(code).filter(|_| is_character(code)))
+        .collect()
+}
+
+/// A cell to write: a number as its text, or a text.
+enum Cell {
+    Number(String),
+    Text(String),
+}
+
+impl Cell {
+    /// As a CSV cell: a text in quotes when it is empty or holds what
+    /// parts cells or lines.
+    fn csv(&self) -> String {
+        match self {
+            Self::Number(number) => number.clone(),
+            Self::Text(text) if text.is_empty() || text.contains([',', '"', '\n']) => {
+                format!("\"{}\"", text.replace('"', "\"\""))
+            }
+            Self::Text(text) => text.clone(),
+        }
+    }
+
+    /// As a JSON value.
+    fn json(&self) -> String {
+        match self {
+            Self::Number(number) => number.clone(),
+            Self::Text(text) => {
+                let mut out = String::from("\"");
+                for c in text.chars() {
+                    match c {
+                        '"' => out.push_str("\\\""),
+                        '\\' => out.push_str("\\\\"),
+                        '\n' => out.push_str("\\n"),
+                        '\t' => out.push_str("\\t"),
+                        c => out.push(c),
+                    }
+                }
+                out.push('"');
+                out
+            }
+        }
+    }
 }
 
 /// A number's words as a cell: the shortest text that reads back as them.
@@ -451,18 +636,16 @@ fn parsed(text: &str, scalar: Scalar) -> Option<[u32; 2]> {
 // ---------------------------------------------------------------- CSV
 
 /// A CSV file's rows, each cell named by its column's heading. Lines
-/// with nothing in them are left out.
+/// with nothing but spaces in them are left out.
 fn csv_records(text: &str) -> Result<Vec<Record>, String> {
     let lines = csv_lines(text)?;
-    let mut lines = lines
-        .into_iter()
-        .filter(|(_, cells)| !(cells.len() == 1 && cells[0].trim().is_empty()));
-    let Some((_, headings)) = lines.next() else {
+    let mut lines = lines.into_iter().filter(|(_, _, filled)| *filled);
+    let Some((_, headings, _)) = lines.next() else {
         return Err("the table has no heading line".to_owned());
     };
     let headings: Vec<String> = headings.iter().map(|h| h.trim().to_owned()).collect();
     let mut records = Vec::new();
-    for (line, cells) in lines {
+    for (line, cells, _) in lines {
         if cells.len() != headings.len() {
             return Err(format!(
                 "line {line}: {} cell(s) under {} heading(s)",
@@ -478,17 +661,22 @@ fn csv_records(text: &str) -> Result<Vec<Record>, String> {
     Ok(records)
 }
 
-/// Each line's cells, with the line's number; a quoted cell may hold a
-/// comma, a doubled quote and a line break.
-fn csv_lines(text: &str) -> Result<Vec<(usize, Vec<String>)>, String> {
+/// Each line's cells, with the line's number and whether it holds more
+/// than spaces; a quoted cell may hold a comma, a doubled quote and a
+/// line break.
+fn csv_lines(text: &str) -> Result<Vec<(usize, Vec<String>, bool)>, String> {
     let mut out = Vec::new();
     let mut cells = Vec::new();
     let mut cell = String::new();
     let mut quoted = false;
     let mut line = 1;
     let mut began = 1;
+    // Whether the line holds more than spaces: a quoted empty cell is a
+    // cell.
+    let mut filled = false;
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
+        filled |= !c.is_whitespace();
         if quoted {
             match c {
                 '"' if chars.peek() == Some(&'"') => {
@@ -513,7 +701,11 @@ fn csv_lines(text: &str) -> Result<Vec<(usize, Vec<String>)>, String> {
             '\r' => {}
             '\n' => {
                 cells.push(std::mem::take(&mut cell));
-                out.push((began, std::mem::take(&mut cells)));
+                out.push((
+                    began,
+                    std::mem::take(&mut cells),
+                    std::mem::take(&mut filled),
+                ));
                 line += 1;
                 began = line;
             }
@@ -525,7 +717,7 @@ fn csv_lines(text: &str) -> Result<Vec<(usize, Vec<String>)>, String> {
     }
     if !cell.is_empty() || !cells.is_empty() {
         cells.push(cell);
-        out.push((began, cells));
+        out.push((began, cells, filled));
     }
     Ok(out)
 }
@@ -677,6 +869,8 @@ impl JsonReader<'_> {
         }
     }
 
+    /// A quoted string, its escapes as JSON writes them: `\uXXXX` a UTF-16
+    /// unit, two of them a character beyond the first 65536.
     fn string(&mut self) -> Result<String, String> {
         if self.text.get(self.at) != Some(&b'"') {
             return Err(self.error("expected a quoted name"));
@@ -687,22 +881,60 @@ impl JsonReader<'_> {
             self.at += 1;
             match b {
                 b'"' => {
-                    return String::from_utf8(out).map_err(|_| self.error("a name is not UTF-8"));
+                    return String::from_utf8(out).map_err(|_| self.error("a string is not UTF-8"));
                 }
                 b'\\' => {
                     let escaped = self.text.get(self.at).copied();
                     self.at += 1;
-                    out.push(match escaped {
-                        Some(b'n') => b'\n',
-                        Some(b't') => b'\t',
-                        Some(other) => other,
+                    let c = match escaped {
+                        Some(b'n') => '\n',
+                        Some(b't') => '\t',
+                        Some(b'r') => '\r',
+                        Some(b'b') => '\u{8}',
+                        Some(b'f') => '\u{c}',
+                        Some(b'u') => self.unit_char()?,
+                        Some(c @ (b'"' | b'\\' | b'/')) => char::from(c),
+                        Some(_) => return Err(self.error("an unknown escape")),
                         None => return Err(self.error("the table ends early")),
-                    });
+                    };
+                    out.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes());
                 }
                 _ => out.push(b),
             }
         }
-        Err(self.error("a quoted name is not closed"))
+        Err(self.error("a quoted string is not closed"))
+    }
+
+    /// The character after `\u`: one unit, or a surrogate pair.
+    fn unit_char(&mut self) -> Result<char, String> {
+        let high = self.unit()?;
+        let code = if (0xD800..0xDC00).contains(&high) {
+            let low = if self.text.get(self.at..self.at + 2) == Some(b"\\u") {
+                self.at += 2;
+                self.unit()?
+            } else {
+                0
+            };
+            if !(0xDC00..0xE000).contains(&low) {
+                return Err(self.error("a surrogate without its pair"));
+            }
+            0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00)
+        } else {
+            high
+        };
+        char::from_u32(code).ok_or_else(|| self.error("a surrogate without its pair"))
+    }
+
+    /// Four hexadecimal digits.
+    fn unit(&mut self) -> Result<u32, String> {
+        let digits = self
+            .text
+            .get(self.at..self.at + 4)
+            .and_then(|d| std::str::from_utf8(d).ok())
+            .and_then(|d| u32::from_str_radix(d, 16).ok())
+            .ok_or_else(|| self.error("`\\u` takes four hexadecimal digits"))?;
+        self.at += 4;
+        Ok(digits)
     }
 }
 
@@ -807,6 +1039,107 @@ mod tests {
             names.iter().map(|n| (*n).to_owned()).collect(),
             Schema::new(scalars),
         )
+    }
+
+    /// `name: [Int; 4]` and `hp: Int`.
+    fn named_beast() -> (Vec<String>, Schema) {
+        element(
+            &["name.0", "name.1", "name.2", "name.3", "hp"],
+            vec![Scalar::Int; 5],
+        )
+    }
+
+    #[test]
+    fn an_int_array_holds_text_a_code_a_character() {
+        let (names, schema) = named_beast();
+        let e = Element {
+            names: &names,
+            schema: &schema,
+        };
+        let csv = "#name,name,hp\ngoblin,哥布林,30\nwolf,\"a, \"\"\",45\nnone,,1\n";
+        let rows = decode(csv.as_bytes(), "csv", &e, usize::MAX, &no_tables).unwrap();
+        let codes = |s: &str| s.chars().map(|c| c as u32).collect::<Vec<_>>();
+        assert_eq!(
+            rows.values()[..5],
+            [codes("哥布林"), vec![0, 30]].concat()[..]
+        );
+        assert_eq!(
+            rows.values()[5..10],
+            [codes("a, \""), vec![45]].concat()[..]
+        );
+        assert_eq!(rows.values()[10..], [0, 0, 0, 0, 1]);
+        let json = "[{\"name\": \"哥布林\", \"hp\": 30}, {\"hp\": 45, \"name\": \"a, \\\"\"}, {\"name\": \"\", \"hp\": 1}]";
+        let from_json = decode(json.as_bytes(), "json", &e, usize::MAX, &no_tables).unwrap();
+        assert_eq!(from_json.values(), rows.values());
+        // Written back, the text stays text, and reads back word for word.
+        for extension in ["csv", "json"] {
+            let bytes = encode(&rows, &names, extension).unwrap();
+            let back = decode(&bytes, extension, &e, usize::MAX, &no_tables).unwrap();
+            assert_eq!(back.values(), rows.values(), "{extension}");
+        }
+        assert_eq!(
+            encode(&rows, &names, "csv").unwrap(),
+            "name,hp\n哥布林,30\n\"a, \"\"\",45\n\"\",1\n".as_bytes()
+        );
+        assert_eq!(
+            String::from_utf8(encode(&rows, &names, "json").unwrap()).unwrap(),
+            "[\n  {\"name\": \"哥布林\", \"hp\": 30},\n  {\"name\": \"a, \\\"\", \"hp\": 45},\n  {\"name\": \"\", \"hp\": 1}\n]\n"
+        );
+        // Numbers that are no text stay numbers; the numbers are read still.
+        let numbers =
+            FieldData::from_values(schema.clone(), Domain::Rows(1), &[7, 0, 3, 0, 2]).unwrap();
+        let csv = String::from_utf8(encode(&numbers, &names, "csv").unwrap()).unwrap();
+        assert_eq!(csv, "name.0,name.1,name.2,name.3,hp\n7,0,3,0,2\n");
+        let back = decode(csv.as_bytes(), "csv", &e, usize::MAX, &no_tables).unwrap();
+        assert_eq!(back.values(), numbers.values());
+        // A text longer than its array, and a text given with its numbers, are said.
+        let long = decode(b"name,hp\nabcde,1\n", "csv", &e, usize::MAX, &no_tables).unwrap_err();
+        assert!(
+            long.contains("line 2") && long.contains("4 characters"),
+            "{long}"
+        );
+        let both = decode(
+            b"name,name.0,hp\nab,1,1\n",
+            "csv",
+            &e,
+            usize::MAX,
+            &no_tables,
+        )
+        .unwrap_err();
+        assert!(
+            both.contains("`name`") && both.contains("`name.0`"),
+            "{both}"
+        );
+        // A one-column table keeps a row whose text is empty.
+        let names = vec!["name.0".to_owned(), "name.1".to_owned()];
+        let schema = Schema::new(vec![Scalar::Int; 2]);
+        let e = Element {
+            names: &names,
+            schema: &schema,
+        };
+        let rows = decode(b"name\nab\n\"\"\nc\n", "csv", &e, usize::MAX, &no_tables).unwrap();
+        assert_eq!(rows.values()[..], [97, 98, 0, 0, 99, 0]);
+    }
+
+    #[test]
+    fn json_strings_take_every_escape() {
+        let (names, schema) = named_beast();
+        let e = Element {
+            names: &names,
+            schema: &schema,
+        };
+        let json = r#"[{"name": "A\/\r😀", "hp": 1}]"#;
+        let rows = decode(json.as_bytes(), "json", &e, usize::MAX, &no_tables).unwrap();
+        assert_eq!(rows.values()[..], [65, 47, 13, 0x1F600, 1]);
+        let bad = decode(
+            br#"[{"name": "\ud83d", "hp": 1}]"#,
+            "json",
+            &e,
+            usize::MAX,
+            &no_tables,
+        )
+        .unwrap_err();
+        assert!(bad.contains("surrogate"), "{bad}");
     }
 
     #[test]

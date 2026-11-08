@@ -622,6 +622,58 @@ fn rows_are_written_as_tables_and_read_back() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A table's cell holds text for an `[Int; N]`, a character's code an
+/// element; written back, it is the same text.
+#[test]
+fn a_table_cell_holds_text() {
+    let entelechy = env!("CARGO_BIN_EXE_entelechy");
+    let dir = scratch("text-table");
+    std::fs::write(
+        dir.join("beasts.csv"),
+        "#name,name,hp\ngoblin,哥布林,30\nwolf,灰狼,45\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("beasts.esn"),
+        "input beasts: Rows<Beast> = \"beasts.csv\";\nnode pick: kernel { requires { field.read; field.write; } struct Beast { name: [Int; 8]; hp: Int; } input beasts: Rows<Beast> <- beasts; output result: Rows<Beast>; domain = 2; compute { return at(beasts, element()); } }\noutput kept <- pick.result to \"kept.csv\";\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("beasts.replay"),
+        format!(
+            "scene beasts.esn\nframe 0\nexpect pick.result[1].name.1 = {}\nexpect pick.result[1].name.2 = 0\nexpect pick.result[0].hp = 30\n",
+            u32::from('狼')
+        ),
+    )
+    .unwrap();
+    for backend in ["jit", "gpu"] {
+        let output = Command::new(entelechy)
+            .args(["replay", "--backend", backend])
+            .arg(dir.join("beasts.replay"))
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{backend}: {stdout}");
+    }
+    let output = Command::new(entelechy)
+        .arg("run")
+        .arg(dir.join("beasts.esn"))
+        .arg("--allow")
+        .arg(format!("file.write={}", dir.display()))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("kept.csv")).unwrap(),
+        "name,hp\n哥布林,30\n灰狼,45\n"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Whether `text` lists `id`'s preparing: under the heading, a line naming
 /// the Kernel after its compiling and its building in milliseconds.
 fn lists_preparing(text: &str, id: &str) -> bool {
