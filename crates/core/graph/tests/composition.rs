@@ -415,3 +415,39 @@ fn a_malformed_graph_is_refused_before_anything_runs() {
     no_domain.nodes[0].domain = None;
     assert_eq!(refused(no_domain), EvaluateError::NoDomain(id("source")));
 }
+
+/// A producer that only one node reads, run apart from it, is named in
+/// that node's plan with why: here pinned, and read neither at the
+/// reader's own element nor at an offset of a row.
+#[test]
+fn the_plan_says_why_a_sole_reader_does_not_absorb_its_producer() {
+    let mut runtime = runtime();
+    let mut evaluator = Evaluator::new();
+    evaluator.pin(id("source"));
+    let chain = graph(
+        vec![
+            node("source", "test.source@1", None),
+            node("middle", "test.middle@1", Some("source")),
+            node("last", "test.last@1", Some("middle")),
+        ],
+        "last",
+    );
+    let plan = evaluator
+        .plan_summary(&chain, &mut runtime, &BTreeMap::new(), &BTreeMap::new())
+        .unwrap();
+    let apart = |name: &str| {
+        plan.iter()
+            .find(|entry| entry.node == id(name))
+            .map(|entry| entry.apart.clone())
+            .unwrap()
+    };
+    assert_eq!(
+        apart("middle"),
+        vec![(id("source"), "it is pinned".to_owned())]
+    );
+    let last = apart("last");
+    assert_eq!(last.len(), 1, "{last:?}");
+    assert_eq!(last[0].0, id("middle"));
+    assert!(last[0].1.contains("sample"), "{}", last[0].1);
+    assert!(apart("source").is_empty());
+}

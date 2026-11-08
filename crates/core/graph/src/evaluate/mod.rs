@@ -786,6 +786,8 @@ struct Group {
     /// The producers no longer stored for it, whose count or size it reads
     /// from params instead.
     counted: Vec<NodeId>,
+    /// The producers it alone reads that run on their own, and why.
+    apart: Vec<(NodeId, String)>,
     /// Each producer inlined and the ports it fed, in the order fused.
     links: Vec<Link>,
     /// How many times the Kernel runs, each feeding `chain` from the one
@@ -836,6 +838,9 @@ pub struct PlanEntry {
     /// Producers fused elsewhere whose count or size it reads from the
     /// extent the plan knows, as they are not stored for it.
     pub counted: Vec<NodeId>,
+    /// The producers only this group reads that run on their own, each
+    /// with why fusion left it apart.
+    pub apart: Vec<(NodeId, String)>,
     /// The bindings the group executes with, absorbed producers' inputs
     /// renamed `producer/port`.
     pub inputs: BTreeMap<String, Binding>,
@@ -852,9 +857,9 @@ pub struct Evaluator {
     fusion: bool,
     pinned: BTreeSet<NodeId>,
     fused: BTreeMap<NodeId, Fused>,
-    /// Groups fusion declined, by consumer, at their generations; retried
-    /// when one changes.
-    declined: BTreeMap<NodeId, Members>,
+    /// Groups fusion declined, by consumer, at their generations, with
+    /// why; retried when one changes.
+    declined: BTreeMap<NodeId, (Members, String)>,
     /// Groups a backend refused fused, kept until a report carries them.
     refused: Vec<Refused>,
     pending: BTreeMap<NodeId, Pending>,
@@ -1251,6 +1256,7 @@ impl Evaluator {
                 kernel: group.version.id().clone(),
                 absorbed: group.absorbed.clone(),
                 counted: group.counted.clone(),
+                apart: group.apart.clone(),
                 inputs: group.node.inputs.clone(),
                 domain: group.node.domain.as_ref().and_then(DomainSpec::literal),
             })

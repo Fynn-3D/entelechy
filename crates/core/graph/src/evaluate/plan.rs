@@ -195,6 +195,7 @@ impl Evaluator {
                     version,
                     absorbed: Vec::new(),
                     counted: Vec::new(),
+                    apart: Vec::new(),
                     links: Vec::new(),
                     repeat: 1,
                     chain: None,
@@ -289,16 +290,26 @@ impl Evaluator {
                 else {
                     continue;
                 };
-                if self.pinned.contains(&producer_id)
-                    || absorbed_into.contains_key(&producer_id)
-                    || groups[position].node.is_async
-                    || !groups[position].node.awake.is_empty()
-                    || nodes.get(&producer_id).is_some_and(|at| {
-                        graph.nodes[*at].is_async || !graph.nodes[*at].awake.is_empty()
-                    })
-                {
+                if absorbed_into.contains_key(&producer_id) {
                     continue;
                 }
+                // What keeps the two apart whatever the producer is read
+                // as; said once this group is found its only reader.
+                let consumer_id = groups[position].node.id.clone();
+                let producer_node = nodes.get(&producer_id).map(|at| &graph.nodes[*at]);
+                let held = if self.pinned.contains(&producer_id) {
+                    Some("it is pinned".to_owned())
+                } else if groups[position].node.is_async {
+                    Some(format!("`{consumer_id}` runs async"))
+                } else if !groups[position].node.awake.is_empty() {
+                    Some(format!("`{consumer_id}` sleeps by `awake`"))
+                } else if producer_node.is_some_and(|node| node.is_async) {
+                    Some("it runs async".to_owned())
+                } else if producer_node.is_some_and(|node| !node.awake.is_empty()) {
+                    Some("it sleeps by `awake`".to_owned())
+                } else {
+                    None
+                };
                 let Some(producer_position) = at.get(&producer_id).copied() else {
                     continue;
                 };
@@ -365,6 +376,15 @@ impl Evaluator {
                             .unwrap_or(0);
                         read == linked + counted
                     });
+                if links.is_empty() || !only_readers {
+                    continue;
+                }
+                // From here this group is the producer's only reader: what
+                // keeps the two apart is said in its plan.
+                if let Some(why) = held {
+                    keep_apart(&mut groups[position], &producer_id, why);
+                    continue;
+                }
                 // A narrow output rounds its values, so it stays
                 // materialized.
                 let narrow = links.iter().any(|link| {
@@ -373,7 +393,9 @@ impl Evaluator {
                         .schema
                         .is_wide()
                 });
-                if links.is_empty() || !only_readers || narrow {
+                if narrow {
+                    let why = "it keeps its scalars narrow, rounded as they pass".to_owned();
+                    keep_apart(&mut groups[position], &producer_id, why);
                     continue;
                 }
                 // Only IR maps fuse: native operations have no IR, and a
@@ -381,11 +403,20 @@ impl Evaluator {
                 let (Some(consumer_module), Some(producer_module)) =
                     (consumer.module(), groups[producer_position].module())
                 else {
+                    let native = if consumer.module().is_none() {
+                        format!("`{consumer_id}`")
+                    } else {
+                        "it".to_owned()
+                    };
+                    let why = format!("{native} is a native operation, which has no IR to fuse");
+                    keep_apart(&mut groups[position], &producer_id, why);
                     continue;
                 };
                 if consumer_module.manifest.mode != entelechy_ir::Mode::Map
                     || producer_module.manifest.mode != entelechy_ir::Mode::Map
                 {
+                    let why = "only maps fuse; a reduction or a scan runs on its own".to_owned();
+                    keep_apart(&mut groups[position], &producer_id, why);
                     continue;
                 }
                 // Read at its own element, the producer runs first; read at
@@ -406,6 +437,10 @@ impl Evaluator {
                 {
                     true
                 } else {
+                    let why = format!(
+                        "`{consumer_id}` reads it neither at its own element (`sample`) nor at one offset of a row"
+                    );
+                    keep_apart(&mut groups[position], &producer_id, why);
                     continue;
                 };
                 // The producer's extent comes in by params wherever it is
@@ -414,6 +449,8 @@ impl Evaluator {
                     indexed || !outside.is_empty() || uses.iter().any(|use_| use_.counted);
                 let known = producer_domain.filter(|domain| domain.count() > 0);
                 if by_params && known.is_none() {
+                    let why = "its extent is not known before the frame".to_owned();
+                    keep_apart(&mut groups[position], &producer_id, why);
                     continue;
                 }
                 // Whether the producer feeds the consumer's first input,
@@ -441,7 +478,12 @@ impl Evaluator {
                         };
                         Some(expr.clone())
                     }
-                    _ => continue,
+                    _ => {
+                        let why =
+                            "the two do not run over one extent known before the frame".to_owned();
+                        keep_apart(&mut groups[position], &producer_id, why);
+                        continue;
+                    }
                 };
                 // A consumer read at an offset keeps its own domain, its
                 // counts of the fused ports read from the extent now.
@@ -450,7 +492,13 @@ impl Evaluator {
                     Some(extent) if indexed => {
                         match without_ports(&consumer.node.domain, runs, &linked, extent) {
                             Some(domain) => Some(domain),
-                            None => continue,
+                            None => {
+                                let why = format!(
+                                    "`{consumer_id}`'s domain cannot be said without the ports it would fuse"
+                                );
+                                keep_apart(&mut groups[position], &producer_id, why);
+                                continue;
+                            }
                         }
                     }
                     _ => None,
@@ -459,6 +507,8 @@ impl Evaluator {
                 // A fused group holds a bounded number of nodes, so a long
                 // chain fuses into several, each compiled in bounded time.
                 if consumer.parts.len() + producer.parts.len() > MAX_FUSED {
+                    let why = format!("together they would hold more than {MAX_FUSED} nodes");
+                    keep_apart(&mut groups[position], &producer_id, why);
                     continue;
                 }
                 let mut parts = consumer.parts.clone();
@@ -478,7 +528,13 @@ impl Evaluator {
                 };
                 // The IR fuses here; only a group that executes is
                 // prepared, once the plan is made.
-                if self.declined.get(&consumer.node.id) == Some(&members) {
+                if let Some((_, why)) = self
+                    .declined
+                    .get(&consumer_id)
+                    .filter(|(declined, _)| *declined == members)
+                {
+                    let why = why.clone();
+                    keep_apart(&mut groups[position], &producer_id, why);
                     continue;
                 }
                 let fuse = if indexed {
@@ -494,7 +550,10 @@ impl Evaluator {
                 ) {
                     Ok(module) => Arc::new(module),
                     Err(error) if error.declines => {
-                        self.declined.insert(consumer.node.id.clone(), members);
+                        let why = error.to_string();
+                        self.declined
+                            .insert(consumer_id.clone(), (members, why.clone()));
+                        keep_apart(&mut groups[position], &producer_id, why);
                         continue;
                     }
                     Err(error) => {
@@ -592,12 +651,16 @@ impl Evaluator {
                 let mut absorbed = consumer.absorbed.clone();
                 absorbed.push(producer_id.clone());
                 absorbed.extend(producer.absorbed.iter().cloned());
+                // What the producer kept apart is now the group's to say.
+                let mut apart = consumer.apart.clone();
+                apart.extend(producer.apart.iter().cloned());
                 let group = &mut groups[position];
                 group.fused = Some(module);
                 group.parts = parts;
                 group.counted = counted;
                 group.links = fused_links;
                 group.absorbed = absorbed;
+                group.apart = apart;
                 group.node.inputs = inputs;
                 group.node.params = params;
                 if let Some(domain) = indexed_domain {
@@ -740,6 +803,8 @@ impl Evaluator {
             node.inputs = previous.node.inputs;
             let mut counted = previous.counted;
             counted.extend(group.counted);
+            let mut apart = previous.apart;
+            apart.extend(group.apart);
             let mut links = previous.links;
             links.extend(group.links);
             out.push(Group {
@@ -748,6 +813,7 @@ impl Evaluator {
                 parts,
                 absorbed,
                 counted,
+                apart,
                 links,
                 repeat: previous.repeat + 1,
                 chain: Some((input, output)),
@@ -846,7 +912,11 @@ impl Evaluator {
         {
             return Ok(Some(Arc::clone(&existing.version)));
         }
-        if self.declined.get(consumer) == Some(&members) {
+        if self
+            .declined
+            .get(consumer)
+            .is_some_and(|(declined, _)| *declined == members)
+        {
             return Ok(None);
         }
         let fusion = |message: String| EvaluateError::Fusion {
@@ -865,7 +935,8 @@ impl Evaluator {
                 let module = match fuse() {
                     Ok(module) => module,
                     Err(error) if error.declines => {
-                        self.declined.insert(consumer.clone(), members);
+                        self.declined
+                            .insert(consumer.clone(), (members, error.to_string()));
                         return Ok(None);
                     }
                     Err(error) => return Err(fusion(error.to_string())),
@@ -912,12 +983,13 @@ impl Evaluator {
             // processor's stack, a device's limits): it runs unfused, as a
             // fusion the IR declines does.
             Err(PrepareError::Backend(reason)) => {
+                let why = format!("the backend refuses them together: {reason}");
                 self.refused.push(Refused {
                     node: consumer.clone(),
                     members: members.parts.iter().map(|(node, _)| node.clone()).collect(),
                     reason,
                 });
-                self.declined.insert(consumer.clone(), members);
+                self.declined.insert(consumer.clone(), (members, why));
                 return Ok(None);
             }
             Err(error) => return Err(fusion(error.to_string())),
@@ -1186,4 +1258,12 @@ pub(super) fn graph_param(
 /// `; did you mean `x`?` for [`entelechy_abi::names::nearest`]'s match.
 pub(super) fn suggest(near: &Option<String>) -> String {
     entelechy_abi::names::suggestion(near.as_deref())
+}
+
+/// Says in `group`'s plan that `producer`, which only it reads, runs
+/// apart from it, and why; once a producer.
+fn keep_apart(group: &mut Group, producer: &NodeId, why: String) {
+    if !group.apart.iter().any(|(node, _)| node == producer) {
+        group.apart.push((producer.clone(), why));
+    }
 }
