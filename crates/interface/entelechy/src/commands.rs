@@ -486,8 +486,12 @@ changed since, which is how a change is shown to cost nothing.",
             name: "graph",
             args: "<scene.esn>",
             summary: "Print the flattened graph and its plan.",
-            doc: "Print the flattened graph and what would execute, fused groups marked.",
-            flags: session_flags(),
+            doc: "\
+Print the flattened graph and what would execute, fused groups marked,
+and under each group the producers only it reads that run apart from
+it, each with why. --window plans what reads the window at that size,
+as `run` and `render` give it.",
+            flags: with(vec![window_flag()], session_flags()),
             passes: false,
         },
         Command {

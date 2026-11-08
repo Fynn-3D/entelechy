@@ -2056,16 +2056,25 @@ impl Session {
         self.repin();
     }
 
-    /// What would execute right now, in order, with fusion applied.
+    /// What would execute right now, in order, with fusion applied: under
+    /// the last frame's context, or, before any frame named a window, the
+    /// window the session reports ([`Session::set_window`]).
     pub fn plan(&mut self) -> Result<Vec<entelechy_graph::PlanEntry>, EvaluateError> {
         self.repin();
         let graph = self.scene.shared_graph().ok_or_else(no_scene)?;
+        let mut context = self.last_context;
+        if context.window == [0.0, 0.0]
+            && let Some((size, scale)) = self.window
+        {
+            context.window = size;
+            context.scale = scale;
+        }
         self.evaluator.plan_summary(
             graph,
             &mut self.runtime,
             self.inputs.handles(),
             self.scene.params(),
-            &Context::default(),
+            &context,
         )
     }
 

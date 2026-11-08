@@ -119,7 +119,10 @@ entelechy graph examples/grayscale/scene.esn
 
 Prints the flattened graph, the published Kernels with their
 generations, the state in the order it advances, and the plan: the
-groups that execute, in order, with the producers each absorbed.
+groups that execute, in order, with the producers each absorbed, and
+under each group the producers only it reads that run apart from it,
+each with why (it sleeps, its work is budgeted, it reads them by
+address). `--window <w>x<h>` plans what reads the window at that size.
 
 ## Measure a scene
 

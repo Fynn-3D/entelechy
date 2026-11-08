@@ -554,8 +554,14 @@ fn graph(args: &[String]) -> Result<(), String> {
     // `run`'s session flags: the plan printed is the one `run` executes
     // with the same params and inputs.
     let mut options = entelechy_session::SessionOptions::from_environment();
+    let mut window = None;
     let mut iter = args.iter().cloned();
     while let Some(arg) = iter.next() {
+        if arg == "--window" {
+            let value = iter.next().ok_or("--window needs <w>x<h>[@<scale>]")?;
+            window = Some(entelechy_session::parse_window(&value)?);
+            continue;
+        }
         if !options.read(&arg, &mut || iter.next())? {
             return Err(format!("unknown flag {arg}"));
         }
@@ -564,6 +570,8 @@ fn graph(args: &[String]) -> Result<(), String> {
         .scene()
         .map_err(|_| "graph needs a scene file".to_string())?;
     let mut session = options.open("cpu")?;
+    // What reads the window is planned at the one `run` and `render` give.
+    session.set_window(window);
     let _watch = entelechy_session::watch::watch(session.progress());
     let events = session.sync();
     for event in &events {
@@ -670,6 +678,10 @@ fn graph(args: &[String]) -> Result<(), String> {
                     "//   {}{absorbed}: {}{domain}{counted}",
                     entry.node, entry.kernel
                 );
+                // What only this group reads and runs apart from it, and why.
+                for (producer, why) in &entry.apart {
+                    println!("//     {producer} runs apart: {why}");
+                }
                 // What each node of the group holding state reads of
                 // state: what this evaluation made, or what the last
                 // committed. A node holding none reads what is newest, as

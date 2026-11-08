@@ -769,6 +769,30 @@ fn the_graph_command_prints_the_plan() {
         "{stdout}"
     );
     assert!(stdout.contains("//   blocks: image.pixelate@1"), "{stdout}");
+    // A producer only one node reads, run apart from it, is said with why.
+    assert!(
+        stdout.contains(
+            "//     gray runs apart: `blocks` reads it neither at its own element (`sample`) nor at one offset of a row"
+        ),
+        "{stdout}"
+    );
+    // A window sizes what reads it as `run` and `render` give it.
+    std::fs::write(
+        dir.join("windowed.esn"),
+        "kernel t.flat@1 { requires { field.write; } output result: Image; compute { return vec4(1.0, 0.0, 0.0, 1.0); } }\nnode flat: t.flat@1 { domain = window(); }\noutput result <- flat.result;\n",
+    )
+    .unwrap();
+    let output = Command::new(entelechy)
+        .args(["graph", "--window", "8x4"])
+        .arg(dir.join("windowed.esn"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("//   flat: t.flat@1 vec2(8, 4)"),
+        "{stdout}"
+    );
     let output = Command::new(entelechy)
         .args(["graph", "--no-fusion"])
         .arg(dir.join("scene.esn"))
