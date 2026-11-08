@@ -67,11 +67,11 @@ pub struct Measured {
     /// Milliseconds a frame of the best run's the frame's thread waited
     /// for the device; the rest of the frame is its own work.
     pub wait: f64,
-    /// Each node that kept the frame's thread waiting for the device,
-    /// milliseconds a frame over every run, longest first.
+    /// Each node that kept the frame's thread waiting for the device in
+    /// the best run, milliseconds a frame, longest first.
     pub waits: Vec<(String, f64)>,
-    /// Milliseconds a frame waited for the device that no node did: at
-    /// the frame's end, confirming the frame before, writing.
+    /// Milliseconds a frame of the best run waited for the device that no
+    /// node did: at the frame's end, confirming the frame before, writing.
     pub wait_after: f64,
     /// With nodes, the device's busy time a frame by its own clock, where
     /// it keeps one.
@@ -154,10 +154,9 @@ pub fn measure(
     session.runtime().settle_device();
     let first = warm_started.elapsed().as_secs_f64() * 1000.0;
     let mut refused: Vec<String> = warm.refused.iter().map(ToString::to_string).collect();
-    // Each run's milliseconds a frame, and of those its waits.
-    let mut runs: Vec<(f64, f64)> = Vec::new();
-    let mut waits: BTreeMap<String, f64> = BTreeMap::new();
-    let mut waited_in_all = 0.0;
+    // Each run: its milliseconds a frame, of those its waits, and its
+    // waits node by node.
+    let mut runs: Vec<(f64, f64, BTreeMap<String, f64>)> = Vec::new();
     let mut frame = 1;
     let mut ran = false;
     // The frames overlap the device's as a window's do: the next is made
@@ -170,6 +169,7 @@ pub fn measure(
     for _ in 0..options.repeat.max(1) {
         let started = Instant::now();
         let waited_before = session.device_waited();
+        let mut waits: BTreeMap<String, f64> = BTreeMap::new();
         for _ in 0..options.frames.max(1) {
             let report = session
                 .evaluate(&context(frame))
@@ -186,23 +186,26 @@ pub fn measure(
         session.runtime().settle_device();
         let took = started.elapsed().as_secs_f64() * 1000.0;
         let waited = ms(session.device_waited().saturating_sub(waited_before));
-        waited_in_all += waited;
         let frames = f64::from(options.frames.max(1));
-        runs.push((took / frames, waited / frames));
+        runs.push((took / frames, waited / frames, waits));
     }
     session
         .set_overlap(overlapped)
         .map_err(|e| format!("{backend}: {e}"))?;
     runs.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let frames_in_all = f64::from(options.frames.max(1) * options.repeat.max(1));
-    let mut waits: Vec<(String, f64)> = waits
+    // What a frame waited for, node by node and at its end: the best
+    // run's, as its own wait is.
+    let frames = f64::from(options.frames.max(1));
+    let median = runs[runs.len() / 2].0;
+    let (best, wait, best_waits) = runs.swap_remove(0);
+    let mut waits: Vec<(String, f64)> = best_waits
         .into_iter()
-        .map(|(node, sum)| (node, sum / frames_in_all))
+        .map(|(node, sum)| (node, sum / frames))
         .filter(|(_, ms)| *ms >= 0.005)
         .collect();
     waits.sort_by(|a, b| b.1.total_cmp(&a.1));
     let by_nodes: f64 = waits.iter().map(|(_, ms)| ms).sum();
-    let wait_after = (waited_in_all / frames_in_all - by_nodes).max(0.0);
+    let wait_after = (wait - by_nodes).max(0.0);
     let run = if options.nodes {
         node_times(session, options, &context, &mut frame, backend)?
     } else {
@@ -215,10 +218,10 @@ pub fn measure(
     };
     Ok(Measured {
         backend: backend.to_owned(),
-        best: runs[0].0,
-        median: runs[runs.len() / 2].0,
+        best,
+        median,
         first,
-        wait: runs[0].1,
+        wait,
         waits,
         wait_after,
         gpu: run.gpu,
