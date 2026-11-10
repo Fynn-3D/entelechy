@@ -3,7 +3,7 @@
 //! params. The scene reads documents; the ledger ([`Kernels`])
 //! publishes their Kernels.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -35,6 +35,12 @@ pub struct Scene {
     /// Each library read, with the documents it uses at the stamps it was
     /// read with; a change to any reads it again.
     depends: BTreeMap<PathBuf, Vec<(PathBuf, Option<Stamp>)>>,
+    /// Every document `depends` names as used, each once, with its stamp
+    /// when a sync last found every one of them as `depends` has it:
+    /// while they stamp the same and `depends` is as it was, no library
+    /// uses a changed document, and a sync asks of each used document
+    /// once, not once for every library that uses it.
+    used_settled: Option<Vec<(PathBuf, Option<Stamp>)>>,
     /// Shared declarations from `use`s and the root's top level; a
     /// Kernel published through the protocol inherits them.
     structs: Vec<entelechy_language::StructDecl>,
@@ -137,6 +143,7 @@ impl Scene {
             uses: Vec::new(),
             sub_graphs: BTreeMap::new(),
             depends: BTreeMap::new(),
+            used_settled: None,
             structs: Vec::new(),
             types: Vec::new(),
             functions: Vec::new(),
@@ -1077,11 +1084,15 @@ impl Scene {
             Some(expanded) if expanded.holds(store, &uses) => expanded,
             _ => Expanded::of(store, uses),
         };
-        let mut wanted = expanded.files.clone();
+        // Each file once, in the order of the paths, as the expansion
+        // left them: all but the root and what the scene places.
+        let wanted: Vec<PathBuf> = expanded
+            .distinct
+            .iter()
+            .filter(|path| **path != self.root && !self.places(path))
+            .cloned()
+            .collect();
         self.expanded = Some(expanded);
-        wanted.retain(|path| *path != self.root && !self.places(path));
-        wanted.sort();
-        wanted.dedup();
         let stale: Vec<PathBuf> = kernels
             .documents()
             .into_iter()
@@ -1098,9 +1109,12 @@ impl Scene {
         let mut stamps: std::collections::HashMap<std::ffi::OsString, Option<Stamp>> =
             std::collections::HashMap::new();
         let mut stamp_of = |path: &Path| {
-            *stamps
-                .entry(path.as_os_str().to_owned())
-                .or_insert_with(|| store.stamp(path))
+            if let Some(stamp) = stamps.get(path.as_os_str()) {
+                return *stamp;
+            }
+            let stamp = store.stamp(path);
+            stamps.insert(path.as_os_str().to_owned(), stamp);
+            stamp
         };
         // A compile handed to another thread lands at the first sync after
         // it is done; until then nothing more is read.
@@ -1114,6 +1128,7 @@ impl Scene {
                 if wanted.binary_search(&document.path).is_err() {
                     continue;
                 }
+                self.used_settled = None;
                 self.depends.remove(&document.path);
                 if let Some(used) = depends {
                     self.depends.insert(document.path.clone(), used);
@@ -1124,14 +1139,33 @@ impl Scene {
             changed = true;
         } else if self.compiling.is_none() {
             let mut to_read: Vec<(PathBuf, Option<Stamp>)> = Vec::new();
+            // The libraries that use a changed document. While every used
+            // document stamps as the last sync found it there are none;
+            // else each library's are looked at, and found all unchanged
+            // they are kept, each once, to be asked of alone from here on.
+            let settled = self
+                .used_settled
+                .as_ref()
+                .is_some_and(|used| used.iter().all(|(path, stamp)| stamp_of(path) == *stamp));
+            let mut moved: BTreeSet<&Path> = BTreeSet::new();
+            if !settled {
+                for (path, used) in &self.depends {
+                    if !used.iter().all(|(used, stamp)| stamp_of(used) == *stamp) {
+                        moved.insert(path.as_path());
+                    }
+                }
+                self.used_settled = moved.is_empty().then(|| {
+                    let mut used: Vec<(PathBuf, Option<Stamp>)> =
+                        self.depends.values().flatten().cloned().collect();
+                    used.sort_by(|a, b| a.0.cmp(&b.0));
+                    used.dedup_by(|a, b| a.0 == b.0);
+                    used
+                });
+            }
             for path in wanted {
                 let current = stamp_of(&path);
                 // Read again when it changed, or any document it uses did.
-                let used_unchanged = self
-                    .depends
-                    .get(&path)
-                    .is_none_or(|used| used.iter().all(|(used, stamp)| stamp_of(used) == *stamp));
-                if kernels.read_at(&path, current) && used_unchanged {
+                if kernels.read_at(&path, current) && !moved.contains(path.as_path()) {
                     continue;
                 }
                 to_read.push((path, current));
@@ -1160,6 +1194,7 @@ impl Scene {
                 read_library(store, path.clone(), *current)
             });
             for (document, depends) in reads {
+                self.used_settled = None;
                 self.depends.remove(&document.path);
                 if let Some(used) = depends {
                     self.depends.insert(document.path.clone(), used);

@@ -24,6 +24,9 @@ pub(crate) struct Expanded {
     uses: Vec<(PathBuf, bool)>,
     /// The files reached, in the order of the `use`s.
     pub files: Vec<PathBuf>,
+    /// Those files, each once, in the order of their paths: what a sync
+    /// asks of every time, found once an expansion and not once a sync.
+    pub distinct: Vec<PathBuf>,
     watched: Vec<(PathBuf, Option<Stamp>)>,
 }
 
@@ -35,12 +38,15 @@ impl Expanded {
             store,
             seen: Mutex::new(BTreeSet::new()),
         };
-        let files = uses
+        let files: Vec<PathBuf> = uses
             .iter()
             .flat_map(|(path, trailing_slash)| {
                 expand_use(&watching, path, *trailing_slash).unwrap_or_default()
             })
             .collect();
+        let mut distinct = files.clone();
+        distinct.sort();
+        distinct.dedup();
         let watched = watching
             .seen
             .into_inner()
@@ -54,6 +60,7 @@ impl Expanded {
         Self {
             uses,
             files,
+            distinct,
             watched,
         }
     }
