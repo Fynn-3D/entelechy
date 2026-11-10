@@ -1053,10 +1053,13 @@ impl Evaluator {
         self.fusion
     }
 
-    /// Keeps a node materialized so its image can be observed.
+    /// Keeps a node materialized so its image can be observed. Pinning a
+    /// node already pinned changes nothing, and asks for no sweep of the
+    /// ledger: a session pins the same nodes before every frame.
     pub fn pin(&mut self, node: NodeId) {
-        self.pruned = false;
-        self.pinned.insert(node);
+        if self.pinned.insert(node) {
+            self.pruned = false;
+        }
     }
 
     /// The nodes kept materialized.
@@ -1089,8 +1092,9 @@ impl Evaluator {
 
     /// Lets fusion have `node` back.
     pub fn unpin(&mut self, node: &NodeId) {
-        self.pruned = false;
-        self.pinned.remove(node);
+        if self.pinned.remove(node) {
+            self.pruned = false;
+        }
     }
 
     /// Releases every cached image and all committed state.
@@ -1737,6 +1741,15 @@ impl Evaluator {
             // What every-frame outputs a frame lets go as their last reader
             // has run ([`Layout::chill_after`]): a frame that commits only.
             let chills = !self.trial && matches!(demand, Demand::Every | Demand::Frame);
+            // A node's run of new outputs ends unless it runs and makes new
+            // ones again on this frame: the runs as the last frame left
+            // them are taken, and a node that does puts its own back, one
+            // longer. What is left of them when the frame is done ended.
+            let mut streaks = if chills {
+                std::mem::take(&mut self.changing)
+            } else {
+                crate::hash::QuickMap::default()
+            };
             for (at, group) in groups.iter().enumerate() {
                 if chills && at > 0 {
                     for id in &frame.layout.chill_after[at - 1] {
@@ -1745,22 +1758,17 @@ impl Evaluator {
                         }
                     }
                 }
+                // Passed by before anything of it is looked up: on a frame
+                // that leans, most groups are.
+                if lean && !dirty[at] {
+                    continue;
+                }
                 let node = &group.node;
-                // A node's run of new outputs ends unless it runs and
-                // makes new ones again on this frame.
-                let streak = if chills {
-                    self.changing.remove(&node.id).unwrap_or(0)
-                } else {
-                    0
-                };
                 if !frame.layout.runs(at) {
                     continue;
                 }
                 // Asleep: its readers take what it last gave.
                 if asleep.contains(&node.id) {
-                    continue;
-                }
-                if lean && !dirty[at] {
                     continue;
                 }
                 frame.waiting_for(Some(&node.id), runtime.device_waited());
@@ -1881,6 +1889,7 @@ impl Evaluator {
                     frame.layout.touch_readers(at, &mut dirty);
                 }
                 if chills && new {
+                    let streak = streaks.remove(&node.id).unwrap_or(0);
                     self.changing
                         .insert(node.id.clone(), streak.saturating_add(1));
                 }
