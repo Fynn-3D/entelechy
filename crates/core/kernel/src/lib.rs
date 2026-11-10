@@ -735,8 +735,9 @@ pub struct Runtime {
     /// for the device's work before it. A Field made before, state or an
     /// input, comes back once while the device has little else to do.
     fresh: std::collections::HashSet<Handle>,
-    /// The run that made each Field of this evaluation, wherever it ran.
-    made: std::collections::HashMap<Handle, RunKey>,
+    /// The run that made each Field of this evaluation, wherever it ran,
+    /// and whether a run of this evaluation read it.
+    made: std::collections::HashMap<Handle, (RunKey, bool)>,
     /// What the readers of each run in this evaluation would spare it,
     /// summed ([`Runtime::sized_off`]).
     sparing: std::collections::HashMap<RunKey, u64>,
@@ -1370,11 +1371,20 @@ impl Runtime {
         // stopped sparing it, and taking it for unspared would send it to
         // the main backend for one evaluation and its readers after it,
         // then back, turn and turn about.
-        let made: std::collections::HashSet<RunKey> =
-            self.made.drain().map(|(_, key)| key).collect();
-        for key in made {
-            if let Some(spare) = self.sparing.remove(&key) {
-                self.spared.insert(key, spare);
+        let mut made: std::collections::HashMap<RunKey, bool> = std::collections::HashMap::new();
+        for (_, (key, read)) in self.made.drain() {
+            *made.entry(key).or_default() |= read;
+        }
+        for (key, read) in made {
+            match self.sparing.remove(&key) {
+                Some(spare) => {
+                    self.spared.insert(key, spare);
+                }
+                // Read by runs that spared it nothing: spared nothing.
+                None if read => {
+                    self.spared.remove(&key);
+                }
+                None => {}
             }
         }
         self.sparing.clear();
@@ -1497,15 +1507,26 @@ impl Runtime {
 
     /// Counts what a run that executes spares each other run that made what
     /// it reads ([`Runtime::sized_off`]).
-    /// A reader that spares nothing is counted too, as nothing: the run
-    /// it reads was read in this evaluation, and is spared what its
-    /// readers of this evaluation spare it, not what others did before.
+    /// A reader that spares nothing is noted too: the run it reads was
+    /// read in this evaluation, and is spared what its readers of this
+    /// evaluation spare it, not what others did before.
     fn spare(&mut self, version: &KernelVersion, invocation: &Invocation, spare: Option<u64>) {
+        let Some(spare) = spare else {
+            for input in &invocation.inputs {
+                if let Some((_, read)) = self.made.get_mut(input) {
+                    *read = true;
+                }
+            }
+            return;
+        };
         let own = run_key(version, invocation);
         for input in &invocation.inputs {
-            if let Some(key) = self.made.get(input).filter(|key| **key != own) {
+            if let Some((key, read)) = self.made.get_mut(input)
+                && *key != own
+            {
+                *read = true;
                 let sum = self.sparing.entry(key.clone()).or_default();
-                *sum = sum.saturating_add(spare.unwrap_or(0));
+                *sum = sum.saturating_add(spare);
             }
         }
     }
@@ -1514,7 +1535,7 @@ impl Runtime {
     fn made_by(&mut self, version: &KernelVersion, invocation: &Invocation, outputs: &[Handle]) {
         let key = run_key(version, invocation);
         for output in outputs {
-            self.made.insert(*output, key.clone());
+            self.made.insert(*output, (key.clone(), false));
         }
     }
 

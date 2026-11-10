@@ -442,6 +442,8 @@ const COLD_LEAST: usize = 1 << 20;
 /// What a frame's runs gather, and where it is, for making room.
 struct Frame {
     executed: Vec<NodeId>,
+    /// Whether each group of the plan ran, by its place.
+    ran: Vec<bool>,
     timings: Vec<(NodeId, std::time::Duration)>,
     /// The nodes that waited for the device ([`Report::waits`]).
     waits: Vec<(NodeId, std::time::Duration)>,
@@ -465,6 +467,7 @@ impl Frame {
     fn new(layout: Arc<Layout>, asked: BTreeSet<NodeId>) -> Self {
         Self {
             executed: Vec::new(),
+            ran: vec![false; layout.place.len()],
             timings: Vec::new(),
             waits: Vec::new(),
             waiting: None,
@@ -529,6 +532,9 @@ struct Layout {
     place: Vec<u32>,
     /// Each running group that fused others, with them.
     fused: Arc<Vec<(NodeId, Vec<NodeId>)>>,
+    /// The group each fused node runs in, by its place: a node fused into
+    /// another has no run of its own, and ran when that group did.
+    fused_at: BTreeMap<NodeId, usize>,
     /// The groups that read each group `<-`, by place.
     readers_at: Vec<Vec<usize>>,
     /// Whether a group's key may change with nothing it reads `<-`
@@ -659,6 +665,11 @@ impl Layout {
                 readers_at[*read].push(at);
             }
         }
+        let fused_at: BTreeMap<NodeId, usize> = fused
+            .iter()
+            .filter_map(|(group, absorbed)| Some((runs_at.get(group)?, absorbed)))
+            .flat_map(|(at, absorbed)| absorbed.iter().map(|node| (node.clone(), *at)))
+            .collect();
         Self {
             runs_at,
             last_read,
@@ -670,6 +681,7 @@ impl Layout {
             absorbed: absorbed.into_iter().cloned().collect(),
             names: Arc::new(names),
             place,
+            fused_at,
             fused: Arc::new(fused),
             readers_at,
             moving,
@@ -1906,6 +1918,7 @@ impl Evaluator {
             frame.waiting_for(None, runtime.device_waited());
             let Frame {
                 executed,
+                ran,
                 timings,
                 waits,
                 clocked,
@@ -1923,7 +1936,7 @@ impl Evaluator {
             } else {
                 std::borrow::Cow::Owned(layout.held.iter().chain(&asked).cloned().collect())
             };
-            self.weigh_alike(&layout, &executed);
+            self.weigh_alike(&layout, &ran);
             if matches!(demand, Demand::Read(_)) {
                 self.wait_for_checks(checks, runtime)?;
                 return Ok(None);
@@ -2196,6 +2209,7 @@ impl Evaluator {
             None => self.store(&node.id, key, outputs, output_names, runtime),
         }
         frame.executed.push(node.id.clone());
+        frame.ran[at] = true;
         Ok(())
     }
 
@@ -2372,22 +2386,25 @@ impl Evaluator {
     /// device for nothing and rests as one that found a change does
     /// ([`Rest`]). A node read as state, or as a graph's output, is kept
     /// compared: what it spares shows after this evaluation.
-    fn weigh_alike(&mut self, layout: &Layout, executed: &[NodeId]) {
+    fn weigh_alike(&mut self, layout: &Layout, ran: &[bool]) {
         if self.alike.is_empty() {
             return;
         }
-        // A reader fused into another node ran when that node did: it has
-        // no run of its own to be found among the executed.
-        let mut ran: std::collections::HashSet<&NodeId> = executed.iter().collect();
-        for (group, absorbed) in layout.fused.iter() {
-            if ran.contains(group) {
-                ran.extend(absorbed.iter());
-            }
-        }
+        // A reader ran when its group did, asked by the group's place: a
+        // reader fused into another node has no run of its own, and its
+        // group is that node's. Only the readers of what was found alike
+        // are asked of, however many nodes the frame ran.
+        let ran = |reader: &NodeId| {
+            layout
+                .runs_at
+                .get(reader)
+                .or_else(|| layout.fused_at.get(reader))
+                .is_some_and(|at| ran[*at])
+        };
         for id in std::mem::take(&mut self.alike) {
             let readers = layout.graph_readers.get(&id).map_or(&[][..], Vec::as_slice);
             let held = layout.kept.contains(&id);
-            if !held && !readers.is_empty() && readers.iter().all(|reader| ran.contains(reader)) {
+            if !held && !readers.is_empty() && readers.iter().all(ran) {
                 self.rest.entry(id).or_default().found_changed();
             } else {
                 self.rest.remove(&id);
