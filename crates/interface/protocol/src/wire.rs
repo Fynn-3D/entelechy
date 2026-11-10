@@ -473,6 +473,18 @@ pub(crate) fn events_json(events: &[Event]) -> Vec<Json> {
             Event::WriteRefused { output, path, why } => json!({ "kind": "write_refused", "output": output, "path": path.display().to_string(), "why": why }),
             Event::Large { path, id, why } => json!({ "kind": "large", "path": path.display().to_string(), "id": id.to_string(), "why": why }),
             Event::Unrun { node, why } => json!({ "kind": "unrun", "node": node, "why": why }),
+            Event::BroughtUnchanged {
+                output,
+                path,
+                bytes,
+                frames,
+            } => json!({
+                "kind": "brought_unchanged",
+                "output": output,
+                "path": path.display().to_string(),
+                "bytes": bytes,
+                "frames": frames,
+            }),
             Event::Idle { path, ids } => json!({ "kind": "idle", "path": path.display().to_string(), "ids": ids.iter().map(ToString::to_string).collect::<Vec<_>>() }),
         })
         .collect()

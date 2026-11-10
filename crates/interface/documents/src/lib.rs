@@ -328,6 +328,21 @@ pub enum Event {
         /// What is said of it.
         why: String,
     },
+    /// A large output written to a file was brought to the Host as a new
+    /// Field on each of `frames` evaluations in a row and found each time
+    /// to be the file as it stands: the node it reads runs every time and
+    /// makes the same, and each time costs the Field fetched, encoded and
+    /// hashed. Said once, until the output is written or left as it was.
+    BroughtUnchanged {
+        /// The output.
+        output: String,
+        /// The file.
+        path: PathBuf,
+        /// The bytes brought each time.
+        bytes: usize,
+        /// The evaluations in a row.
+        frames: u32,
+    },
     /// Kernels a document of the scene publishes and no node uses, each
     /// compiled and prepared all the same. Said when the scene loads, and
     /// again when they change.
@@ -386,6 +401,17 @@ impl fmt::Display for Event {
             }
             Self::Large { path, why, .. } => write!(f, "large: {}: {why}", path.display()),
             Self::Unrun { why, .. } => f.write_str(why),
+            Self::BroughtUnchanged {
+                output,
+                path,
+                bytes,
+                frames,
+            } => write!(
+                f,
+                "output `{output}` was brought to the Host to be written to {} on each of the last {frames} frames, {:.1} MiB each time, and found unchanged: what it reads runs every frame; a node that sleeps (`awake`) until the save is due gives the same Field until then, and nothing is brought",
+                path.display(),
+                *bytes as f64 / (1 << 20) as f64
+            ),
             Self::Idle { path, ids } => f.write_str(&check::idle_said(path, ids)),
         }
     }

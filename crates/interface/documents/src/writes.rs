@@ -36,8 +36,20 @@ pub struct Writes {
     authored: BTreeMap<PathBuf, (String, Option<crate::store::Stamp>)>,
     /// Refusals reported, each once until it changes.
     said: BTreeSet<(PathBuf, String)>,
+    /// Per file: how many evaluations in a row brought a large new Field
+    /// to the Host only to find it as the file is, and whether that has
+    /// been said ([`Event::BroughtUnchanged`]).
+    unchanged: BTreeMap<PathBuf, (u32, bool)>,
     events: Vec<Event>,
 }
+
+/// The least bytes of an output found unchanged that are worth a word:
+/// smaller, bringing them to the Host each frame costs nothing to speak of.
+const LARGE_UNCHANGED: usize = 1 << 20;
+
+/// The evaluations in a row a large output is brought and found unchanged
+/// before it is said: a few are a scene settling.
+const UNCHANGED_RUN: u32 = 30;
 
 impl Writes {
     /// Allows writes into the existing directory `dir` and under it.
@@ -153,6 +165,7 @@ impl Writes {
                 .get(&write.path)
                 .is_some_and(|(last, _)| *last == handle)
             {
+                self.unchanged.remove(&write.path);
                 continue;
             }
             if write.files {
@@ -180,8 +193,26 @@ impl Writes {
             };
             if there == Some(digest) {
                 self.written.insert(write.path.clone(), (handle, digest));
+                // A large Field brought to the Host, encoded and hashed
+                // to learn it is the file as it stands, evaluation after
+                // evaluation: what makes it runs every time and makes
+                // the same. Said once it has gone on a while.
+                if bytes.len() >= LARGE_UNCHANGED {
+                    let (run, said) = self.unchanged.entry(write.path.clone()).or_default();
+                    *run += 1;
+                    if *run >= UNCHANGED_RUN && !*said {
+                        *said = true;
+                        self.events.push(Event::BroughtUnchanged {
+                            output: write.output.clone(),
+                            path: write.path.clone(),
+                            bytes: bytes.len(),
+                            frames: *run,
+                        });
+                    }
+                }
                 continue;
             }
+            self.unchanged.remove(&write.path);
             match store
                 .write(&target, &bytes)
                 .map_err(|e| format!("{}: {e}", target.display()))

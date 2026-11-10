@@ -11,6 +11,7 @@ const KERNELS: &str = "
 kernel t.start@1 { requires { field.write; } output result: Rows<Int>; compute { return 5; } }
 kernel t.next@1 { requires { field.read; field.write; } input last: Rows<Int>; output result: Rows<Int>; compute { return sample(last) + 1; } }
 kernel t.over@1 { requires { field.read; field.write; } input x: Rows<Int>; param by: Int = 1; output result: Rows<Int>; compute { return sample(x) / by; } }
+kernel t.same@1 { requires { field.write; time.read; } output result: Rows<Int>; compute { return element() + int(time() * 0.0); } }
 kernel t.bytes@1 { requires { field.write; } param top: Int = 255; output result: Rows<Int>; compute { return if element() == 3 { top } else { element() * 7 }; } }
 ";
 
@@ -286,4 +287,59 @@ output kept <- both.result to \"saves/n.field\";
     assert_eq!(wrote(&events), 1, "{events:?}");
     session.evaluate(&context).unwrap();
     assert_eq!(saved(&file), [15], "the file was read back");
+}
+
+/// On a device, a large output a node makes anew on every frame, the same
+/// each time, is brought to the Host and hashed on every frame to find the
+/// file as it stands: said once it has gone on a while, and not again. A
+/// small one costs nothing worth a word. (In Host memory the two Fields are
+/// found alike as they are stored, and nothing is brought.)
+#[test]
+fn a_large_output_brought_unchanged_frame_after_frame_is_said_once() {
+    let scene = |elements: u32| {
+        format!(
+            "use \"k.ent\";
+node same: t.same@1 {{ domain = {elements}; }}
+output shown <- same.result;
+output kept <- same.result to \"saves/same.field\";
+"
+        )
+    };
+    let said = |elements: u32, frames: u32| -> Option<Vec<(String, u32)>> {
+        let gpu = match entelechy_gpu::GpuBackend::new() {
+            Ok(gpu) => gpu,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return None;
+            }
+        };
+        let dir = scratch(&format!("unchanged-{elements}-{frames}"), &scene(elements));
+        let mut runtime = entelechy_kernel::Runtime::with_backend(1 << 26, Box::new(gpu));
+        runtime.set_small(0);
+        let mut session = Session::open_with(&dir.join("scene.esn"), None, runtime);
+        session.sync();
+        session.allow_writes(&dir.join("saves")).unwrap();
+        let mut found = Vec::new();
+        for frame in 0..frames {
+            let context = Context {
+                time: f64::from(frame) / 60.0,
+                ..Context::default()
+            };
+            session.evaluate(&context).unwrap();
+            found.extend(session.sync().into_iter().filter_map(|event| match event {
+                Event::BroughtUnchanged { output, frames, .. } => Some((output, frames)),
+                _ => None,
+            }));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        Some(found)
+    };
+    // The first frame writes the file; the thirty after it find it as it
+    // stands.
+    let Some(soon) = said(300_000, 30) else {
+        return;
+    };
+    assert!(soon.is_empty(), "{soon:?}");
+    assert_eq!(said(300_000, 80).unwrap(), [("kept".to_string(), 30)]);
+    assert!(said(1000, 80).unwrap().is_empty());
 }
