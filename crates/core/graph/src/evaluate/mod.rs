@@ -172,6 +172,10 @@ pub struct Report {
     pub executed: Vec<NodeId>,
     /// Nodes whose cached outputs were reused.
     pub reused: Reused,
+    /// How many groups the evaluation bound to find their keys: every group
+    /// it reached, or, on a frame that leans on the last, those that move
+    /// and those that read an output changed on this frame.
+    pub bound: usize,
     /// Sources whose state advanced in this evaluation's commit.
     pub committed: Vec<(NodeId, String)>,
     /// Every declared output by name.
@@ -528,9 +532,10 @@ struct Layout {
     /// The groups that read each group `<-`, by place.
     readers_at: Vec<Vec<usize>>,
     /// Whether a group's key may change with nothing it reads `<-`
-    /// changing: it reads the clock, input, state or a caller's Field, runs
-    /// off the frame, takes its domain from an expression, or reads a node
-    /// the plan does not run.
+    /// changing while the parameters and the caller's Fields stay as they
+    /// were: it reads the clock, input or state, runs off the frame, takes
+    /// its domain from the window or its scale, or reads a node the plan
+    /// does not run.
     moving: Vec<bool>,
     /// The nodes whose outputs group `at` reads last, which a frame lets go
     /// cold once it has run when they are new frame after frame
@@ -595,10 +600,13 @@ impl Layout {
         let mut moving = Vec::with_capacity(groups.len());
         for group in groups {
             let requires = &group.manifest().requires;
+            // A domain written from counts, values and parameters is as its
+            // inputs and the parameters are; one that reads the window or
+            // its scale moves with the evaluation's context.
             let mut moves = group.node.is_async
                 || requires.contains(Capability::TimeRead)
                 || requires.contains(Capability::InputRead)
-                || matches!(&group.node.domain, Some(DomainSpec::Expr(_)));
+                || matches!(&group.node.domain, Some(DomainSpec::Expr(expr)) if expr.reads_context());
             let mut reads = Vec::new();
             for binding in group.node.inputs.values() {
                 match binding {
@@ -606,7 +614,10 @@ impl Layout {
                         Some(at) => reads.push(*at),
                         None => moves = true,
                     },
-                    Binding::Now(Source::External(_)) | Binding::Previous { .. } => moves = true,
+                    // A caller's Field is keyed by its handle, and a frame
+                    // leans only under the same Fields ([`Quiet`]).
+                    Binding::Now(Source::External(_)) => {}
+                    Binding::Previous { .. } => moves = true,
                 }
             }
             deps.push(reads);
@@ -693,7 +704,9 @@ impl Evaluator {
 /// layout, the ledger as the frame left it, the parameters and Fields it was
 /// given, and which groups' entries are as their keys were found. A group
 /// that does not move ([`Layout::moving`]) and none of whose reads changed
-/// is passed by unbound while all of it holds.
+/// is passed by unbound while all of it holds: its key is made of its
+/// Kernel's version, its parameters, the Fields and outputs it reads and
+/// the extent they give it, none of which has changed.
 struct Quiet {
     layout: Arc<Layout>,
     ledger: u64,
@@ -1664,6 +1677,7 @@ impl Evaluator {
                 vec![true; groups.len()]
             };
             let mut frame = Frame::new(layout, asked);
+            let mut bound_groups = 0usize;
             let scene = Scene {
                 graph,
                 groups: &groups,
@@ -1702,6 +1716,7 @@ impl Evaluator {
                 }
                 frame.waiting_for(Some(&node.id), runtime.device_waited());
                 let before = self.output_epoch(&node.id);
+                bound_groups += 1;
                 let mut bound = self.bind(
                     graph,
                     node,
@@ -1929,6 +1944,7 @@ impl Evaluator {
                 clocked,
                 placements,
                 reused,
+                bound: bound_groups,
                 committed,
                 outputs,
                 fused,

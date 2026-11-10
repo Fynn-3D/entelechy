@@ -2619,6 +2619,55 @@ output result <- twice.result;",
     assert_eq!(value, 8.0);
 }
 
+/// A frame that leans on the last binds only what moves: a node that reads
+/// a caller's Field, or takes its extent from what it reads, is as that
+/// Field and that extent are, and is passed by unbound while they stand. A
+/// new Field under the same name is another graph input: every group is
+/// bound again, and what reads it runs.
+#[test]
+fn a_frame_binds_only_what_moves_though_a_node_reads_a_callers_field_or_sizes_itself() {
+    const SECOND: &str = "kernel t.second@1 { requires { field.write; time.read; } output result: Rows<Float>; compute { return floor(time()); } }";
+    let graph = entelechy_scene::parse(
+        "input photo: Image;
+node clock: t.second@1 { domain = 4; }
+node copy: image.invert@1 { source <- photo; }
+node sized: image.invert@1 { source <- copy.result; domain = size(source); }
+output result <- sized.result;
+output tick <- clock.result;",
+    )
+    .unwrap();
+    let mut runtime = runtime();
+    load(&mut runtime, SECOND);
+    let photo = runtime.host_mut().create_image(2, 2).unwrap();
+    let externals = BTreeMap::from([("photo".to_string(), photo)]);
+    let mut evaluator = Evaluator::new();
+    evaluator.set_fusion(false);
+    let mut frame = |runtime: &mut Runtime, externals: &BTreeMap<String, _>, time: f64| {
+        evaluator
+            .evaluate(&graph, runtime, externals, &at(time), &BTreeMap::new())
+            .unwrap()
+    };
+    let first = frame(&mut runtime, &externals, 0.0);
+    assert_eq!(first.bound, 3, "{first:?}");
+    assert_eq!(first.executed, ids(&["clock", "copy", "sized"]));
+    // The frame after finds every key as it was; from then on only the
+    // clock, which moves, is bound.
+    let _ = frame(&mut runtime, &externals, 0.0);
+    let quiet = frame(&mut runtime, &externals, 0.0);
+    assert!(quiet.executed.is_empty(), "{quiet:?}");
+    assert_eq!(quiet.bound, 1, "{quiet:?}");
+    let ticking = frame(&mut runtime, &externals, 1.0);
+    assert_eq!(ticking.executed, ids(&["clock"]));
+    assert_eq!(ticking.bound, 1, "{ticking:?}");
+    // Another Field under the name: nothing is leaned on, and its readers run.
+    let other = runtime.host_mut().create_image(3, 3).unwrap();
+    let externals = BTreeMap::from([("photo".to_string(), other)]);
+    let changed = frame(&mut runtime, &externals, 1.0);
+    assert_eq!(changed.bound, 3, "{changed:?}");
+    assert_eq!(changed.executed, ids(&["copy", "sized"]));
+    assert_eq!(runtime.host().domain(changed.output).unwrap().count(), 9);
+}
+
 /// A shared graph the evaluator holds is known unchanged by its identity;
 /// one changed through `Arc::make_mut` is a copy, and is planned anew.
 #[test]
