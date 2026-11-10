@@ -2668,6 +2668,67 @@ output tick <- clock.result;",
     assert_eq!(runtime.host().domain(changed.output).unwrap().count(), 9);
 }
 
+/// A shared graph that reads a fallback is kept with the fallback written
+/// in while it is the graph before and the same externals are missing: a
+/// Field supplied under the name is read instead, the fallback again once
+/// it is gone, and the graph changed is written in anew.
+#[test]
+fn a_shared_graph_reading_a_fallback_follows_what_is_supplied_and_what_changes() {
+    let mut graph = entelechy_scene::parse(
+        "input photo: Image;
+node source: image.gradient@1 { domain = vec2(3, 3); }
+node gray: image.grayscale@1 { source <- source.result; }
+node final: image.invert@1 { source <- photo; }
+output result <- final.result;",
+    )
+    .unwrap();
+    graph.fallbacks.push((
+        "photo".into(),
+        entelechy_graph::Source::Node {
+            node: NodeId("gray".into()),
+            port: "result".into(),
+        },
+    ));
+    let mut graph = std::sync::Arc::new(graph);
+    let mut runtime = runtime();
+    let mut evaluator = Evaluator::new();
+    evaluator.set_fusion(false);
+    let frame = |evaluator: &mut Evaluator,
+                 runtime: &mut Runtime,
+                 graph: &std::sync::Arc<Graph>,
+                 externals: &BTreeMap<String, _>| {
+        evaluator
+            .evaluate(
+                graph,
+                runtime,
+                externals,
+                &Context::default(),
+                &BTreeMap::new(),
+            )
+            .unwrap()
+    };
+    let none = BTreeMap::new();
+    let first = frame(&mut evaluator, &mut runtime, &graph, &none);
+    assert_eq!(first.executed, ids(&["source", "gray", "final"]));
+    let same = frame(&mut evaluator, &mut runtime, &graph, &none);
+    assert!(same.executed.is_empty(), "{same:?}");
+    let photo = runtime.host_mut().create_image(2, 2).unwrap();
+    let given = BTreeMap::from([("photo".to_string(), photo)]);
+    let supplied = frame(&mut evaluator, &mut runtime, &graph, &given);
+    assert!(supplied.executed.contains(&NodeId("final".into())));
+    assert_eq!(runtime.host().domain(supplied.output).unwrap().count(), 4);
+    let back = frame(&mut evaluator, &mut runtime, &graph, &none);
+    assert_eq!(runtime.host().domain(back.output).unwrap().count(), 9);
+    std::sync::Arc::make_mut(&mut graph).nodes[1].params.insert(
+        "amount".into(),
+        entelechy_graph::ParamValue::Literal(entelechy_graph::Value::Int(0)),
+    );
+    let changed = frame(&mut evaluator, &mut runtime, &graph, &none);
+    assert_eq!(changed.executed, ids(&["gray", "final"]));
+    let settled = frame(&mut evaluator, &mut runtime, &graph, &none);
+    assert!(settled.executed.is_empty(), "{settled:?}");
+}
+
 /// A shared graph the evaluator holds is known unchanged by its identity;
 /// one changed through `Arc::make_mut` is a copy, and is planned anew.
 #[test]

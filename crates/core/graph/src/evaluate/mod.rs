@@ -935,7 +935,15 @@ pub struct Evaluator {
     made_once: Option<(Arc<Vec<Group>>, Vec<MadeOnce>)>,
     /// How many frames in a row each node's outputs came out new.
     changing: crate::hash::QuickMap<NodeId, u32>,
+    /// The last shared graph that read a fallback, the externals it was
+    /// given none for, and the graph with their fallbacks written in
+    /// ([`Evaluator::with_fallbacks`]).
+    fallen: Option<Fallen>,
 }
+
+/// A shared graph, the names of the externals whose fallbacks are in use,
+/// and the graph with them written in.
+type Fallen = (Arc<Graph>, Vec<String>, Arc<Graph>);
 
 /// The frames in a row a node's outputs must come out new for a frame to
 /// let them go cold once their last reader has run. The next frame makes
@@ -1579,6 +1587,48 @@ impl Evaluator {
         Ok(runtime.host().element(handle, awake.row)?[0] == 0)
     }
 
+    /// The graph with each unsupplied external that has a fallback read
+    /// from it; `None` when nothing is substituted. For a shared graph it
+    /// is made once and kept while the graph is the one before and the
+    /// same externals are missing, so the frames after find the plan by
+    /// the copy's identity instead of comparing a new copy whole.
+    fn with_fallbacks(
+        &mut self,
+        graph: &dyn AsGraph,
+        externals: &BTreeMap<String, Handle>,
+    ) -> Option<Arc<Graph>> {
+        let missing = |name: &&(String, Source)| !externals.contains_key(&name.0);
+        if let Some((from, names, made)) = &self.fallen
+            && graph
+                .shared()
+                .is_some_and(|shared| Arc::ptr_eq(shared, from))
+            && from
+                .fallbacks
+                .iter()
+                .filter(missing)
+                .map(|(name, _)| name)
+                .eq(names)
+        {
+            return Some(Arc::clone(made));
+        }
+        self.fallen = None;
+        let names: Vec<String> = graph
+            .graph()
+            .fallbacks
+            .iter()
+            .filter(missing)
+            .map(|(name, _)| name.clone())
+            .collect();
+        if names.is_empty() {
+            return None;
+        }
+        let made = Arc::new(substitute_fallbacks(graph.graph(), &names));
+        if let Some(shared) = graph.shared() {
+            self.fallen = Some((Arc::clone(shared), names, Arc::clone(&made)));
+        }
+        Some(made)
+    }
+
     /// Evaluates what `demand` asks; the report is `None` only for a
     /// [`Demand::Read`].
     fn evaluate_with(
@@ -1592,14 +1642,13 @@ impl Evaluator {
     ) -> Result<Option<Report>, EvaluateError> {
         // An external the caller supplies nothing for reads its fallback,
         // written into a copy of the graph only when one is in use.
-        let substituted = substitute_fallbacks(graph.graph(), externals);
+        let substituted = self.with_fallbacks(graph, externals);
         // A graph with fallbacks written in is a new one, not the caller's.
-        let shared = if substituted.is_some() {
-            None
-        } else {
-            graph.shared()
+        let shared = match &substituted {
+            Some(substituted) => Some(substituted),
+            None => graph.shared(),
         };
-        let graph = substituted.as_ref().unwrap_or(graph.graph());
+        let graph = substituted.as_deref().unwrap_or(graph.graph());
         // What the parameters must hold, before anything runs.
         for requirement in &graph.requirements {
             requirement
@@ -2393,18 +2442,15 @@ fn window_context(context: &Context) -> impl Fn(&str) -> Option<Value> + '_ {
     }
 }
 
-/// The graph with each unsupplied external that has a fallback read from
-/// it; `None` when nothing is substituted.
-fn substitute_fallbacks(graph: &Graph, externals: &BTreeMap<String, Handle>) -> Option<Graph> {
+/// The graph with each of the externals `missing` names read from its
+/// fallback.
+fn substitute_fallbacks(graph: &Graph, missing: &[String]) -> Graph {
     let missing: BTreeMap<&str, &Source> = graph
         .fallbacks
         .iter()
-        .filter(|(name, _)| !externals.contains_key(name))
+        .filter(|(name, _)| missing.contains(name))
         .map(|(name, source)| (name.as_str(), source))
         .collect();
-    if missing.is_empty() {
-        return None;
-    }
     let swap = |source: &mut Source| {
         if let Source::External(name) = source
             && let Some(fallback) = missing.get(name.as_str())
@@ -2424,7 +2470,7 @@ fn substitute_fallbacks(graph: &Graph, externals: &BTreeMap<String, Handle>) -> 
     for (_, source) in &mut graph.outputs {
         swap(source);
     }
-    Some(graph)
+    graph
 }
 
 /// The nodes whose outputs are never let go to make room: the scene's
