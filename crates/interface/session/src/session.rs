@@ -41,6 +41,10 @@ pub struct Session {
     /// What was last said of nodes whose default domain leaves elements
     /// unrun ([`Event::Unrun`]), by node.
     unrun: BTreeMap<String, String>,
+    /// The graph and the published Kernels' revision `idle` and `unrun`
+    /// were last worked out under: both are theirs alone, and a sync
+    /// under the same two says nothing new of either.
+    shaped: Option<(Arc<entelechy_graph::Graph>, u64)>,
     /// The Kernels the graph's nodes use, by the version last seen
     /// ([`Session::finish_used`]).
     used: BTreeMap<entelechy_kernel::KernelId, entelechy_kernel::Generation>,
@@ -173,6 +177,7 @@ impl Session {
             placed: BTreeMap::new(),
             idle: BTreeMap::new(),
             unrun: BTreeMap::new(),
+            shaped: None,
             used: BTreeMap::new(),
             window: None,
             history: entelechy_documents::history::History::default(),
@@ -1288,15 +1293,23 @@ impl Session {
             })
             .collect();
         events.extend(large);
-        let Some(graph) = self.scene.graph() else {
+        let Some(graph) = self.scene.shared_graph().cloned() else {
             return;
         };
+        let revision = self.runtime.revision();
+        if self
+            .shaped
+            .as_ref()
+            .is_some_and(|(known, at)| Arc::ptr_eq(known, &graph) && *at == revision)
+        {
+            return;
+        }
         let published = self.kernels.documents().into_iter().map(|path| {
             let ids = self.kernels.ids_of(&path);
             (path, ids)
         });
         let idle: BTreeMap<PathBuf, Vec<KernelId>> =
-            entelechy_documents::check::idle(self.scene.store().as_ref(), graph, published)
+            entelechy_documents::check::idle(self.scene.store().as_ref(), &graph, published)
                 .into_iter()
                 .collect();
         for (path, ids) in &idle {
@@ -1331,6 +1344,7 @@ impl Session {
             }
         }
         self.unrun = unrun;
+        self.shaped = Some((graph, revision));
     }
 
     /// Reports nodes off the main backend, once per change.
