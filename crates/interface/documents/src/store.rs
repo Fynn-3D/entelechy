@@ -825,7 +825,11 @@ impl Kept {
     /// What is held for `path`: `Some(Some(..))` a file written here,
     /// `Some(None)` one removed here, `None` none, read from `base`.
     fn found(&self, path: &Path) -> Option<Option<(Vec<u8>, u64)>> {
-        self.held().get(&self.landed(path)).cloned()
+        // Where the path lands is asked of `base` before what is held is
+        // locked: asked under the lock, every reader of the store waits
+        // for every other's look at the file system.
+        let at = self.landed(path);
+        self.held().get(&at).cloned()
     }
 
     fn put(&self, path: &Path, bytes: Option<Vec<u8>>) {
