@@ -403,6 +403,73 @@ fn a_small_output_found_unchanged_while_sparing_nothing_rests() {
 }
 
 #[test]
+fn a_small_output_read_by_a_fused_node_that_runs_all_the_same_rests() {
+    // The pick stays 3 while the clock moves, and what reads it is fused
+    // into the costly Field, which reads the clock as well: the fused
+    // reader has no run of its own, yet it ran with the Field it is part
+    // of, so finding the pick unchanged spares nothing and the pick is
+    // compared seldom.
+    let Some(gpu) = gpu() else { return };
+    let compared = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let backend: Box<dyn Backend> = Box::new(Counted {
+        gpu,
+        compared: std::sync::Arc::clone(&compared),
+    });
+    let mut runtime = entelechy_kernel::Runtime::with_backend(1 << 24, backend);
+    runtime.set_small(0);
+    load(
+        &mut runtime,
+        "kernel test.zero@1 { requires { field.write; } output result: Rows<Float>; compute { return 0.0; } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.clock@1 { requires { field.read; field.write; time.read; } input previous: Rows<Float>; output result: Rows<Float>; compute { return sample(previous) * 0.0 + time(); } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.pick@1 { requires { field.read; field.write; } input clock: Rows<Float>; output result: Rows<Int>; compute { return 3 + int(at(clock, 0) * 0.0); } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.spread@1 { requires { field.read; field.write; } input pick: Rows<Int>; output result: Image; compute { return vec4(float(at(pick, 0)) + coord().x, 0.0, 0.0, 1.0); } }",
+    );
+    load(
+        &mut runtime,
+        "kernel test.costly@1 { requires { field.read; field.write; } input spread: Image; input clock: Rows<Float>; output result: Image; compute { return sample(spread) + vec4(at(clock, 0), 0.0, 0.0, 0.0); } }",
+    );
+    let graph = entelechy_scene::parse(
+        "node zero: test.zero@1 { domain = 1; }
+         node clock: test.clock@1 { previous <~ clock.result from zero.result; domain = 1; }
+         node pick: test.pick@1 { clock <- clock.result; domain = 1; }
+         node spread: test.spread@1 { pick <- pick.result; domain = vec2(64, 64); }
+         node costly: test.costly@1 { spread <- spread.result; clock <- clock.result; domain = vec2(64, 64); }
+         output result <- costly.result;",
+    )
+    .unwrap();
+    let mut evaluator = entelechy_graph::Evaluator::new();
+    let empty: std::collections::BTreeMap<String, entelechy_abi::Handle> =
+        std::collections::BTreeMap::new();
+    let no_params: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
+    let mut fused = false;
+    for k in 1..=40 {
+        let context = Context {
+            time: k as f64,
+            ..Context::default()
+        };
+        let report = evaluator
+            .evaluate(&graph, &mut runtime, &empty, &context, &no_params)
+            .unwrap();
+        fused |= !report.executed.iter().any(|id| id.0 == "spread");
+    }
+    assert!(
+        fused,
+        "the reader of the pick was to be fused into the costly Field"
+    );
+    let compared = compared.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(compared <= 16, "{compared}");
+}
+
+#[test]
 fn every_wait_for_the_device_is_counted() {
     // A download waits for the run before it; the time it was blocked is
     // the backend's to tell, summed.

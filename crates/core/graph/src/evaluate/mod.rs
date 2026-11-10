@@ -2302,7 +2302,14 @@ impl Evaluator {
         if self.alike.is_empty() {
             return;
         }
-        let ran: std::collections::HashSet<&NodeId> = executed.iter().collect();
+        // A reader fused into another node ran when that node did: it has
+        // no run of its own to be found among the executed.
+        let mut ran: std::collections::HashSet<&NodeId> = executed.iter().collect();
+        for (group, absorbed) in layout.fused.iter() {
+            if ran.contains(group) {
+                ran.extend(absorbed.iter());
+            }
+        }
         for id in std::mem::take(&mut self.alike) {
             let readers = layout.graph_readers.get(&id).map_or(&[][..], Vec::as_slice);
             let held = layout.kept.contains(&id);
