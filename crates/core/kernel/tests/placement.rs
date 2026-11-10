@@ -183,6 +183,41 @@ fn a_run_its_small_readers_spare_goes_to_the_processor_with_them() {
 }
 
 #[test]
+fn a_run_keeps_what_its_readers_spared_it_while_none_of_them_runs() {
+    // Six readers send the producer to the processor. Then it runs alone,
+    // evaluation after evaluation, as it does when what it makes is found
+    // unchanged and its readers are passed by: it stays where they sent
+    // it, and they find it there when they run again.
+    let mut runtime = runtime();
+    let producer = runtime.load(constant("test.producer@1", 0), "").unwrap();
+    let reader = runtime.load(constant("test.reader@1", 1), "").unwrap();
+    let mut placed = Vec::new();
+    for evaluation in 0..7 {
+        runtime.begin_evaluation();
+        let made = runtime
+            .execute(&producer, &invocation(vec![], 200, 0))
+            .unwrap()[0];
+        placed.push(runtime.last_placement().unwrap().backend);
+        if !(2..5).contains(&evaluation) {
+            for _ in 0..6 {
+                let read = runtime
+                    .execute(&reader, &invocation(vec![made], 80, 0))
+                    .unwrap()[0];
+                assert_eq!(
+                    runtime.last_placement().unwrap().backend,
+                    placed[evaluation],
+                    "a reader runs beside what it reads"
+                );
+                runtime.host_mut().release(read).unwrap();
+            }
+        }
+        runtime.host_mut().release(made).unwrap();
+    }
+    assert_eq!(placed[0], "device");
+    assert_eq!(placed[1..], ["processor"; 6]);
+}
+
+#[test]
 fn a_run_too_few_readers_spare_stays_on_the_device_with_them() {
     let placed = placed(2, 4);
     for each in &placed {
