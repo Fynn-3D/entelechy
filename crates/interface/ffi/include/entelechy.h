@@ -133,6 +133,11 @@ EntelechySession *entelechy_open_replay(EntelechyFiles *files, const char *repla
  * released (0): F5, F6 and F10 are the play's, every other key the
  * scene's. Returns 0, or -1 when the session or the name cannot be read. */
 int entelechy_play_key(EntelechySession *session, const char *name, int down);
+/* Characters typed, UTF-8: a key's own text, or what an input method
+ * commits. A scene reads them with typed(), apart from the keys key()
+ * reads; hand both for a key that writes a character. Returns 0, or -1
+ * when the session or the text cannot be read. */
+int entelechy_play_typed(EntelechySession *session, const char *typed);
 /* The pointer at (x, y) in the window's pixels. */
 void entelechy_play_pointer(EntelechySession *session, float x, float y);
 /* A pointer button, 0 left, 1 right, 2 middle, pressed or released. */

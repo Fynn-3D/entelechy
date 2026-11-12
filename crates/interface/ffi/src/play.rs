@@ -93,6 +93,28 @@ pub unsafe extern "C" fn entelechy_play_key(
     })
 }
 
+/// Characters typed: a key's own text, or what an input method commits.
+/// They are what a scene's `typed()` reads, apart from the keys `key()`
+/// reads; a front hands both for a key that writes a character. Returns
+/// 0, or -1 when the session or the text cannot be read.
+///
+/// # Safety
+/// `session` is a live session; `typed` a NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_play_typed(
+    session: *mut EntelechySession,
+    typed: *const c_char,
+) -> c_int {
+    let (Some(mut s), Some(typed)) = (unsafe { enter(session) }, unsafe { text(typed) }) else {
+        return -1;
+    };
+    let typed = typed.to_owned();
+    guarded(&mut s, |s| {
+        s.play.typed(&typed);
+        0
+    })
+}
+
 /// The pointer at `(x, y)` in the canvas's pixels.
 ///
 /// # Safety

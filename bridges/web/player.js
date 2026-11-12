@@ -42,6 +42,12 @@ function wear(canvas, look) {
 /// What a step answers when the card is still ahead: no frame was made.
 const AHEAD = "ahead";
 
+/// What a key press writes, if it writes a character: its own text, when
+/// no command is held with it.
+function written(event) {
+  return event.key.length === 1 && !event.ctrlKey && !event.metaKey ? event.key : "";
+}
+
 const HELD = new Set(["Tab", "Escape", "F5", "F6", "F10", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "]);
 
 /// The sound card: a worklet that plays the blocks it is handed, in
@@ -137,6 +143,11 @@ class EntelechyPlayer {
     return this.entelechy.session;
   }
 
+  /// Hands characters typed to the play.
+  typed(text) {
+    this.entelechy.withText(text, (at) => this.x.entelechy_play_typed(this.session, at));
+  }
+
   /// Hands a key to the play.
   key(name, down) {
     this.entelechy.withText(name, (at) => this.x.entelechy_play_key(this.session, at, down ? 1 : 0));
@@ -172,6 +183,10 @@ class EntelechyPlayer {
 
   listen() {
     window.addEventListener("keydown", (event) => {
+      // A key that writes a character is typed as well as pressed, and
+      // typed again each time it repeats: what a scene's `typed()` reads.
+      const text = written(event);
+      if (text) this.hands.push(() => this.typed(text));
       if (event.repeat) return;
       if (HELD.has(event.key)) event.preventDefault();
       this.startSound().catch(() => {});
@@ -518,6 +533,8 @@ class EntelechyWorkerPlayer {
   listen() {
     const send = (message) => this.worker.postMessage(message);
     window.addEventListener("keydown", (event) => {
+      const text = written(event);
+      if (text) send({ typed: text });
       if (event.repeat) return;
       if (HELD.has(event.key)) event.preventDefault();
       this.startSound().catch(() => {});
