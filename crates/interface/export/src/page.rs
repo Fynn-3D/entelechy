@@ -19,8 +19,8 @@ use entelechy_session::store::{Kind, Stamp};
 use entelechy_session::{Later, Limits, Parsed, Session, SessionOptions, Store};
 
 /// A store that answers as another does and keeps the path of every file
-/// read through it: what a scene reads as it loads is what its page must
-/// carry.
+/// read through it, or asked after and found: what a scene reads as it
+/// loads is what its page must carry.
 struct Recording {
     under: Arc<dyn Store>,
     read: Mutex<Vec<PathBuf>>,
@@ -68,8 +68,16 @@ impl Store for Recording {
     fn remove_empty(&self, dir: &Path) -> io::Result<()> {
         self.under.remove_empty(dir)
     }
+    /// (A file asked after and found is carried too: what is looked for
+    /// to tell where something is, a package's manifest beside a file of
+    /// the package, must be there in the page for the answer to be the
+    /// same.)
     fn kind(&self, path: &Path) -> Option<Kind> {
-        self.under.kind(path)
+        let kind = self.under.kind(path);
+        if kind == Some(Kind::File) {
+            self.note(path);
+        }
+        kind
     }
     fn list(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
         self.under.list(dir)

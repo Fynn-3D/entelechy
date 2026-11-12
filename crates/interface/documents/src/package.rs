@@ -45,6 +45,6 @@ pub const LAYOUT: [Part; 6] = [
     Part {
         name: "by name",
         shape: "use \"name.entpkg\";",
-        doc: "A package not beside the document is found by its name: beside the package the document is in, so packages kept together name one another; then in each directory of `ENTELECHY_PACKAGES`; then in `packages/` beside the program.",
+        doc: "A package not beside the document is found by its name: beside the package the document is in, so packages kept together name one another; then in each directory of `ENTELECHY_PACKAGES`; then in `packages/` beside the program. Among files handed in (a page), in `packages/` among them.",
     },
 ];

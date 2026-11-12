@@ -603,7 +603,7 @@ impl Disk {
 
 /// Files handed in by the caller, kept in memory. A path is its name with
 /// `.` and `..` folded; a directory is any path a file is under; every
-/// file has one name.
+/// file has one name. A package named alone is found in `packages/`.
 #[derive(Debug, Default)]
 pub struct Memory {
     held: Mutex<Held>,
@@ -1098,6 +1098,13 @@ impl Store for Overlay<'_> {
 impl Store for Memory {
     fn parsed(&self) -> Option<&Parsed> {
         Some(&self.parsed)
+    }
+
+    /// Files handed in have no program to be beside: a package named
+    /// alone is looked for in `packages/` among them.
+    fn packages(&self) -> &[PathBuf] {
+        static AMONG: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+        AMONG.get_or_init(|| vec![PathBuf::from("packages")])
     }
 
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {

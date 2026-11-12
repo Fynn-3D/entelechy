@@ -220,7 +220,7 @@ Kernels (`.ent`) compute; scenes (`.esn`) compose them into a running world. Who
 - **graphs**: `name.entpkg/graphs/*.esn` Preset graphs, placed with `node n: graph "name.entpkg/graphs/g.esn" { ... }`.
 - **docs**: `//! at the top of a manifest or a preset;   /// above a Kernel, a port or a param` What each part is for, in its source; `kernel` and `kernels` answer a published Kernel's.
 - **assets**: `name.entpkg/font.png` Any other file in the directory, which a scene's `input` reads by its path or through the package's name (`name.entpkg/font.png`), as a document is; a package's files are readable wherever reads are held.
-- **by name**: `use "name.entpkg";` A package not beside the document is found by its name: beside the package the document is in, so packages kept together name one another; then in each directory of `ENTELECHY_PACKAGES`; then in `packages/` beside the program.
+- **by name**: `use "name.entpkg";` A package not beside the document is found by its name: beside the package the document is in, so packages kept together name one another; then in each directory of `ENTELECHY_PACKAGES`; then in `packages/` beside the program. Among files handed in (a page), in `packages/` among them.
 
 ## protocol: the operations a session answers
 
