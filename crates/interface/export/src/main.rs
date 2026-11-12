@@ -47,7 +47,10 @@ usage:
       holding bridges/web and target/page: a web release, or a checkout
       that has built it; the current directory by default). --backend
       names what runs it in the page; without it the page chooses as the
-      Player does.";
+      Player does. --chars and --chars-file (each may be given again) name
+      the characters the page's fonts keep: a font the scene reads is
+      carried with those alone, so a page that writes a few words does not
+      carry a whole font; a character not among them is then not drawn.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -130,10 +133,15 @@ fn export(args: &[String]) -> Result<String, String> {
             }
             "--double-sided" => options.double_sided = true,
             "--name" => family = Some(iter.next().ok_or("--name needs a family name")?.clone()),
-            "--chars" => chars = Some(iter.next().ok_or("--chars needs the characters")?.clone()),
+            // (Each adds to the characters kept: several files may hold a scene's words.)
+            "--chars" => chars
+                .get_or_insert_with(String::new)
+                .push_str(iter.next().ok_or("--chars needs the characters")?),
             "--chars-file" => {
                 let path = iter.next().ok_or("--chars-file needs a file")?;
-                chars = Some(std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?);
+                chars
+                    .get_or_insert_with(String::new)
+                    .push_str(&std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?);
             }
             other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
             other => inputs.push(PathBuf::from(other)),
@@ -149,10 +157,11 @@ fn export(args: &[String]) -> Result<String, String> {
             .map(str::to_ascii_lowercase)
             .unwrap_or_default()
     };
-    if (family.is_some() || chars.is_some())
-        && !matches!(extension(&out).as_str(), "ttf" | "otf" | "woff")
-    {
-        return Err("--name, --chars and --chars-file are for a font".into());
+    if family.is_some() && !matches!(extension(&out).as_str(), "ttf" | "otf" | "woff") {
+        return Err("--name is for a font".into());
+    }
+    if chars.is_some() && !matches!(extension(&out).as_str(), "ttf" | "otf" | "woff" | "html") {
+        return Err("--chars and --chars-file are for a font, or a page's fonts".into());
     }
     if (web.is_some() || backend.is_some()) && extension(&out) != "html" {
         return Err("--web and --backend are for a page".into());
@@ -172,16 +181,21 @@ fn export(args: &[String]) -> Result<String, String> {
                 scene,
                 web.as_deref().unwrap_or(Path::new(".")),
                 backend.as_deref(),
+                chars.as_deref(),
             )?;
             std::fs::write(&out, &made.page).map_err(|e| format!("{}: {e}", out.display()))?;
-            Ok(format!(
+            let mut said = format!(
                 "{}: {} bytes ({} file(s) of {} bytes, Entelechy for a page {} bytes)",
                 out.display(),
                 made.page.len(),
                 made.files,
                 made.files_bytes,
                 made.runtime_bytes
-            ))
+            );
+            for (name, read, kept) in &made.fonts {
+                said.push_str(&format!("\n  {name}: {read} bytes carried as {kept}"));
+            }
+            Ok(said)
         }
         "glb" => {
             let mut vertices = None;

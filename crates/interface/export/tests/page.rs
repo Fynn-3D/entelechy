@@ -125,9 +125,42 @@ fn a_template_is_filled() {
 fn a_page_needs_entelechy_for_the_web() {
     let scene = repository().join("examples/ant/scene.esn");
     let nowhere = std::env::temp_dir().join("entelechy-no-web-here");
-    let why = page::page(&scene, &nowhere, None).err().expect("refused");
+    let why = page::page(&scene, &nowhere, None, None)
+        .err()
+        .expect("refused");
     assert!(
         why.contains("single.html") && why.contains("--web"),
         "{why}"
+    );
+}
+
+/// A font the page carries keeps the characters named and no others; a
+/// file that is not a font is left as it is.
+#[test]
+fn a_font_is_carried_with_the_characters_named() {
+    use entelechy_import::font::{read, sample};
+    let whole = sample::latin();
+    let (all, _) = read(&whole, None).expect("the sample font");
+    let kept = page::font_of("play/fonts/sample.ttf", &whole, "A")
+        .expect("read and written")
+        .expect("a font");
+    let (few, _) = read(&kept, None).expect("what was carried is a font");
+    let codes = |fields: &entelechy_import::font::Fields| -> Vec<u32> {
+        fields
+            .glyphs
+            .values()
+            .chunks_exact(8)
+            .map(|row| row[0])
+            .collect()
+    };
+    assert_eq!(codes(&few), vec!['A' as u32]);
+    assert!(
+        codes(&all).len() > 1,
+        "the sample has more than the one kept"
+    );
+    assert!(
+        page::font_of("play/words.txt", b"A", "A")
+            .expect("not a font")
+            .is_none()
     );
 }

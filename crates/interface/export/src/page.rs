@@ -281,21 +281,72 @@ pub fn fill(
     Ok(out)
 }
 
+/// A font file carried with the characters of `chars` alone, in the
+/// format its name says; `None` for a file that is not a font. The font is
+/// read as the importer reads one and written as the exporter writes one,
+/// so it is what `entelechy import` then `entelechy export --chars` make of it.
+pub fn font_of(name: &str, bytes: &[u8], chars: &str) -> Result<Option<Vec<u8>>, String> {
+    let extension = name
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if !matches!(extension.as_str(), "ttf" | "otf" | "woff") {
+        return Ok(None);
+    }
+    let (fields, _) =
+        entelechy_import::font::read(bytes, Some(chars)).map_err(|e| format!("{name}: {e}"))?;
+    let family = name
+        .rsplit('/')
+        .next()
+        .and_then(|file| file.rsplit_once('.'))
+        .map_or("font", |(stem, _)| stem);
+    let face = crate::font::face(
+        &[fields.glyphs, fields.segments, fields.metrics],
+        family,
+        None,
+    )
+    .map_err(|e| format!("{name}: {e}"))?;
+    Ok(Some(match extension.as_str() {
+        "otf" => crate::font::otf(&face),
+        "woff" => crate::font::woff(&face),
+        _ => crate::font::ttf(&face),
+    }))
+}
+
 /// What a page was made of, for the line the exporter prints.
 pub struct Made {
     pub page: String,
     pub files: usize,
     pub files_bytes: usize,
     pub runtime_bytes: usize,
+    /// Each font carried with fewer characters: its name in the page, its
+    /// bytes as read and as carried.
+    pub fonts: Vec<(String, usize, usize)>,
 }
 
 /// `scene` as one page. `web` is where Entelechy for the web is: the
 /// directory with `bridges/web/` (the template and the Player in a page)
 /// and `target/page/` (Entelechy built for a page), as a web release and
 /// a checkout that has built it both are. `backend` is what runs it in
-/// the page (`best` when none is named, as the Player chooses).
-pub fn page(scene: &Path, web: &Path, backend: Option<&str>) -> Result<Made, String> {
-    let gathered = gather(scene)?;
+/// the page (`best` when none is named, as the Player chooses). `chars`,
+/// given, is the characters the page's fonts keep.
+pub fn page(
+    scene: &Path,
+    web: &Path,
+    backend: Option<&str>,
+    chars: Option<&str>,
+) -> Result<Made, String> {
+    let mut gathered = gather(scene)?;
+    let mut fonts = Vec::new();
+    if let Some(chars) = chars {
+        for (name, bytes) in &mut gathered.files {
+            if let Some(kept) = font_of(name, bytes, chars)? {
+                fonts.push((name.clone(), bytes.len(), kept.len()));
+                *bytes = kept;
+            }
+        }
+    }
     let bridge = web.join("bridges").join("web");
     let built = web.join("target").join("page");
     let read = |path: PathBuf| {
@@ -335,5 +386,6 @@ pub fn page(scene: &Path, web: &Path, backend: Option<&str>) -> Result<Made, Str
         files: gathered.files.len(),
         files_bytes: archived.len(),
         runtime_bytes: runtime.len(),
+        fonts,
     })
 }

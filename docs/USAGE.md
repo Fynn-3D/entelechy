@@ -297,7 +297,11 @@ current directory by default), and `--backend` what runs the scene in
 the page (the page chooses as the Player does when none is named). The
 page needs what Entelechy in a page needs: a browser with WebGPU for the
 GPU backend. A file the scene only reads later, by a name it computes,
-is not in the page.
+is not in the page. `--chars` and `--chars-file` (each may be given
+again) name the characters the page's fonts keep: a font the scene reads
+is carried with those alone, as `entelechy import` and `entelechy export
+--chars` would make it, so a page that writes a few words does not carry
+a whole font; a character not among them is then not drawn.
 
 ## Creation protocol
 
