@@ -947,6 +947,7 @@ dependencies = [
  "entelechy-compiler",
  "entelechy-conformance",
  "entelechy-cpu",
+ "entelechy-export",
  "entelechy-formats",
  "entelechy-graph",
  "entelechy-ir",

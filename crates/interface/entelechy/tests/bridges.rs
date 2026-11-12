@@ -40,8 +40,14 @@ fn tool(paths: &[&str]) -> Option<PathBuf> {
 
 /// Entelechy built for a page (`wasm32-unknown-unknown`) in its own target
 /// directory, with `wasm-bindgen`'s glue: the glue's path, or why there is
-/// none (no such target, or no `wasm-bindgen`).
+/// none (no such target, or no `wasm-bindgen`). Built once, whichever
+/// tests ask.
 fn page_module() -> Result<PathBuf, String> {
+    static BUILT: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+    BUILT.get_or_init(build_page_module).clone()
+}
+
+fn build_page_module() -> Result<PathBuf, String> {
     let sysroot = Command::new("rustc")
         .args(["--print", "sysroot"])
         .output()
@@ -107,6 +113,67 @@ fn passed(mut command: Command, what: &str, marker: &str) {
         said.contains(marker),
         "{what} did not check `{marker}`:\n{said}"
     );
+}
+
+/// A scene exported as one page opens from the disk in a browser, with
+/// nothing beside it: the voxel example, exported here and opened by
+/// `bridges/web/page.test.mjs`. The exporter is pointed at a directory laid
+/// out as a web release is (`bridges/web`, `target/page`), made of links to
+/// this checkout's bridge and to the page's build.
+#[cfg(unix)]
+#[test]
+fn a_scene_exported_as_one_page_opens_from_the_disk() {
+    let Some(node) = tool(&["node", "/usr/local/bin/node", "/opt/homebrew/bin/node"]) else {
+        eprintln!("skipped: no node on this machine");
+        return;
+    };
+    let Some(chrome) = tool(&[
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        "google-chrome",
+        "chromium",
+    ]) else {
+        eprintln!("skipped: no Chrome on this machine");
+        return;
+    };
+    let glue = match page_module() {
+        Ok(glue) => glue,
+        Err(why) => {
+            eprintln!("skipped: {why}");
+            return;
+        }
+    };
+    let web = root().join("target/web/release");
+    let _ = std::fs::remove_dir_all(&web);
+    std::fs::create_dir_all(web.join("target")).expect("a directory");
+    std::os::unix::fs::symlink(root().join("bridges"), web.join("bridges"))
+        .expect("a link to the bridges");
+    std::os::unix::fs::symlink(
+        glue.parent().expect("the page's build"),
+        web.join("target/page"),
+    )
+    .expect("a link to the page's build");
+    // (On the interpreter: a headless browser may have no GPU.)
+    let made = entelechy_export::page::page(
+        &root().join("examples/voxel/scene.esn"),
+        &web,
+        Some("cpu"),
+        None,
+    )
+    .expect("the voxel example exports");
+    // No directory of this machine is written into the page.
+    assert!(!made.page.contains(&root().to_string_lossy().into_owned()));
+    let page = root().join("target/web/voxel.html");
+    std::fs::write(&page, &made.page).expect("the page written");
+    let mut command = Command::new(node);
+    command
+        .current_dir(root())
+        .arg("bridges/web/page.test.mjs")
+        .arg("--page")
+        .arg(&page)
+        .arg("--chrome")
+        .arg(chrome);
+    passed(command, "a page exported whole", "page: it fetched nothing");
 }
 
 #[test]
