@@ -141,23 +141,24 @@ fn a_font_is_carried_with_the_characters_named() {
     use entelechy_import::font::{read, sample};
     let whole = sample::latin();
     let (all, _) = read(&whole, None).expect("the sample font");
-    let kept = page::font_of("play/fonts/sample.ttf", &whole, "A")
-        .expect("read and written")
-        .expect("a font");
-    let (few, _) = read(&kept, None).expect("what was carried is a font");
     let codes = |fields: &entelechy_import::font::Fields| -> Vec<u32> {
         fields
             .glyphs
             .values()
             .chunks_exact(8)
             .map(|row| row[0])
+            // (The first row, of code -1, is the glyph for a character the font lacks.)
+            .filter(|&code| code as i32 >= 0)
             .collect()
     };
-    assert_eq!(codes(&few), vec!['A' as u32]);
-    assert!(
-        codes(&all).len() > 1,
-        "the sample has more than the one kept"
-    );
+    let mapped = codes(&all);
+    assert!(mapped.len() > 1, "the sample maps more than one character");
+    let one = char::from_u32(mapped[0]).expect("a character").to_string();
+    let kept = page::font_of("play/fonts/sample.ttf", &whole, &one)
+        .expect("read and written")
+        .expect("a font");
+    let (few, _) = read(&kept, None).expect("what was carried is a font");
+    assert_eq!(codes(&few), vec![mapped[0]]);
     assert!(
         page::font_of("play/words.txt", b"A", "A")
             .expect("not a font")
