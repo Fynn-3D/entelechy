@@ -135,6 +135,8 @@ puts one in as it is), and `@@slot:<name>@@` is what the exporter made:
 `glue` what `wasm-bindgen` wrote, `runtime` Entelechy built for a page and
 `files` the scene's files, `play` which file is the scene and what runs
 it, `title` the page's. What is packed is a zlib stream in base64, inflated
-by the browser's `DecompressionStream`. The page that results fetches nothing: the glue and
+by the browser's `DecompressionStream`. Until the scene shows, the page shows its name, a line that
+fills, and what is being done (unpacking, starting Entelechy, reading the
+scene, preparing so many of its Kernels); a failure is said there. The page that results fetches nothing: the glue and
 the host module are loaded from the text the page carries, and Entelechy's
 WebAssembly from the bytes (`EntelechyInPage.load(glue, host, wasm)`).
