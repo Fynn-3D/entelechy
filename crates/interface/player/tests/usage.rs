@@ -17,5 +17,14 @@ fn help_prints_the_usage_and_succeeds() {
             text.starts_with("usage:") && text.contains("entelechy-player <scene.esn>"),
             "{flag}: {text}"
         );
+        // What the session reads for the Player is named beside the Player's own flags.
+        for named in [
+            "--param <name>=<literal>",
+            "--input",
+            "--output",
+            "--backend",
+        ] {
+            assert!(text.contains(named), "{flag} leaves out {named}: {text}");
+        }
     }
 }

@@ -27,7 +27,7 @@ use winit::window::{CursorGrabMode, CursorIcon, CustomCursor, Window, WindowId};
 const USAGE: &str = "\
 usage:
   entelechy-player <scene.esn> [--library <dir|file>] [--input <name>=<path>]...
-              [--output <name>=<path>]... [--scale <n>]
+              [--output <name>=<path>]... [--param <name>=<literal>]... [--scale <n>]
               [--folder <name,...> [--folder-allow <file.write,file.delete>]]
               [--replay <file.replay>] [--show-while-building]
               [--window <w>x<h>] [--backend gpu|cpu|jit|best] [--memory <MB>] [--work <M>]
@@ -49,6 +49,8 @@ usage:
       so the scene still takes the keys and pointer: what it draws from
       its time stands still.
       Tab, Escape and every other key are the scene's.
+      --param <name>=<literal> sets a parameter the scene declares, before
+      its first frame.
       --show-while-building opens the window once what state and kept
       outputs read is built, what only shows drawn by the processor until
       the device has built it: a sooner window, slower frames meanwhile.
