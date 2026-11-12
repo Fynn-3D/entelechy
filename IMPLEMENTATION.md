@@ -151,8 +151,11 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
 ### Fusion, repetition, native operations
 
 - Fusion: [`fuse`](crates/core/ir/src/fuse.rs), `fuse_outputs`,
-  `fuse_indexed` (a row read at an offset) and `counted` (an input only
-  counted), [planner](crates/core/graph/src/evaluate/plan.rs);
+  `fuse_indexed` (a producer called at the rows its reader reads:
+  `offset_read`, `row_reads`) and `counted` (an input only counted); the
+  [planner](crates/core/graph/src/evaluate/plan.rs) calls a producer
+  read at rows while the rows asked for are no more than it would make
+  ([decision](docs/DECISIONS.md#work-is-spared-only-where-the-answer-is-the-same));
   bit-identical ([test](crates/backends/cpu/tests/fusion.rs), on every
   backend [offset](crates/interface/session/tests/offset.rs)). A reduce,
   scan, scatter, prefix, group, async or native node is never fused.
