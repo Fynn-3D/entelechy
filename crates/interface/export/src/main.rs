@@ -1,11 +1,12 @@
 //! `entelechy-export`: the Host's files as other software's formats. Mesh
 //! rows (and a PNG) become a GLB, rows of one or two floats a WAV, a
-//! grid a PNG, a font's Fields a TrueType, OpenType (CFF) or WOFF font.
+//! grid a PNG, a font's Fields a TrueType, OpenType (CFF) or WOFF font; a
+//! scene becomes one page that plays it.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use entelechy_export::{font, gltf};
+use entelechy_export::{font, gltf, page};
 use entelechy_formats::rig::Part;
 use entelechy_host::{FieldData, Shape};
 
@@ -15,6 +16,7 @@ usage:
               [--filter linear|nearest] [--joints <name>,<name>,...]
               [--double-sided] [--name <family>]
               [--chars <text> | --chars-file <file>]
+              [--web <dir>] [--backend gpu|jit|cpu]
       To .glb: a vertices .field (rows of position, normal, uv, and a
       tangent where a normal map is read along one), a triangles .field
       (rows of three ints), and PNGs: the base color, a normal map named
@@ -37,7 +39,15 @@ usage:
       To .ttf, .otf or .woff: a font's .fields as the importer writes them
       (glyph rows, outline segments in ems, the measures); --name names the
       family, the file's stem by default; --chars (or --chars-file, a UTF-8
-      file) keeps those characters alone.";
+      file) keeps those characters alone.
+      To .html: a scene (.esn) as one page that plays it, opened from the
+      disk with nothing beside it: the Player in a page, Entelechy built for
+      a page, and every file the scene reads as it loads, packed into the
+      one file. --web is where Entelechy for the web is (the directory
+      holding bridges/web and target/page: a web release, or a checkout
+      that has built it; the current directory by default). --backend
+      names what runs it in the page; without it the page chooses as the
+      Player does.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -71,10 +81,19 @@ fn export(args: &[String]) -> Result<String, String> {
     let mut options = gltf::Options::default();
     let mut family: Option<String> = None;
     let mut chars: Option<String> = None;
+    let mut web: Option<PathBuf> = None;
+    let mut backend: Option<String> = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--out" => out = Some(PathBuf::from(iter.next().ok_or("--out needs a file")?)),
+            "--web" => web = Some(PathBuf::from(iter.next().ok_or("--web needs a directory")?)),
+            "--backend" => {
+                backend = match iter.next().map(String::as_str) {
+                    Some(name @ ("gpu" | "jit" | "cpu")) => Some(name.to_string()),
+                    _ => return Err("--backend is gpu, jit or cpu".into()),
+                }
+            }
             "--rate" => {
                 rate = Some(
                     iter.next()
@@ -135,7 +154,35 @@ fn export(args: &[String]) -> Result<String, String> {
     {
         return Err("--name, --chars and --chars-file are for a font".into());
     }
+    if (web.is_some() || backend.is_some()) && extension(&out) != "html" {
+        return Err("--web and --backend are for a page".into());
+    }
     match extension(&out).as_str() {
+        "html" => {
+            let [scene] = inputs.as_slice() else {
+                return Err("a page is made of one scene".into());
+            };
+            if extension(scene) != "esn" {
+                return Err(format!(
+                    "{}: a page is made of a scene (.esn)",
+                    scene.display()
+                ));
+            }
+            let made = page::page(
+                scene,
+                web.as_deref().unwrap_or(Path::new(".")),
+                backend.as_deref(),
+            )?;
+            std::fs::write(&out, &made.page).map_err(|e| format!("{}: {e}", out.display()))?;
+            Ok(format!(
+                "{}: {} bytes ({} file(s) of {} bytes, Entelechy for a page {} bytes)",
+                out.display(),
+                made.page.len(),
+                made.files,
+                made.files_bytes,
+                made.runtime_bytes
+            ))
+        }
         "glb" => {
             let mut vertices = None;
             let mut triangles = None;

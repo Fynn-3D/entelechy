@@ -18,6 +18,7 @@ path = "src/main.rs"
 [dependencies]
 entelechy-formats = { path = "../../interface/formats" }
 entelechy-host = { path = "../../core/host" }
+entelechy-session = { path = "../../interface/session" }
 serde_json = "1"
 
 [dev-dependencies]

@@ -122,3 +122,18 @@ wasm-bindgen --target web --keep-lld-exports --no-typescript --out-dir target/pa
   target/wasm32-unknown-unknown/release/entelechy_ffi.wasm
 node bridges/web/test.mjs
 ```
+
+
+## One page
+
+`single.html` is the template of a scene exported whole (`entelechy export
+<scene.esn> --out <name>.html`, docs/USAGE.md, *Import and export*). The
+exporter fills it: `@@include:<file>@@` is a file of this directory put in
+as it is (`entelechy.js`, `player.js`, `entelechy-host.mjs`), and
+`@@slot:<name>@@` is what the exporter made: `glue` what `wasm-bindgen`
+wrote, `runtime` Entelechy built for a page and `files` the scene's files
+(both zlib streams in base64, inflated by the browser's
+`DecompressionStream`), `play` which file is the scene and what runs it,
+`title` the page's. The page that results fetches nothing: the glue and
+the host module are loaded from the text the page carries, and Entelechy's
+WebAssembly from the bytes (`EntelechyInPage.load(glue, host, wasm)`).

@@ -272,8 +272,10 @@ class EntelechyInPage {
   }
 
   /// Loads Entelechy from its glue's URL, once a page, and makes a new set of
-  /// files for a session of its own.
-  static async load(glue, host) {
+  /// files for a session of its own. `wasm` is its WebAssembly's bytes where
+  /// the page carries them itself (a page exported whole), else it is
+  /// fetched from beside the glue.
+  static async load(glue, host, wasm) {
     const url = new URL(glue, location.href).href;
     if (!loaded.has(url)) {
       loaded.set(
@@ -287,7 +289,7 @@ class EntelechyInPage {
             const text = (await (await fetch(url)).text()).replaceAll('from "entelechy"', `from ${JSON.stringify(at)}`);
             const glued = URL.createObjectURL(new Blob([text], { type: "text/javascript" }));
             const [module, hosted] = await Promise.all([import(glued), import(at)]);
-            const exports = await module.default({ module_or_path: new URL("entelechy_ffi_bg.wasm", url) });
+            const exports = await module.default({ module_or_path: wasm || new URL("entelechy_ffi_bg.wasm", url) });
             hosted.bind({ exports });
             return exports;
           }

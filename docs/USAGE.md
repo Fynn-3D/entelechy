@@ -258,6 +258,7 @@ entelechy export crate.vertices.field crate.triangles.field crate.albedo.png --o
 entelechy export kick.field --out kick.wav --rate 48000
 entelechy export song.notes.field --out song.mid --beats 100
 entelechy export x.glyphs.field x.segments.field x.metrics.field --out x.woff --name "X Sans" --chars-file words.txt
+entelechy export examples/voxel/scene.esn --out voxel.html   # one page that plays the scene
 ```
 
 `entelechy-import` writes what a scene takes as inputs into `--out`:
@@ -285,6 +286,18 @@ metrics as TrueType, OpenType (CFF) or WOFF (`--name` its family,
 `--chars` or `--chars-file` the characters it keeps). What the importer
 read is written back bit for bit, but a font: its segments come back as
 curves through their ends, within a font unit.
+
+A scene (`.esn`) is exported as one page, `--out <name>.html`: a single
+file that is the Player in a page, Entelechy built for a page, and every
+file the scene reads as it loads. It opens from the disk with nothing
+beside it and fetches nothing. `--web` names where Entelechy for the web
+is (the directory holding `bridges/web` and `target/page`: a web release,
+or a checkout that has built it as [WebAssembly](#webassembly) says; the
+current directory by default), and `--backend` what runs the scene in
+the page (the page chooses as the Player does when none is named). The
+page needs what Entelechy in a page needs: a browser with WebGPU for the
+GPU backend. A file the scene only reads later, by a name it computes,
+is not in the page.
 
 ## Creation protocol
 

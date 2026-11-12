@@ -1015,6 +1015,7 @@ dependencies = [
  "entelechy-formats",
  "entelechy-host",
  "entelechy-import",
+ "entelechy-session",
  "serde_json",
 ]
 

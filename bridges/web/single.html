@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>@@slot:title@@</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
+  #shown { pointer-events: none; display: none; }
+</style>
+</head>
+<body>
+<!--
+A scene exported whole: this one file is the Player in a page, Entelechy
+itself, and every file the scene reads. `entelechy export <scene.esn> --out
+<page>.html` fills this template (bridges/web/single.html): an
+`include` is a file beside the template put in as it is, a `slot` is what
+the exporter made. Nothing is fetched; it opens from the disk.
+
+The slots: `runtime`, Entelechy built for a page, and `files`, the scene's
+files one after another (a count; then for each a path's length, the path,
+the bytes' length, the bytes; lengths little-endian in four bytes). Both
+are zlib streams in base64, which the browser inflates. `play` says which
+file is the scene and what runs it.
+-->
+<canvas id="view" tabindex="0"></canvas>
+<canvas id="shown"></canvas>
+<script>
+@@include:entelechy.js@@
+</script>
+<script>
+@@include:player.js@@
+</script>
+<script type="text/plain" id="host">
+@@include:entelechy-host.mjs@@
+</script>
+<script type="text/plain" id="glue">
+@@slot:glue@@
+</script>
+<script type="text/plain" id="runtime">@@slot:runtime@@</script>
+<script type="text/plain" id="files">@@slot:files@@</script>
+<script type="application/json" id="play">@@slot:play@@</script>
+<script>
+(async () => {
+  const text = (id) => document.getElementById(id).textContent;
+  // A zlib stream in base64, inflated by the browser.
+  const inflated = async (id) => {
+    const packed = Uint8Array.from(atob(text(id).trim()), (c) => c.charCodeAt(0));
+    const stream = new Blob([packed]).stream().pipeThrough(new DecompressionStream("deflate"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  };
+  const module = (source) => URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+  try {
+    const [wasm, packed] = await Promise.all([inflated("runtime"), inflated("files")]);
+    const view = new DataView(packed.buffer, packed.byteOffset, packed.byteLength);
+    const decoder = new TextDecoder();
+    const files = [];
+    let at = 4;
+    for (let k = view.getUint32(0, true); k > 0; k--) {
+      const named = view.getUint32(at, true);
+      const path = decoder.decode(packed.subarray(at + 4, at + 4 + named));
+      at += 4 + named;
+      const long = view.getUint32(at, true);
+      files.push([path, packed.subarray(at + 4, at + 4 + long)]);
+      at += 4 + long;
+    }
+    const play = JSON.parse(text("play"));
+    const player = await EntelechyPlayer.open({
+      glue: module(text("glue")),
+      host: module(text("host")),
+      wasm,
+      files,
+      scene: play.scene,
+      backend: play.backend,
+      canvas: document.getElementById("view"),
+      shown: document.getElementById("shown"),
+    });
+    globalThis.player = player;
+    player.say();
+    document.getElementById("view").focus();
+    player.run();
+  } catch (error) {
+    document.title = `Entelechy: ${error.message}`;
+    console.error(error);
+  }
+})();
+</script>
+</body>
+</html>

@@ -118,8 +118,8 @@ class EntelechyPlayer {
   /// pairs, or [path, length] for a file the page's server keeps, read
   /// from there when it is read), on `backend`, or as the Player does
   /// when none is named: the GPU, else the JIT, else the interpreter.
-  static async open({ glue, files, scene, replay, backend, canvas, shown }) {
-    const entelechy = await EntelechyInPage.load(glue);
+  static async open({ glue, host, wasm, files, scene, replay, backend, canvas, shown }) {
+    const entelechy = await EntelechyInPage.load(glue, host, wasm);
     globalThis.entelechy_files_base = new URL(".", location.href).href;
     for (const [path, bytes] of files) {
       if (typeof bytes === "number") entelechy.putElsewhere(path, bytes);
