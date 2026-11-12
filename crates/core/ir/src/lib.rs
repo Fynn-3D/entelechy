@@ -28,7 +28,7 @@ pub use entelechy_abi::{
 };
 pub use fuse::{
     FuseError, InputUse, counted, counts_only, extent_params, fuse, fuse_indexed, fuse_outputs,
-    fused_name, input_use, offset_read, samples_only,
+    fused_name, input_use, offset_read, row_reads, samples_only,
 };
 pub use group::group_fault;
 pub use lanes::lanes;

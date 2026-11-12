@@ -772,7 +772,7 @@ fn the_graph_command_prints_the_plan() {
     // A producer only one node reads, run apart from it, is said with why.
     assert!(
         stdout.contains(
-            "//     gray runs apart: `blocks` reads it neither at its own element (`sample`) nor at one offset of a row"
+            "//     gray runs apart: `blocks` reads it neither at its own element (`sample`) nor at rows its entry names outside any loop"
         ),
         "{stdout}"
     );

@@ -2,7 +2,7 @@ use entelechy_abi::{Capability, Context, Domain, Host, Invocation, Scope, Value}
 use entelechy_compiler::{compile, compile_unoptimized};
 use entelechy_cpu::CpuBackend;
 use entelechy_ir::{
-    counted, counts_only, fuse, fuse_indexed, fuse_outputs, offset_read, samples_only,
+    counted, counts_only, fuse, fuse_indexed, fuse_outputs, offset_read, row_reads, samples_only,
 };
 
 fn granted() -> entelechy_abi::Capabilities {
@@ -382,4 +382,56 @@ fn only_one_offset_of_the_element_outside_loops_is_an_offset_read() {
         !reads("return at(a, int(at(a, 0)));"),
         "an address read from the input"
     );
+}
+
+const PICK: &str = "kernel test.pick@1 { requires { field.read; field.write; } struct P { x: Float; n: Int; } input a: Rows<P>; input b: Rows<Float>; output result: Rows<Float>; compute { let k = element(); let far = (k * 7 + 3) % count(a); let p = at(a, far); let led = at(a, p.n - 20); return p.x - led.x * 0.5 + at(b, k) + float(at(a, k * k).n); } }";
+
+#[test]
+fn a_producer_read_wherever_its_reader_is_led_fuses_as_a_function_of_the_row_and_changes_no_bit() {
+    for compiled in [compile, compile_unoptimized] {
+        let lift = compiled(LIFT).unwrap();
+        let pick = compiled(PICK).unwrap();
+        // Three places: one worked out from the element, one from what
+        // the first read held, one past the rows, clamped.
+        assert_eq!(row_reads(&pick, 0), Some(3));
+        assert!(!offset_read(&pick, 0));
+        let fused = fuse_indexed(&pick, &[(0, 0)], &lift, "lift").unwrap();
+        let mut host = Host::new(1 << 20);
+        let source = rows(&mut host, &[1.0, 2.5, -3.0, 4.0, 0.125, 7.0, -0.5]);
+        let b = rows(&mut host, &[10.0, 20.0, 30.0, 40.0, 50.0, 60.0]);
+        let (a, _) = run_rows(&lift, vec![source], vec![Value::Float(1.5)], 7, &mut host);
+        let (_, separate) = run_rows(&pick, vec![a, b], vec![], 6, &mut host);
+        let (_, together) = run_rows(
+            &fused,
+            vec![b, source],
+            vec![Value::Float(1.5), Value::Int(7), Value::Int(7)],
+            6,
+            &mut host,
+        );
+        assert_eq!(separate, together, "fusion must not change a single bit");
+    }
+}
+
+#[test]
+fn rows_read_in_the_entry_outside_loops_are_counted_by_the_places_that_read_them() {
+    let reads = |body: &str| {
+        let source = format!(
+            "kernel test.read@1 {{ requires {{ field.read; field.write; }} input a: Rows<Float>; output result: Rows<Float>; fn third(a: Rows<Float>) -> Float {{ return at(a, 3); }} compute {{ {body} }} }}"
+        );
+        row_reads(&compile_unoptimized(&source).unwrap(), 0)
+    };
+    assert_eq!(reads("return at(a, element());"), Some(1));
+    assert_eq!(reads("return at(a, element() * 2);"), Some(1));
+    assert_eq!(
+        reads("return at(a, element()) + at(a, int(at(a, 0)));"),
+        Some(3)
+    );
+    assert_eq!(reads("return sample(a);"), None, "a sample");
+    assert_eq!(reads("return float(count(a));"), None, "nothing read");
+    assert_eq!(
+        reads("return loop 2 with s = 0.0 { s + at(a, element()) };"),
+        None,
+        "read in a loop"
+    );
+    assert_eq!(reads("return third(a);"), None, "read in a function");
 }

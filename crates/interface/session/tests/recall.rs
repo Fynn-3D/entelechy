@@ -12,7 +12,9 @@ use entelechy_session::Session;
 
 /// A count advanced a frame at a time, a value made of it (`made`), what
 /// reads that (`shown`), and a large Field made once (`big`, over a
-/// mebibyte, remembered by key and epoch alone) summed by `total`.
+/// mebibyte, remembered by key and epoch alone) read by `total`; a
+/// second node reads it too (`also`, which nothing asks for), so it is
+/// stored and not called where `total` reads it.
 fn kernels(made: &str) -> String {
     format!(
         "kernel t.zero@1 {{ requires {{ field.write; }} output result: Rows<Float>; compute {{ return 0.0; }} }}
@@ -33,6 +35,7 @@ node made: t.made@1 { count <- count.result; domain = 1; }
 node shown: t.shown@1 { made <- made.result; domain = 1; }
 node big: t.big@1 { seed = seed; domain = 400000; }
 node total: t.total@1 { big <- big.result; count <- count.result; domain = 1; }
+node also: t.total@1 { big <- big.result; count <- zero.result; domain = 1; }
 output result <- shown.result;
 ";
 

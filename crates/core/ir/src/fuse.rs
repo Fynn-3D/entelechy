@@ -1,6 +1,6 @@
 //! Kernel fusion: inlining a producer's per-element computation into a
-//! consumer that samples it at the current coordinate, or reads it at an
-//! offset of its own element.
+//! consumer that samples it at the current coordinate, or reads it at
+//! rows its own work decides.
 //!
 //! For `Y = C(P(X))`, the fused module computes `P`'s result first and uses
 //! it where `C` sampled, or computes it as a function of the row where `C`
@@ -147,6 +147,43 @@ pub fn offset_read(module: &Module, input: u32) -> bool {
         return false;
     }
     reads.offset(address, &mut BTreeMap::new())
+}
+
+/// Whether `module` reads `input`, a row, only at addresses, each read
+/// written in the entry outside any loop, and if so at how many places:
+/// an element then asks the input for at most that many of its elements,
+/// wherever its own work leads it. Besides, it may ask the input's count
+/// or size. The input's producer can then fuse into it as a function of
+/// the row ([`fuse_indexed`]), called at each place; whether calling it
+/// costs less than storing it is the planner's to say, from that number.
+pub fn row_reads(module: &Module, input: u32) -> Option<usize> {
+    let rows = module
+        .manifest
+        .inputs
+        .get(input as usize)
+        .is_some_and(|port| port.shape() == crate::Shape::Rows);
+    if !rows {
+        return None;
+    }
+    // A function may ask the count or size, nothing more.
+    let mut in_functions = InputUse::default();
+    for function in &module.functions {
+        use_in(&function.body, input, &mut in_functions);
+    }
+    if in_functions.sampled || in_functions.addressed {
+        return None;
+    }
+    let mut reads = Reads {
+        input,
+        defs: BTreeMap::new(),
+        addresses: Vec::new(),
+        refused: false,
+    };
+    reads.walk(&module.entry.body, false);
+    // Two parts of one element are read at one address: one place.
+    let places: std::collections::BTreeSet<u32> =
+        reads.addresses.iter().map(|address| address.0).collect();
+    (!reads.refused && !places.is_empty()).then_some(places.len())
 }
 
 /// The entry's reads of one input, and every value's definition.
@@ -420,8 +457,9 @@ pub fn fuse_outputs(
 }
 
 /// Fuses `producer` into `consumer` as a function of the row: every read
-/// of a linked input, at an offset of the consumer's element
-/// ([`offset_read`]), becomes the producer's computation at that address,
+/// of a linked input, at an address written in the consumer's entry
+/// outside any loop ([`row_reads`]), becomes the producer's computation at
+/// that address,
 /// clamped into the producer's extent as `at` clamps it; the input's count
 /// and size come in by the params [`extent_params`] names, and so does the
 /// producer's own extent. The manifest is [`fuse_outputs`]'s.
@@ -439,8 +477,8 @@ pub fn fuse_indexed(
 enum Reading {
     /// At its own element: the producer's body runs first.
     Pointwise,
-    /// At an offset of its element: the producer's body is a function of
-    /// the row, called where the consumer reads.
+    /// At addresses: the producer's body is a function of the row, called
+    /// where the consumer reads.
     Indexed,
 }
 
@@ -474,10 +512,10 @@ fn fuse_links(
                 )));
             }
             Reading::Indexed
-                if !offset_read(consumer, *input) && !counts_only(consumer, *input) =>
+                if row_reads(consumer, *input).is_none() && !counts_only(consumer, *input) =>
             {
                 return Err(FuseError::new(format!(
-                    "consumer reads input `{name}` otherwise than at one offset of its element"
+                    "consumer reads input `{name}` otherwise than at addresses written in its entry outside any loop"
                 )));
             }
             _ => {}

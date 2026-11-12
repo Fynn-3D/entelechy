@@ -637,8 +637,14 @@ what a frame computes:
 - A Field is carried page by page: what a run costs is the pages it
   changes, while the Field keeps its declared extent and the budget
   counts it whole.
-- A producer read at its reader's element, or at one shared offset,
-  fuses into the reader.
+- A producer read at its reader's element fuses into the reader. One
+  its reader reads at rows fuses as a function of the row, called where
+  it is read: at one shared offset of the reader's element always, and
+  wherever the reader's work leads it while the rows asked for (the
+  reader's elements times the places its entry reads at, outside any
+  loop) are no more than the rows the producer would make, both known
+  before the frame, and those rows are more than the few a device runs
+  a thread each. Otherwise it is stored, and the plan says why.
 - A window's frames overlap the device's: a frame commits ahead and is
   confirmed by the next, and a failure takes both back. What a frame
   writes to a file is asked of the device behind that frame's work and

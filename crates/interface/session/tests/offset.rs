@@ -171,6 +171,130 @@ fn a_producer_read_at_two_rows_stays_stored() {
     );
 }
 
+const PICK: &str = "kernel test.pick@1 { requires { field.read; field.write; } struct P { x: Float; n: Int; } input a: Rows<P>; input b: Rows<Float>; output result: Rows<Float>; compute { let k = element(); let p = at(a, (k * 7 + 3) % count(a)); return p.x * 0.5 + float(p.n) + at(b, k); } }";
+
+/// `pick` asks `lift` for a row its own element leads it to, anywhere
+/// among them.
+fn picked(made: u32, readers: u32) -> String {
+    format!(
+        "
+node s: test.seq@1 {{ domain = {made}; }}
+node t: test.seq@1 {{ domain = {readers}; }}
+node lift: test.lift@1 {{ source <- s.result; k = 1.5; }}
+node pick: test.pick@1 {{ a <- lift.result; b <- t.result; domain = {readers}; }}
+output result <- pick.result;
+"
+    )
+}
+
+fn with_pick(backend: Box<dyn Backend>) -> Runtime {
+    let mut runtime = runtime(backend);
+    let module = entelechy_compiler::compile(PICK).unwrap_or_else(|error| panic!("{error}"));
+    runtime.load(module, PICK).unwrap();
+    runtime
+}
+
+#[test]
+fn a_producer_asked_for_no_more_rows_than_it_makes_is_called_where_it_is_asked() {
+    let mut seen: Option<Vec<Vec<u32>>> = None;
+    for (name, backend) in backends() {
+        let mut runtime = with_pick(backend);
+        let graph = entelechy_scene::parse(&picked(90, 70)).unwrap();
+        let evaluate = |evaluator: &mut Evaluator, runtime: &mut Runtime| {
+            evaluator
+                .evaluate(
+                    &graph,
+                    runtime,
+                    &BTreeMap::new(),
+                    &Context::default(),
+                    &BTreeMap::new(),
+                )
+                .unwrap()
+        };
+        let mut plain = Evaluator::new();
+        plain.set_fusion(false);
+        let reference = evaluate(&mut plain, &mut runtime);
+        let expected = words(&mut runtime, &reference);
+        plain.clear(&mut runtime);
+        let mut fused = Evaluator::new();
+        let report = evaluate(&mut fused, &mut runtime);
+        assert_eq!(
+            words(&mut runtime, &report),
+            expected,
+            "{name}: fusion changes no bit"
+        );
+        // `lift` is not stored: seventy askings of the ninety rows it would make.
+        assert!(
+            !report.executed.contains(&NodeId("lift".into())),
+            "{name}: {:?}",
+            report.executed
+        );
+        match &seen {
+            Some(words) => assert_eq!(&expected, words, "{name} against cpu"),
+            None => seen = Some(expected),
+        }
+    }
+}
+
+#[test]
+fn a_producer_asked_for_more_rows_than_it_makes_stays_stored_and_the_plan_says_so() {
+    let mut runtime = with_pick(Box::new(entelechy_cpu::CpuBackend));
+    let graph = entelechy_scene::parse(&picked(70, 90)).unwrap();
+    let mut evaluator = Evaluator::new();
+    let report = evaluator
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert!(
+        report.executed.contains(&NodeId("lift".into())),
+        "{:?}",
+        report.executed
+    );
+    let plan = evaluator
+        .plan_summary(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &Context::default(),
+        )
+        .unwrap();
+    let said = format!(
+        "{:?}",
+        plan.iter().map(|entry| &entry.apart).collect::<Vec<_>>()
+    );
+    assert!(
+        said.contains("`pick` asks it for 90 rows and it makes 70"),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_producer_of_few_rows_stays_stored_however_few_are_asked_of_it() {
+    let mut runtime = with_pick(Box::new(entelechy_cpu::CpuBackend));
+    let graph = entelechy_scene::parse(&picked(9, 6)).unwrap();
+    let mut evaluator = Evaluator::new();
+    let plan = evaluator
+        .plan_summary(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &Context::default(),
+        )
+        .unwrap();
+    let said = format!(
+        "{:?}",
+        plan.iter().map(|entry| &entry.apart).collect::<Vec<_>>()
+    );
+    assert!(said.contains("it makes 9 rows, too few"), "{said}");
+}
+
 /// The CPU, slow to prepare what counts a producer from params: the
 /// worker delivers that last.
 struct SlowToCount;

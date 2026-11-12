@@ -420,7 +420,7 @@ impl Evaluator {
                     continue;
                 }
                 // Read at its own element, the producer runs first; read at
-                // an offset of it, the producer is called at that row.
+                // rows, the producer is called at each.
                 let uses: Vec<entelechy_ir::InputUse> = links
                     .iter()
                     .map(|link| entelechy_ir::input_use(consumer_module, link.1))
@@ -431,14 +431,60 @@ impl Evaluator {
                     false
                 } else if uses.iter().any(|use_| use_.addressed)
                     && links.iter().all(|link| {
-                        entelechy_ir::offset_read(consumer_module, link.1)
+                        entelechy_ir::row_reads(consumer_module, link.1).is_some()
                             || entelechy_ir::counts_only(consumer_module, link.1)
                     })
                 {
+                    // Read at one offset of the reader's element, no row
+                    // is made twice. Read wherever the reader's work
+                    // leads, the producer is called once for each asking:
+                    // that costs less than storing it while the askings
+                    // are no more than the rows it would make, both known
+                    // before the frame, and the rows are more than a few.
+                    let offsets = links.iter().all(|link| {
+                        entelechy_ir::offset_read(consumer_module, link.1)
+                            || entelechy_ir::counts_only(consumer_module, link.1)
+                    });
+                    if !offsets {
+                        let places: u64 = links
+                            .iter()
+                            .filter_map(|link| entelechy_ir::row_reads(consumer_module, link.1))
+                            .map(|places| places as u64)
+                            .sum();
+                        let asked = runs.map(|domain| domain.count() as u64 * places);
+                        let made = producer_domain.map(|domain| domain.count() as u64);
+                        match (asked, made) {
+                            // A few rows cost nothing to store, and stored
+                            // they stop what reads them where they come
+                            // out as they were.
+                            (Some(_), Some(made)) if made <= entelechy_kernel::FEW_ELEMENTS => {
+                                let why = format!(
+                                    "it makes {made} rows, too few for calling it to spare anything"
+                                );
+                                keep_apart(&mut groups[position], &producer_id, why);
+                                continue;
+                            }
+                            (Some(asked), Some(made)) if asked <= made => {}
+                            (Some(asked), Some(made)) => {
+                                let why = format!(
+                                    "`{consumer_id}` asks it for {asked} rows and it makes {made}: stored, each is made once"
+                                );
+                                keep_apart(&mut groups[position], &producer_id, why);
+                                continue;
+                            }
+                            _ => {
+                                let why = format!(
+                                    "how many rows `{consumer_id}` asks it for, or how many it makes, is not known before the frame"
+                                );
+                                keep_apart(&mut groups[position], &producer_id, why);
+                                continue;
+                            }
+                        }
+                    }
                     true
                 } else {
                     let why = format!(
-                        "`{consumer_id}` reads it neither at its own element (`sample`) nor at one offset of a row"
+                        "`{consumer_id}` reads it neither at its own element (`sample`) nor at rows its entry names outside any loop"
                     );
                     keep_apart(&mut groups[position], &producer_id, why);
                     continue;
