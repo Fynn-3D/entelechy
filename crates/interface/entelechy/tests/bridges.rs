@@ -60,7 +60,7 @@ fn page_module() -> Result<PathBuf, String> {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let built = Command::new(cargo)
         .current_dir(root())
-        .args(["build", "--release", "-p", "entelechy-ffi"])
+        .args(["build", "--profile", "small", "-p", "entelechy-ffi"])
         .args(["--target", "wasm32-unknown-unknown", "--target-dir"])
         .arg(&target)
         .output()
@@ -73,9 +73,10 @@ fn page_module() -> Result<PathBuf, String> {
     let page = target.join("page");
     let glued = Command::new(bindgen)
         .args(["--target", "web", "--keep-lld-exports", "--no-typescript"])
+        .args(["--remove-name-section", "--remove-producers-section"])
         .arg("--out-dir")
         .arg(&page)
-        .arg(target.join("wasm32-unknown-unknown/release/entelechy_ffi.wasm"))
+        .arg(target.join("wasm32-unknown-unknown/small/entelechy_ffi.wasm"))
         .output()
         .expect("wasm-bindgen runs");
     assert!(

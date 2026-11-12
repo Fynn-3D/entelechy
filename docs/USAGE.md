@@ -348,11 +348,16 @@ From the source:
 
 ```sh
 cargo build --release -p entelechy --target wasm32-wasip1
-cargo build --release -p entelechy-ffi --target wasm32-unknown-unknown
-wasm-bindgen --target web --keep-lld-exports --no-typescript --out-dir target/page \
-  target/wasm32-unknown-unknown/release/entelechy_ffi.wasm
+cargo build --profile small -p entelechy-ffi --target wasm32-unknown-unknown
+wasm-bindgen --target web --keep-lld-exports --no-typescript \
+  --remove-name-section --remove-producers-section --out-dir target/page \
+  target/wasm32-unknown-unknown/small/entelechy_ffi.wasm
 node bridges/web/serve.mjs     # then http://127.0.0.1:7789/bridges/web/index.html
 ```
+
+The `small` profile builds Entelechy for a page small (for size, one unit
+linked whole, no unwinding, no names): a page downloads it, and a scene
+exported as one page carries it.
 
 Under WASI, `entelechy` runs scenes on the interpreter and `serve`
 answers on stdin and stdout. In a page, Entelechy is the C ABI with

@@ -4,8 +4,9 @@
 //!
 //! The exporter gathers and packs. How the page starts is the web
 //! bridge's (`bridges/web/single.html`, a template): an `@@include:<file>@@`
-//! is a file beside the template put in as it is, an `@@slot:<name>@@` is
-//! what is made here.
+//! is a file beside the template put in as it is, an `@@pack:<file>@@` that
+//! file packed (a zlib stream in base64, as everything large in the page
+//! is), an `@@slot:<name>@@` what is made here.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -219,13 +220,20 @@ pub fn archive(files: &[(String, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
+/// Bytes as the page carries what is large: a zlib stream in base64, which
+/// the browser inflates.
+fn packed(bytes: &[u8]) -> String {
+    base64(&zlib(bytes))
+}
+
 /// Text put inside a `<script>`: nothing in it may end the element.
 fn inside_script(text: &str) -> String {
     text.replace("</script", "<\\/script")
 }
 
 /// `template` with every `@@include:<file>@@` replaced by that file from
-/// `beside` and every `@@slot:<name>@@` by its text in `slots`. A slot
+/// `beside`, every `@@pack:<file>@@` by that file packed, and every
+/// `@@slot:<name>@@` by its text in `slots`. A slot
 /// the template names and `slots` lacks, or a file not there, is an error.
 pub fn fill(
     template: &str,
@@ -246,13 +254,17 @@ pub fn fill(
             let text =
                 std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             out.push_str(&inside_script(&text));
+        } else if let Some(file) = mark.strip_prefix("pack:") {
+            let path = beside.join(file);
+            let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            out.push_str(&packed(&bytes));
         } else if let Some(name) = mark.strip_prefix("slot:") {
             out.push_str(slots.get(name).ok_or_else(|| {
                 format!("the page's template names a slot `{name}` the exporter does not fill")
             })?);
         } else {
             return Err(format!(
-                "the page's template has `@@{mark}@@`, neither an include nor a slot"
+                "the page's template has `@@{mark}@@`, neither an include, a pack nor a slot"
             ));
         }
         rest = &after[end + 2..];
@@ -289,10 +301,9 @@ pub fn page(scene: &Path, web: &Path, backend: Option<&str>) -> Result<Made, Str
     };
     let template =
         String::from_utf8(read(bridge.join("single.html"))?).map_err(|e| e.to_string())?;
-    let glue =
-        String::from_utf8(read(built.join("entelechy_ffi.js"))?).map_err(|e| e.to_string())?;
+    let glue = read(built.join("entelechy_ffi.js"))?;
     let runtime = read(built.join("entelechy_ffi_bg.wasm"))?;
-    let packed = archive(&gathered.files);
+    let archived = archive(&gathered.files);
     let title = scene
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -303,10 +314,10 @@ pub fn page(scene: &Path, web: &Path, backend: Option<&str>) -> Result<Made, Str
         play.insert("backend".into(), backend.into());
     }
     let mut slots = BTreeMap::new();
-    slots.insert("title", title.replace('<', "&lt;").replace('&', "&amp;"));
-    slots.insert("glue", inside_script(&glue));
-    slots.insert("runtime", base64(&zlib(&runtime)));
-    slots.insert("files", base64(&zlib(&packed)));
+    slots.insert("title", title.replace('&', "&amp;").replace('<', "&lt;"));
+    slots.insert("glue", packed(&glue));
+    slots.insert("runtime", packed(&runtime));
+    slots.insert("files", packed(&archived));
     slots.insert(
         "play",
         inside_script(&serde_json::Value::Object(play).to_string()),
@@ -314,7 +325,7 @@ pub fn page(scene: &Path, web: &Path, backend: Option<&str>) -> Result<Made, Str
     Ok(Made {
         page: fill(&template, &bridge, &slots)?,
         files: gathered.files.len(),
-        files_bytes: packed.len(),
+        files_bytes: archived.len(),
         runtime_bytes: runtime.len(),
     })
 }

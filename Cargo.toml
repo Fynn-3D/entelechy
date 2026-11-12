@@ -29,3 +29,16 @@ debug = "line-tables-only"
 # a million files, and rustc searching it made a test build after touching
 # entelechy-graph take 113 s. Packed into a .dSYM, no object file stays (7 s).
 split-debuginfo = "packed"
+
+# Entelechy built for a page (`wasm32-unknown-unknown`, docs/USAGE.md,
+# *WebAssembly*): a page downloads it, and an exported page carries it, so
+# it is built small. (The profile is not named `page`: Cargo would keep
+# its own files in `target/page`, where the page's build is put.) One unit linked whole lets what is never called go;
+# no unwinding tables; no names.
+[profile.small]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

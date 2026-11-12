@@ -13,30 +13,23 @@
 <!--
 A scene exported whole: this one file is the Player in a page, Entelechy
 itself, and every file the scene reads. `entelechy export <scene.esn> --out
-<page>.html` fills this template (bridges/web/single.html): an
-`include` is a file beside the template put in as it is, a `slot` is what
-the exporter made. Nothing is fetched; it opens from the disk.
+<page>.html` fills this template (bridges/web/single.html): a `pack` is
+a file beside the template, packed; a `slot` is what the exporter made.
+Nothing is fetched; it opens from the disk.
 
-The slots: `runtime`, Entelechy built for a page, and `files`, the scene's
-files one after another (a count; then for each a path's length, the path,
-the bytes' length, the bytes; lengths little-endian in four bytes). Both
-are zlib streams in base64, which the browser inflates. `play` says which
-file is the scene and what runs it.
+Everything large is a zlib stream in base64, which the browser inflates:
+the packed files (the page's own scripts), and the slots `glue` (what
+`wasm-bindgen` wrote), `runtime` (Entelechy built for a page) and `files`
+(the scene's files one after another: a count; then for each a path's
+length, the path, the bytes' length, the bytes; lengths little-endian in
+four bytes). `play` says which file is the scene and what runs it.
 -->
 <canvas id="view" tabindex="0"></canvas>
 <canvas id="shown"></canvas>
-<script>
-@@include:entelechy.js@@
-</script>
-<script>
-@@include:player.js@@
-</script>
-<script type="text/plain" id="host">
-@@include:entelechy-host.mjs@@
-</script>
-<script type="text/plain" id="glue">
-@@slot:glue@@
-</script>
+<script type="text/plain" id="entelechy">@@pack:entelechy.js@@</script>
+<script type="text/plain" id="player">@@pack:player.js@@</script>
+<script type="text/plain" id="host">@@pack:entelechy-host.mjs@@</script>
+<script type="text/plain" id="glue">@@slot:glue@@</script>
 <script type="text/plain" id="runtime">@@slot:runtime@@</script>
 <script type="text/plain" id="files">@@slot:files@@</script>
 <script type="application/json" id="play">@@slot:play@@</script>
@@ -50,8 +43,17 @@ file is the scene and what runs it.
     return new Uint8Array(await new Response(stream).arrayBuffer());
   };
   const module = (source) => URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+  const words = async (id) => new TextDecoder().decode(await inflated(id));
+  // A script of the page's own, run as one written in the page is.
+  const run = (source) => {
+    const script = document.createElement("script");
+    script.textContent = source;
+    document.head.appendChild(script);
+  };
   try {
-    const [wasm, packed] = await Promise.all([inflated("runtime"), inflated("files")]);
+    run(await words("entelechy"));
+    run(await words("player"));
+    const [wasm, packed, glue, host] = await Promise.all([inflated("runtime"), inflated("files"), words("glue"), words("host")]);
     const view = new DataView(packed.buffer, packed.byteOffset, packed.byteLength);
     const decoder = new TextDecoder();
     const files = [];
@@ -66,8 +68,8 @@ file is the scene and what runs it.
     }
     const play = JSON.parse(text("play"));
     const player = await EntelechyPlayer.open({
-      glue: module(text("glue")),
-      host: module(text("host")),
+      glue: module(glue),
+      host: module(host),
       wasm,
       files,
       scene: play.scene,

@@ -74,7 +74,8 @@ fn files_are_packed_one_after_another() {
     assert_eq!(packed.len(), 39);
 }
 
-/// An include is the file beside the template, a slot is the exporter's;
+/// An include is the file beside the template (a pack the same, packed), a
+/// slot is the exporter's;
 /// text put inside a script cannot end the script.
 #[test]
 fn a_template_is_filled() {
@@ -92,6 +93,12 @@ fn a_template_is_filled() {
     assert_eq!(
         filled,
         "<title>ant</title><script>let end = \"<\\/script>\";</script>"
+    );
+    // (A file packed is a zlib stream in base64: nothing of the file shows.)
+    let packed = page::fill("@@pack:part.js@@", &dir, &slots).expect("packed");
+    assert!(
+        packed.starts_with('e') && !packed.contains('<') && !packed.contains("end"),
+        "{packed}"
     );
     assert!(
         page::fill("@@slot:other@@", &dir, &slots).is_err(),

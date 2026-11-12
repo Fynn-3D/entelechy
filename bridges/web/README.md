@@ -117,9 +117,10 @@ Node 22 or later and a Chrome, nothing installed:
 
 ```sh
 cargo build --release
-cargo build --release -p entelechy-ffi --target wasm32-unknown-unknown
-wasm-bindgen --target web --keep-lld-exports --no-typescript --out-dir target/page \
-  target/wasm32-unknown-unknown/release/entelechy_ffi.wasm
+cargo build --profile small -p entelechy-ffi --target wasm32-unknown-unknown
+wasm-bindgen --target web --keep-lld-exports --no-typescript \
+  --remove-name-section --remove-producers-section --out-dir target/page \
+  target/wasm32-unknown-unknown/small/entelechy_ffi.wasm
 node bridges/web/test.mjs
 ```
 
@@ -128,12 +129,12 @@ node bridges/web/test.mjs
 
 `single.html` is the template of a scene exported whole (`entelechy export
 <scene.esn> --out <name>.html`, docs/USAGE.md, *Import and export*). The
-exporter fills it: `@@include:<file>@@` is a file of this directory put in
-as it is (`entelechy.js`, `player.js`, `entelechy-host.mjs`), and
-`@@slot:<name>@@` is what the exporter made: `glue` what `wasm-bindgen`
-wrote, `runtime` Entelechy built for a page and `files` the scene's files
-(both zlib streams in base64, inflated by the browser's
-`DecompressionStream`), `play` which file is the scene and what runs it,
-`title` the page's. The page that results fetches nothing: the glue and
+exporter fills it: `@@pack:<file>@@` is a file of this directory, packed
+(`entelechy.js`, `player.js`, `entelechy-host.mjs`; `@@include:<file>@@`
+puts one in as it is), and `@@slot:<name>@@` is what the exporter made:
+`glue` what `wasm-bindgen` wrote, `runtime` Entelechy built for a page and
+`files` the scene's files, `play` which file is the scene and what runs
+it, `title` the page's. What is packed is a zlib stream in base64, inflated
+by the browser's `DecompressionStream`. The page that results fetches nothing: the glue and
 the host module are loaded from the text the page carries, and Entelechy's
 WebAssembly from the bytes (`EntelechyInPage.load(glue, host, wasm)`).
