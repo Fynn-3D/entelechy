@@ -560,6 +560,7 @@ fn lower(
                 params: Vec::new(),
                 requirements: Vec::new(),
                 times_params: Vec::new(),
+                times_rows: Vec::new(),
                 nodes: Vec::new(),
                 outputs: Vec::new(),
                 fallbacks: Vec::new(),
@@ -1083,6 +1084,61 @@ impl Lowering<'_, '_> {
                                 })
                         }
                     }
+                }
+                // A row says how many: the count the caller holds for
+                // this node, none before a frame has made the row.
+                ExprKind::Call(name, args) if name == "value" => {
+                    let usage = "`times` is a whole number, a graph param, or `value(node.port)` / `value(node.port, row)`: as many times as that row held when the last frame ended";
+                    if placement.is_some() {
+                        return Err(error(
+                            expr.span,
+                            "`times = value(...)` is written in the scene itself; a placed graph takes its count by a param",
+                        ));
+                    }
+                    let source = match args.first().map(|arg| &arg.kind) {
+                        Some(ExprKind::Member(node, port)) if args.len() <= 2 => match &node.kind {
+                            ExprKind::Name(node) => (node.clone(), port.clone()),
+                            _ => return Err(error(args[0].span, usage)),
+                        },
+                        _ => return Err(error(expr.span, usage)),
+                    };
+                    if source.0 == decl.name.value
+                        || !document
+                            .nodes
+                            .iter()
+                            .any(|other| other.name.value == source.0)
+                    {
+                        return Err(error(
+                            args[0].span,
+                            format!(
+                                "`{}` is not another node of this scene; `times = value(node.port)` reads a node's output",
+                                source.0
+                            ),
+                        ));
+                    }
+                    let row = match args.get(1).map(|arg| &arg.kind) {
+                        None => 0,
+                        Some(ExprKind::Int(row)) if (0..=i64::from(u32::MAX)).contains(row) => {
+                            *row as u32
+                        }
+                        Some(_) => {
+                            return Err(error(
+                                args[1].span,
+                                "`times`'s row is a whole number, 0 or more",
+                            ));
+                        }
+                    };
+                    let held = self
+                        .overrides
+                        .get(&entelechy_graph::TimesRow::param(&decl.name.value))
+                        .cloned()
+                        .unwrap_or(Value::Int(0));
+                    self.out.graph.times_rows.push(entelechy_graph::TimesRow {
+                        node: decl.name.value.clone(),
+                        source,
+                        row,
+                    });
+                    held
                 }
                 _ => literal(expr, &self.known())?,
             };

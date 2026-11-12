@@ -59,6 +59,10 @@ pub struct Scene {
     text: Option<String>,
     /// Caller overrides of graph parameters.
     params: BTreeMap<String, Value>,
+    /// How many times each node a row sizes is placed, by
+    /// [`entelechy_graph::TimesRow::param`]: what the session last read
+    /// of its row.
+    counts: BTreeMap<String, Value>,
     /// A lowered change whose Kernels are being prepared: it replaces
     /// the running scene when they publish, and is dropped if one is
     /// refused.
@@ -154,6 +158,7 @@ impl Scene {
             bound: Vec::new(),
             text: None,
             params: BTreeMap::new(),
+            counts: BTreeMap::new(),
             staged: None,
             superseded: false,
             expanded: None,
@@ -313,6 +318,41 @@ impl Scene {
         Ok(())
     }
 
+    /// The nodes a row sizes in the newest scene read, each with the
+    /// count it is placed by now.
+    pub fn times_rows(&self) -> Vec<(entelechy_graph::TimesRow, u32)> {
+        self.newest().map_or_else(Vec::new, |graph| {
+            graph
+                .times_rows
+                .iter()
+                .map(|row| {
+                    let held = match self
+                        .counts
+                        .get(&entelechy_graph::TimesRow::param(&row.node))
+                    {
+                        Some(Value::Int(count)) => *count as u32,
+                        _ => 0,
+                    };
+                    (row.clone(), held)
+                })
+                .collect()
+        })
+    }
+
+    /// Places the node `node` as many times as its row now says; a count
+    /// that differs from the one it is placed by relowers the document on
+    /// the next sync, as a param that sizes the graph does.
+    pub fn set_count(&mut self, node: &str, count: u32) {
+        let value = Value::Int(count as i32);
+        let previous = self
+            .counts
+            .insert(entelechy_graph::TimesRow::param(node), value.clone());
+        let placed_none = previous.is_none() && count == 0;
+        if previous != Some(value) && !placed_none {
+            self.stamp = None;
+        }
+    }
+
     /// Drops every parameter override, each back at the scene's default; a
     /// param that sizes the graph relowers the document on the next sync.
     pub fn clear_params(&mut self) {
@@ -453,6 +493,7 @@ impl Scene {
             name: self.document_name(),
             base: self.base(),
             params: self.params.clone(),
+            counts: self.counts.clone(),
             first: self.graph.is_none(),
             store: Arc::clone(&self.store),
             named: Arc::clone(&self.named),
@@ -467,6 +508,9 @@ struct ToLower {
     name: String,
     base: PathBuf,
     params: BTreeMap<String, Value>,
+    /// The counts of the nodes a row sizes, given to the lowering beside
+    /// the params.
+    counts: BTreeMap<String, Value>,
     first: bool,
     store: Arc<dyn Store>,
     named: crate::sources::Named,
@@ -481,6 +525,7 @@ impl ToLower {
             name,
             base,
             params,
+            counts,
             first,
             named,
             ..
@@ -491,6 +536,8 @@ impl ToLower {
             |base: &Path, uses: &[entelechy_language::Use], own: entelechy_language::Own<'_>| {
                 naming.declare(base, uses, own)
             };
+        let mut given = params.clone();
+        given.extend(counts);
         let mut lowered = entelechy_scene::load_with_params(
             &document,
             &text,
@@ -498,7 +545,7 @@ impl ToLower {
             &base,
             &mut loader,
             &mut declare,
-            &params,
+            &given,
         )
         .map_err(|e| Diagnostic::from(&e))?;
         // Each read where it is: through a package's name, inside it.
@@ -958,6 +1005,13 @@ impl Scene {
                 let graph = staged.graph;
                 self.params
                     .retain(|name, _| graph.params.iter().any(|p| &p.name == name));
+                // A count is kept while its node is one a row sizes.
+                self.counts.retain(|name, _| {
+                    graph
+                        .times_rows
+                        .iter()
+                        .any(|row| &entelechy_graph::TimesRow::param(&row.node) == name)
+                });
                 self.graph = Some(Arc::new(graph));
                 self.text = Some(staged.text);
                 self.files = staged.files;

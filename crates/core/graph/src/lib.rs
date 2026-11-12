@@ -322,6 +322,29 @@ pub struct Awake {
     pub row: u32,
 }
 
+/// A node placed as many times as a row says: `times = value(source,
+/// row);`. The count is the row's as the last frame left it, and none
+/// before a frame has made it. A scene's params never hold it: it is
+/// given to the lowering under [`TimesRow::param`], a name no document
+/// can write.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TimesRow {
+    /// The node placed, by the name the document gives it.
+    pub node: String,
+    /// The node whose output holds the row, and the output.
+    pub source: (String, String),
+    /// The row.
+    pub row: u32,
+}
+
+impl TimesRow {
+    /// The name the count of the node `node` is given to a lowering
+    /// under.
+    pub fn param(node: &str) -> String {
+        format!("{node}/#times")
+    }
+}
+
 /// What a node reads across evaluations: see [`Graph::reads`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Reads {
@@ -351,6 +374,10 @@ pub struct Graph {
     /// Parameters that size the graph (a node's `times`); changing one
     /// lowers the document again.
     pub times_params: Vec<String>,
+    /// Each node a row sizes (`times = value(source, row);`): the session
+    /// reads the row as a frame left it and lowers the document again
+    /// when the count it holds has changed.
+    pub times_rows: Vec<TimesRow>,
     /// Nodes in document order, sub-graphs flattened in place.
     pub nodes: Vec<Node>,
     /// Named results in document order; interfaces present the first.

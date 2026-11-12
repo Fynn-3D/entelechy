@@ -185,6 +185,7 @@ fn graph(nodes: Vec<Node>, output: &str) -> Graph {
         params: vec![],
         requirements: vec![],
         times_params: vec![],
+        times_rows: vec![],
         nodes,
         outputs: vec![(
             "result".into(),

@@ -1,0 +1,24 @@
+// A node placed as many times as a row another node writes says: the
+// first row, or the row named.
+node seed: tree.seed@1 {
+    domain = 4;
+}
+
+node depth: tree.depth@1 {
+    domain = 3;
+}
+
+node grow: tree.grow@1 {
+    times = value(depth.result);
+    carry limbs <- result;
+    limbs <- seed.result;
+}
+
+node leaf: tree.leaf@1 {
+    times = value(depth.result, 2);
+    carry limbs <- result;
+    limbs <- grow.result;
+}
+
+output result <- grow.result;
+output leaves <- leaf.result;

@@ -1,0 +1,15 @@
+language 3
+// counted
+
+node seed: tree.seed@1 {
+    domain = 4;
+}
+
+node depth: tree.depth@1 {
+    domain = 3;
+}
+
+output result <- seed.result;
+output leaves <- seed.result;
+// grow placed as row 0 of depth.result says
+// leaf placed as row 2 of depth.result says

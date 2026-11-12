@@ -60,6 +60,9 @@ pub struct Session {
     /// What reading on a scene lowered on another thread said outside a
     /// sync ([`Session::settle_lowering`]), said by the next sync.
     later: Vec<Event>,
+    /// A node's `times` row said another count on the last frame: the
+    /// scene is lowered again before the next.
+    resized: bool,
     /// The names asked to stay materialized ([`Session::pin`]), resolved
     /// against the running graph before each evaluation.
     pins: Vec<entelechy_graph::NodeId>,
@@ -184,6 +187,7 @@ impl Session {
             origin: crate::Origin::Local,
             claim: Claim::None,
             later: Vec::new(),
+            resized: false,
             pins: Vec::new(),
             node_clock: crate::clocked::NodeClock::default(),
             bound: BTreeMap::new(),
@@ -1763,6 +1767,7 @@ impl Session {
     /// Overlapping, the frame before is confirmed here, and the outputs
     /// written to files are written as it left them.
     pub fn evaluate(&mut self, context: &Context) -> Result<Report, EvaluateError> {
+        self.place_by_rows();
         // Overlapping bounds the frames in flight itself.
         if !self.evaluator.overlaps() {
             self.one_frame_in_flight();
@@ -1805,7 +1810,84 @@ impl Session {
             self.node_clock.ended(frame, report.clocked.clone());
         }
         self.written_after(&report);
+        self.follow_rows();
         Ok(report)
+    }
+
+    /// Lowers the scene again where the last frame's rows placed a node
+    /// another number of times: before the frame that runs it, whoever
+    /// drives the frames. What the lowering says is said by the next
+    /// sync.
+    fn place_by_rows(&mut self) {
+        if std::mem::take(&mut self.resized) {
+            let said = self.sync_apart(false);
+            self.later.extend(said);
+        }
+    }
+
+    /// Reads each row a node's `times` is sized by, as this frame left
+    /// it, and has the scene place the node that many times from the next
+    /// sync on. A row not yet made places none; one that cannot be read
+    /// as a count is said as a refusal and leaves the node as it is
+    /// placed.
+    fn follow_rows(&mut self) {
+        for (row, held) in self.scene.times_rows() {
+            let source = entelechy_graph::NodeId(row.source.0.as_str().into());
+            let read = match self.cached(&source, &row.source.1) {
+                None => Ok(0),
+                Some(handle) => self.row_count(handle, row.row),
+            };
+            match read {
+                Ok(count) if count == held => {}
+                Ok(count) => {
+                    self.scene.set_count(&row.node, count);
+                    self.resized = true;
+                }
+                Err(why) => {
+                    let said = format!(
+                        "`{}`'s `times = value({}.{}, {})`: {why}",
+                        row.node, row.source.0, row.source.1, row.row
+                    );
+                    let event = Event::SceneRejected(crate::Diagnostic::new(said));
+                    if !self.later.contains(&event) {
+                        self.later.push(event);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The count row `row` of `handle` holds: an `Int` of 0 or more.
+    fn row_count(&mut self, handle: Handle, row: u32) -> Result<u32, String> {
+        let count = self
+            .runtime
+            .host()
+            .domain(handle)
+            .map_err(|error| error.to_string())?
+            .count();
+        if row as usize >= count {
+            return Err(format!("it has {count} element(s)"));
+        }
+        let whole = self
+            .runtime
+            .host()
+            .schema(handle)
+            .map_err(|error| error.to_string())?
+            .scalars()
+            .first()
+            .is_some_and(|scalar| *scalar == entelechy_kernel::Scalar::Int);
+        if !whole {
+            return Err("a count is an `Int`".into());
+        }
+        self.runtime
+            .materialize(handle)
+            .map_err(|error| error.to_string())?;
+        let word = self
+            .runtime
+            .host()
+            .element(handle, row)
+            .map_err(|error| error.to_string())?[0];
+        u32::try_from(word as i32).map_err(|_| format!("it holds {}, less than 0", word as i32))
     }
 
     /// Writes what the frame last confirmed changed of the outputs
@@ -1907,6 +1989,7 @@ impl Session {
         context: &Context,
         demand: &std::collections::BTreeSet<entelechy_graph::NodeId>,
     ) -> Result<Report, EvaluateError> {
+        self.place_by_rows();
         self.one_frame_in_flight();
         self.inputs.select_frames(
             self.scene.store().as_ref(),
@@ -1943,6 +2026,7 @@ impl Session {
         self.feed_file_nodes();
         self.feed_field_nodes();
         self.written_after(&report);
+        self.follow_rows();
         Ok(report)
     }
 
@@ -2137,6 +2221,14 @@ impl Session {
         // paths, and what the scene writes stays materialized.
         for node in self.fed_sources().into_iter().chain(self.written_sources()) {
             self.evaluator.pin(node);
+        }
+        // What a node's `times` reads its row from is read after every
+        // frame too.
+        for (row, _) in self.scene.times_rows() {
+            let source = entelechy_graph::NodeId(row.source.0.as_str().into());
+            for node in self.pinned_by(&source) {
+                self.evaluator.pin(node);
+            }
         }
     }
 

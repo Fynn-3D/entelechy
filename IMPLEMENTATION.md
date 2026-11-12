@@ -159,6 +159,12 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   bit-identical ([test](crates/backends/cpu/tests/fusion.rs), on every
   backend [offset](crates/interface/session/tests/offset.rs)). A reduce,
   scan, scatter, prefix, group, async or native node is never fused.
+- A node placed as many times as a row says: `TimesRow` in the
+  [graph](crates/core/graph/src/lib.rs), read in `expand_times`
+  ([scene](crates/frontend/scene/src/lib.rs)), kept by the
+  [documents](crates/interface/documents/src/scene.rs) and followed
+  frame by frame by the [session](crates/interface/session/src/session.rs)
+  ([test](crates/interface/session/tests/counted.rs)).
 - One Field per declared output or the execution fails
   ([`held_to`](crates/core/kernel/src/lib.rs), [test](crates/core/kernel/tests/swap.rs)).
 - Repetition: one Kernel over its own output is one group, one GPU

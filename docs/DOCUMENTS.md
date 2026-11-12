@@ -848,7 +848,8 @@ be keywords.
    or array included (`param origin: Double = 500000.123456789;`), and a
    node's value keeps every digit until it reaches the Kernel. A
    value is written, never computed: `gain = 0.5 * 2.0;`, `gain = n +
-   1;` and `times = n + 1;` are refused
+   1;` and `times = n + 1;` are refused (a `times` may read a row, item
+   10)
    ([why](DECISIONS.md#the-graph-computes-structure-never-values)).
 5. `domain = count;`, `domain = vec2(width, height);` or `domain =
    vec3(width, height, depth);` sets a node's output extent in its
@@ -1002,7 +1003,14 @@ be keywords.
     carry names, or a carry started by `<~`, has no value and is refused
     where read. `N` is a literal or a graph param; a param that sizes the
     graph lowers the document again when it changes (`param level 3`
-    over the protocol resizes a running scene).
+    over the protocol resizes a running scene). In the scene itself `N`
+    may be a row another node of the scene writes, `times =
+    value(depth.result);` or `value(depth.result, 2)`: an `Int` of 0 or
+    more, read as the last frame left it, so the node is placed no times
+    until a frame has made the row and follows it a frame behind; the
+    document is lowered again when the count changes, and a row that is
+    no count is said and leaves the node as it is placed. A placed graph
+    takes its count by a param.
 11. A node may be a Field: `node zeros: Rows<Float> { domain = 65; }` is
     filled with its element's zero, and `value = 0.5;` (a literal or a
     graph param) fills it otherwise. The type may be an alias a used

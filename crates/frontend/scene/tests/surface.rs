@@ -132,6 +132,12 @@ fn lowered(path: &Path) -> Result<String, String> {
     for param in &graph.times_params {
         out.push_str(&format!("// sizes {param}\n"));
     }
+    for row in &graph.times_rows {
+        out.push_str(&format!(
+            "// {} placed as row {} of {}.{} says\n",
+            row.node, row.row, row.source.0, row.source.1
+        ));
+    }
     for inline in &lowered.inline {
         out.push_str(&format!(
             "// inline {} {} from {}\n",

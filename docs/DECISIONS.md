@@ -14,7 +14,12 @@ A scene's only computation is structural: how large a node's output is
 (`domain`) and how many times a node is placed (`times`). A node's value
 is written, a literal or a graph parameter by name. A domain reads values
 (a parameter, the window, a number a Kernel wrote with `value(port)`) and
-yields only a count or a size, exact or failing, never wrapping. A graph
+yields only a count or a size, exact or failing, never wrapping. A
+`times` is a literal, a graph parameter, or one row a Kernel wrote,
+`value(node.port, row)`, read as the last frame left it: how many nodes
+there are is known before a frame runs, as what sleeps is, and the
+document is lowered again only when the count changes. The owner chose
+this form. A graph
 says what its parameters must hold with `require name: a <= b;`, two
 counts compared, checked as the document loads and before every
 evaluation; a placed graph's requirements come with it.
