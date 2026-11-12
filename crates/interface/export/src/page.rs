@@ -286,24 +286,23 @@ pub fn fill(
 /// read as the importer reads one and written as the exporter writes one,
 /// so it is what `entelechy import` then `entelechy export --chars` make of it.
 pub fn font_of(name: &str, bytes: &[u8], chars: &str) -> Result<Option<Vec<u8>>, String> {
-    let extension = name
-        .rsplit('.')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+    let file = Path::new(name);
+    let extension = file
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
     if !matches!(extension.as_str(), "ttf" | "otf" | "woff") {
         return Ok(None);
     }
     let (fields, _) =
         entelechy_import::font::read(bytes, Some(chars)).map_err(|e| format!("{name}: {e}"))?;
-    let family = name
-        .rsplit('/')
-        .next()
-        .and_then(|file| file.rsplit_once('.'))
-        .map_or("font", |(stem, _)| stem);
+    let family = file
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "font".into());
     let face = crate::font::face(
         &[fields.glyphs, fields.segments, fields.metrics],
-        family,
+        &family,
         None,
     )
     .map_err(|e| format!("{name}: {e}"))?;
