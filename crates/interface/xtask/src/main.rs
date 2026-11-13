@@ -166,6 +166,20 @@ fn verify(all: bool) -> ExitCode {
                 "warnings",
             ],
         )],
+        vec![cargo(
+            "clippy-single",
+            &[
+                "clippy",
+                "-p",
+                "entelechy-ffi",
+                "--no-default-features",
+                "--target",
+                "wasm32-unknown-unknown",
+                "--",
+                "-D",
+                "warnings",
+            ],
+        )],
         vec![cargo("test-build", &["test", "--workspace", "--no-run"])],
         // The bridges wait on the programs they drive, so they run beside
         // the rest.
@@ -196,6 +210,7 @@ fn verify(all: bool) -> ExitCode {
         "clippy",
         "clippy-wasm",
         "clippy-page",
+        "clippy-single",
         "test-build",
         "tests",
         "bridges",

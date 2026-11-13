@@ -2,6 +2,8 @@
 //! every front finds it: `ENTELECHY_PACKAGES`. Its own process, as it sets
 //! the environment.
 
+#![cfg(feature = "full")]
+
 use std::ffi::{CStr, CString};
 
 fn c(text: &str) -> CString {

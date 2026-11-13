@@ -1,235 +1,91 @@
-//! A scene as one page: a single HTML file that is the Player in a page,
-//! Entelechy built for a page, and every file the scene reads. Nothing
-//! is fetched; it opens from the disk.
+//! A scene as one page: a single HTML file holding the Player in a page,
+//! Entelechy's bundle runtime (`entelechy_single`), and the scene's compiled
+//! binary [`Bundle`](entelechy_session::bundle::Bundle). Nothing is fetched; it
+//! opens from the disk.
 //!
-//! The exporter gathers and packs. How the page starts is the web
-//! bridge's (`bridges/web/single.html`, a template): an `@@include:<file>@@`
-//! is a file beside the template put in as it is, an `@@pack:<file>@@` that
-//! file packed (a zlib stream in UTF-8 base122, as everything large in the
-//! page is), an `@@slot:<name>@@` what is made here.
+//! The exporter compiles and packs. How the page starts is the web bridge's
+//! (`bridges/web/single.html`, a template): an `@@include:<file>@@` is a file
+//! beside the template put in as it is, an `@@pack:<file>@@` that file packed
+//! (a zlib stream in UTF-8 base122, as everything large in the page is), an
+//! `@@slot:<name>@@` what is made here.
 
 use std::collections::BTreeMap;
-use std::io;
-use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use entelechy_formats::base122::base122;
 use entelechy_formats::deflate::zlib_tight;
-use entelechy_session::store::{Kind, Stamp};
-use entelechy_session::{Later, Limits, Parsed, Session, SessionOptions, Store};
+use entelechy_session::{Event, Limits, Session, SessionOptions, Wait};
 
-/// A store that answers as another does and keeps the path of every file
-/// read through it, or asked after and found: what a scene reads as it
-/// loads is what its page must carry.
-struct Recording {
-    under: Arc<dyn Store>,
-    read: Mutex<Vec<PathBuf>>,
+/// A scene compiled into its binary [`Bundle`](entelechy_session::bundle::Bundle)
+/// bytes, with counts for the line the exporter prints.
+pub struct Compiled {
+    pub bundle: Vec<u8>,
+    pub modules: usize,
+    pub inputs: usize,
+    /// Each font node subsetted by `--chars`: `(node, font_file_bytes, atlas_bytes)`.
+    pub fonts: Vec<(String, usize, usize)>,
 }
 
-impl Recording {
-    fn note(&self, path: &Path) {
-        if let Ok(mut read) = self.read.lock() {
-            read.push(self.under.whole(path));
-        }
-    }
-}
-
-impl Store for Recording {
-    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
-        let bytes = self.under.read(path)?;
-        self.note(path);
-        Ok(bytes)
-    }
-    fn read_start(&self, path: &Path, bytes: usize) -> io::Result<Vec<u8>> {
-        let start = self.under.read_start(path, bytes)?;
-        self.note(path);
-        Ok(start)
-    }
-    fn read_words(&self, path: &Path, from: usize) -> io::Result<(Vec<u32>, usize)> {
-        let words = self.under.read_words(path, from)?;
-        self.note(path);
-        Ok(words)
-    }
-    fn read_later(&self, path: &Path) -> Box<dyn Later> {
-        if self.under.kind(path).is_some() {
-            self.note(path);
-        }
-        self.under.read_later(path)
-    }
-    fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
-        self.under.write(path, bytes)
-    }
-    fn remove(&self, path: &Path) -> io::Result<()> {
-        self.under.remove(path)
-    }
-    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-        self.under.rename(from, to)
-    }
-    fn remove_empty(&self, dir: &Path) -> io::Result<()> {
-        self.under.remove_empty(dir)
-    }
-    /// (A file asked after and found is carried too: what is looked for
-    /// to tell where something is, a package's manifest beside a file of
-    /// the package, must be there in the page for the answer to be the
-    /// same.)
-    fn kind(&self, path: &Path) -> Option<Kind> {
-        let kind = self.under.kind(path);
-        if kind == Some(Kind::File) {
-            self.note(path);
-        }
-        kind
-    }
-    fn list(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
-        self.under.list(dir)
-    }
-    fn stamp(&self, path: &Path) -> Option<Stamp> {
-        self.under.stamp(path)
-    }
-    fn canonical(&self, path: &Path) -> io::Result<PathBuf> {
-        self.under.canonical(path)
-    }
-    fn whole(&self, path: &Path) -> PathBuf {
-        self.under.whole(path)
-    }
-    fn packages(&self) -> &[PathBuf] {
-        self.under.packages()
-    }
-    fn parsed(&self) -> Option<&Parsed> {
-        self.under.parsed()
-    }
-    fn stamps_directories(&self) -> bool {
-        self.under.stamps_directories()
-    }
-    fn sync_begins(&self) {
-        self.under.sync_begins();
-    }
-    fn sync_ends(&self) {
-        self.under.sync_ends();
-    }
-}
-
-/// What a scene reads, as its page holds it: each file under the name the
-/// page gives it, and the scene's own.
-pub struct Gathered {
-    pub files: Vec<(String, Vec<u8>)>,
-    pub scene: String,
-}
-
-/// The directory every one of `paths` is in.
-fn common(paths: &[PathBuf]) -> PathBuf {
-    let mut shared: Option<Vec<Component>> = None;
-    for path in paths {
-        let dir: Vec<Component> = path
-            .parent()
-            .unwrap_or(Path::new(""))
-            .components()
-            .collect();
-        shared = Some(match shared {
-            None => dir,
-            Some(so_far) => so_far
-                .iter()
-                .zip(&dir)
-                .take_while(|(a, b)| a == b)
-                .map(|(a, _)| *a)
-                .collect(),
-        });
-    }
-    shared.unwrap_or_default().iter().collect()
-}
-
-fn slashed(path: &Path) -> String {
-    path.components()
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-/// Loads `scene` as a front does (packages found where every front finds
-/// them) and gathers every file it read. In the page a package found by
-/// its name is in `packages/`, and everything else keeps its place under
-/// `play/`, counted from the directory all of it is in: so what names a
-/// file beside it, or a package by its name, finds it there too, and no
-/// directory of the machine it was exported on is written into the page.
-pub fn gather(scene: &Path) -> Result<Gathered, String> {
+/// Loads `scene` as a front does, checks that nothing in it or its inputs was
+/// refused, bakes every static input and font atlas (`chars` keeping those
+/// characters alone when given), and encodes the binary bundle. No host path
+/// is written into the bundle.
+pub fn compile(scene: &Path, chars: Option<&str>) -> Result<Compiled, String> {
     let under = SessionOptions::from_environment().store();
-    let recording = Arc::new(Recording {
-        under: Arc::clone(&under),
-        read: Mutex::new(Vec::new()),
-    });
-    let store: Arc<dyn Store> = recording.clone();
     let loaded = Session::open_loaded(
-        store,
+        Arc::clone(&under),
         scene,
         None,
         "cpu",
         Limits::default(),
-        entelechy_session::Wait::blocking(),
+        Wait::blocking(),
         false,
     )
     .map_err(|why| format!("{}: {why}", scene.display()))?;
     let mut session = loaded.session;
-    // (What a scene's inputs name is read as the scene is first run.)
-    session.sync();
-    drop(session);
-    let whole_scene = under.whole(scene);
-    let mut read: Vec<PathBuf> = recording
-        .read
-        .lock()
-        .map_err(|_| "the files read were lost".to_string())?
-        .clone();
-    read.push(whole_scene.clone());
-    read.sort();
-    read.dedup();
-    let shelves: Vec<PathBuf> = under
-        .packages()
-        .iter()
-        .map(|dir| under.whole(dir))
-        .collect();
-    let shelf_of = |path: &Path| shelves.iter().find(|shelf| path.starts_with(shelf));
-    let own: Vec<PathBuf> = read
-        .iter()
-        .filter(|p| shelf_of(p).is_none())
-        .cloned()
-        .collect();
-    let root = common(&own);
-    let named = |path: &Path| -> Result<String, String> {
-        let inside = match shelf_of(path) {
-            Some(shelf) => {
-                Path::new("packages").join(path.strip_prefix(shelf).map_err(|e| e.to_string())?)
+    let mut events = loaded.events;
+    events.extend(session.sync());
+    for event in &events {
+        match event {
+            Event::SceneRejected(error) => return Err(format!("{}: {error}", scene.display())),
+            Event::Rejected { path, error } => {
+                return Err(format!("{}: {error}", path.display()));
             }
-            None => Path::new("play").join(path.strip_prefix(&root).map_err(|e| e.to_string())?),
-        };
-        Ok(slashed(&inside))
-    };
-    let mut files = BTreeMap::new();
-    for path in &read {
-        let bytes = under
-            .read(path)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-        files.insert(named(path)?, bytes);
+            _ => {}
+        }
     }
-    Ok(Gathered {
-        scene: named(&whole_scene)?,
-        files: files.into_iter().collect(),
+    let mut fonts = Vec::new();
+    let bundled = session
+        .bundle_with_fonts(|node, path| {
+            let bytes = under
+                .read(path)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            let (fields, _) = entelechy_import::font::read(&bytes, chars)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            if chars.is_some() {
+                let kept = (fields.glyphs.storage().len()
+                    + fields.segments.storage().len()
+                    + fields.metrics.storage().len())
+                    * 4;
+                fonts.push((node.to_owned(), bytes.len(), kept));
+            }
+            Ok((fields.glyphs, fields.segments, fields.metrics))
+        })
+        .map_err(|why| format!("{}: {why}", scene.display()))?;
+    let modules = bundled.modules.len();
+    let inputs = bundled.inputs.len();
+    let bundle = bundled.encode();
+    Ok(Compiled {
+        bundle,
+        modules,
+        inputs,
+        fonts,
     })
 }
 
-/// The files one after another, as the page's template says: a count,
-/// then for each a path's length, the path, the bytes' length, the bytes;
-/// lengths little-endian in four bytes.
-pub fn archive(files: &[(String, Vec<u8>)]) -> Vec<u8> {
-    let mut out = (files.len() as u32).to_le_bytes().to_vec();
-    for (path, bytes) in files {
-        out.extend_from_slice(&(path.len() as u32).to_le_bytes());
-        out.extend_from_slice(path.as_bytes());
-        out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-        out.extend_from_slice(bytes);
-    }
-    out
-}
-
-/// Bytes as the page carries what is large: a zlib stream in UTF-8
-/// base122, which the browser inflates.
+/// Bytes as the page carries what is large: a zlib stream in UTF-8 base122,
+/// which the browser inflates.
 fn packed(bytes: &[u8]) -> String {
     base122(&zlib_tight(bytes))
 }
@@ -241,8 +97,8 @@ fn inside_script(text: &str) -> String {
 
 /// `template` with every `@@include:<file>@@` replaced by that file from
 /// `beside`, every `@@pack:<file>@@` by that file packed, and every
-/// `@@slot:<name>@@` by its text in `slots`. A slot
-/// the template names and `slots` lacks, or a file not there, is an error.
+/// `@@slot:<name>@@` by its text in `slots`. A slot the template names and
+/// `slots` lacks, or a file not there, is an error.
 pub fn fill(
     template: &str,
     beside: &Path,
@@ -281,71 +137,35 @@ pub fn fill(
     Ok(out)
 }
 
-/// A font file carried with the characters of `chars` alone, in the
-/// format its name says; `None` for a file that is not a font. The font is
-/// read as the importer reads one and written as the exporter writes one,
-/// so it is what `entelechy import` then `entelechy export --chars` make of it.
-pub fn font_of(name: &str, bytes: &[u8], chars: &str) -> Result<Option<Vec<u8>>, String> {
-    let file = Path::new(name);
-    let extension = file
-        .extension()
-        .map(|e| e.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    if !matches!(extension.as_str(), "ttf" | "otf" | "woff") {
-        return Ok(None);
-    }
-    let (fields, _) =
-        entelechy_import::font::read(bytes, Some(chars)).map_err(|e| format!("{name}: {e}"))?;
-    let family = file
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "font".into());
-    let face = crate::font::face(
-        &[fields.glyphs, fields.segments, fields.metrics],
-        &family,
-        None,
-    )
-    .map_err(|e| format!("{name}: {e}"))?;
-    Ok(Some(match extension.as_str() {
-        "otf" => crate::font::otf(&face),
-        "woff" => crate::font::woff(&face),
-        _ => crate::font::ttf(&face),
-    }))
-}
-
 /// What a page was made of, for the line the exporter prints.
 pub struct Made {
     pub page: String,
-    pub files: usize,
-    pub files_bytes: usize,
+    pub modules: usize,
+    pub inputs: usize,
+    pub bundle_bytes: usize,
     pub runtime_bytes: usize,
-    /// Each font carried with fewer characters: its name in the page, its
-    /// bytes as read and as carried.
+    /// Each font node subsetted by `--chars`: `(node, font_file_bytes, atlas_bytes)`.
     pub fonts: Vec<(String, usize, usize)>,
 }
 
 /// `scene` as one page. `web` is where Entelechy for the web is: the
-/// directory with `bridges/web/` (the template and the Player in a page)
-/// and `target/page/` (Entelechy built for a page), as a web release and
-/// a checkout that has built it both are. `backend` is what runs it in
-/// the page (`best` when none is named, as the Player chooses). `chars`,
-/// given, is the characters the page's fonts keep.
+/// directory with `bridges/web/` (the template and its player) and
+/// `target/page/` (`entelechy_single.{js,_bg.wasm}`). `backend` is what runs
+/// it in the page (`gpu` or `jit`, or `best` when none is named). `chars`,
+/// given, is the characters the scene's font nodes keep.
 pub fn page(
     scene: &Path,
     web: &Path,
     backend: Option<&str>,
     chars: Option<&str>,
 ) -> Result<Made, String> {
-    let mut gathered = gather(scene)?;
-    let mut fonts = Vec::new();
-    if let Some(chars) = chars {
-        for (name, bytes) in &mut gathered.files {
-            if let Some(kept) = font_of(name, bytes, chars)? {
-                fonts.push((name.clone(), bytes.len(), kept.len()));
-                *bytes = kept;
-            }
-        }
-    }
+    let backend = match backend {
+        None | Some("best") => "best",
+        Some(name @ ("gpu" | "jit")) => name,
+        Some("cpu") => return Err("a page runs on gpu or jit, not cpu".into()),
+        Some(other) => return Err(format!("--backend for a page is gpu or jit, not `{other}`")),
+    };
+    let compiled = compile(scene, chars)?;
     let bridge = web.join("bridges").join("web");
     let built = web.join("target").join("page");
     let read = |path: PathBuf| {
@@ -359,32 +179,24 @@ pub fn page(
     };
     let template =
         String::from_utf8(read(bridge.join("single.html"))?).map_err(|e| e.to_string())?;
-    let glue = read(built.join("entelechy_ffi.js"))?;
-    let runtime = read(built.join("entelechy_ffi_bg.wasm"))?;
-    let archived = archive(&gathered.files);
+    let glue = read(built.join("entelechy_single.js"))?;
+    let runtime = read(built.join("entelechy_single_bg.wasm"))?;
     let title = scene
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let mut play = serde_json::Map::new();
-    play.insert("scene".into(), gathered.scene.clone().into());
-    if let Some(backend) = backend {
-        play.insert("backend".into(), backend.into());
-    }
     let mut slots = BTreeMap::new();
     slots.insert("title", title.replace('&', "&amp;").replace('<', "&lt;"));
+    slots.insert("backend", backend.to_owned());
     slots.insert("glue", packed(&glue));
     slots.insert("runtime", packed(&runtime));
-    slots.insert("files", packed(&archived));
-    slots.insert(
-        "play",
-        inside_script(&serde_json::Value::Object(play).to_string()),
-    );
+    slots.insert("bundle", packed(&compiled.bundle));
     Ok(Made {
         page: fill(&template, &bridge, &slots)?,
-        files: gathered.files.len(),
-        files_bytes: archived.len(),
+        modules: compiled.modules,
+        inputs: compiled.inputs,
+        bundle_bytes: compiled.bundle.len(),
         runtime_bytes: runtime.len(),
-        fonts,
+        fonts: compiled.fonts,
     })
 }

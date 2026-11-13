@@ -1,82 +1,47 @@
-//! A scene exported as one page: what is gathered and how it is named,
-//! the packing the page's template reads, and the template filled.
+//! A scene exported as one page: how it compiles into a binary bundle with
+//! no host paths, how font nodes are subsetted, how the template is filled,
+//! and how invalid inputs are refused.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use entelechy_export::page;
+use entelechy_session::bundle::Bundle;
 
 fn repository() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
 }
 
-/// What a scene reads as it loads is gathered under `play/`, counted from
-/// the directory all of it is in; the scene is among it; and no directory
-/// of this machine is written into a name.
+/// A scene compiles into a binary bundle that decodes back cleanly and
+/// holds no directory of this machine.
 #[test]
-fn a_scene_is_gathered_with_what_it_reads() {
-    let scene = repository().join("examples/ant/scene.esn");
-    let gathered = page::gather(&scene).expect("the ant example loads");
-    assert_eq!(gathered.scene, "play/scene.esn");
-    let names: Vec<&str> = gathered
-        .files
-        .iter()
-        .map(|(name, _)| name.as_str())
-        .collect();
-    assert!(names.contains(&"play/scene.esn"), "{names:?}");
+fn a_scene_compiles_into_a_bundle_without_host_paths() {
+    let root = repository().canonicalize().unwrap_or_else(|_| repository());
+    let scene = root.join("examples/ant/scene.esn");
+    let compiled = page::compile(&scene, None).expect("the ant example compiles");
+    assert!(compiled.modules > 0);
+    let root_bytes = root.to_string_lossy().into_owned();
     assert!(
-        names
-            .iter()
-            .any(|n| n.starts_with("play/kernels/") && n.ends_with(".ent")),
-        "{names:?}"
+        !compiled
+            .bundle
+            .windows(root_bytes.len())
+            .any(|w| w == root_bytes.as_bytes()),
+        "no host path in the bundle"
     );
-    for name in &names {
-        assert!(
-            name.starts_with("play/") || name.starts_with("packages/"),
-            "{name}"
-        );
-        assert!(!name.contains("..") && !name.starts_with('/'), "{name}");
-    }
-    let (_, text) = gathered
-        .files
-        .iter()
-        .find(|(name, _)| name == "play/scene.esn")
-        .expect("the scene");
-    assert_eq!(text, &std::fs::read(&scene).expect("the scene on disk"));
+    let decoded = Bundle::decode(&compiled.bundle).expect("bundle decodes");
+    assert_eq!(decoded.modules.len(), compiled.modules);
+    assert_eq!(decoded.inputs.len(), compiled.inputs);
 }
 
 /// A scene that does not load is refused with why, not packed.
 #[test]
 fn a_scene_that_does_not_load_is_refused() {
     let missing = repository().join("examples/ant/no-such-scene.esn");
-    assert!(page::gather(&missing).is_err());
-}
-
-/// The files are packed as the template says: a count, then for each a
-/// path's length, the path, the bytes' length, the bytes.
-#[test]
-fn files_are_packed_one_after_another() {
-    let files = vec![
-        ("play/a.esn".to_string(), b"abc".to_vec()),
-        ("play/b".to_string(), Vec::new()),
-    ];
-    let packed = page::archive(&files);
-    let word =
-        |at: usize| u32::from_le_bytes(packed[at..at + 4].try_into().expect("four bytes")) as usize;
-    assert_eq!(word(0), 2);
-    assert_eq!(word(4), 10);
-    assert_eq!(&packed[8..18], b"play/a.esn");
-    assert_eq!(word(18), 3);
-    assert_eq!(&packed[22..25], b"abc");
-    assert_eq!(word(25), 6);
-    assert_eq!(&packed[29..35], b"play/b");
-    assert_eq!(word(35), 0);
-    assert_eq!(packed.len(), 39);
+    assert!(page::compile(&missing, None).is_err());
 }
 
 /// An include is the file beside the template (a pack the same, packed), a
-/// slot is the exporter's;
-/// text put inside a script cannot end the script.
+/// slot is the exporter's; text put inside a script cannot end the script.
 #[test]
 fn a_template_is_filled() {
     let dir = std::env::temp_dir().join(format!("entelechy-page-{}", std::process::id()));
@@ -123,9 +88,9 @@ fn a_template_is_filled() {
 }
 
 /// Without Entelechy for the web where `--web` says, the error names what
-/// was looked for and where.
+/// was looked for and where; `--backend cpu` is refused for a page.
 #[test]
-fn a_page_needs_entelechy_for_the_web() {
+fn a_page_needs_entelechy_for_the_web_and_a_page_backend() {
     let scene = repository().join("examples/ant/scene.esn");
     let nowhere = std::env::temp_dir().join("entelechy-no-web-here");
     let why = page::page(&scene, &nowhere, None, None)
@@ -135,36 +100,56 @@ fn a_page_needs_entelechy_for_the_web() {
         why.contains("single.html") && why.contains("--web"),
         "{why}"
     );
+    let cpu = page::page(&scene, &nowhere, Some("cpu"), None)
+        .err()
+        .expect("cpu refused");
+    assert!(cpu.contains("gpu or jit"), "{cpu}");
 }
 
-/// A font the page carries keeps the characters named and no others; a
-/// file that is not a font is left as it is.
+/// A scene's `font` node baked with `--chars` keeps only the characters
+/// named (plus the missing-character row at -1).
 #[test]
-fn a_font_is_carried_with_the_characters_named() {
+fn a_font_node_is_baked_with_the_characters_named() {
     use entelechy_import::font::{read, sample};
+    let dir = std::env::temp_dir().join(format!("entelechy-page-font-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
     let whole = sample::latin();
-    let (all, _) = read(&whole, None).expect("the sample font");
-    let codes = |fields: &entelechy_import::font::Fields| -> Vec<u32> {
-        fields
-            .glyphs
-            .values()
-            .chunks_exact(8)
-            .map(|row| row[0])
-            // (The first row, of code -1, is the glyph for a character the font lacks.)
-            .filter(|&code| code as i32 >= 0)
-            .collect()
-    };
-    let mapped = codes(&all);
-    assert!(mapped.len() > 1, "the sample maps more than one character");
-    let one = char::from_u32(mapped[0]).expect("a character").to_string();
-    let kept = page::font_of("play/fonts/sample.ttf", &whole, &one)
-        .expect("read and written")
-        .expect("a font");
-    let (few, _) = read(&kept, None).expect("what was carried is a font");
-    assert_eq!(codes(&few), vec![mapped[0]]);
-    assert!(
-        page::font_of("play/words.txt", b"A", "A")
-            .expect("not a font")
-            .is_none()
-    );
+    let (all, _) = read(&whole, None).unwrap();
+    let mapped: Vec<u32> = all
+        .glyphs
+        .values()
+        .chunks_exact(8)
+        .map(|row| row[0])
+        .filter(|&code| code as i32 >= 0)
+        .collect();
+    assert!(mapped.len() > 1);
+    let one = char::from_u32(mapped[0]).unwrap().to_string();
+
+    std::fs::write(dir.join("sample.ttf"), &whole).unwrap();
+    std::fs::write(
+        dir.join("scene.esn"),
+        "struct Letterform { code: Int; advance: Int; first: Int; count: Int; lo: Vec2; hi: Vec2; }\n\
+         kernel f.codes@1 { requires { field.write; } output result: Rows<Int>; compute { return 73; } }\n\
+         kernel f.show@1 { requires { field.read; field.write; } input glyphs: Rows<Letterform>; output result: Rows<Int>; compute { return at(glyphs, 0).code; } }\n\
+         node codes: f.codes@1 { domain = 1; }\n\
+         node face: font \"sample.ttf\" { codes <- codes.result; }\n\
+         node show: f.show@1 { glyphs <- face.glyphs; domain = 1; }\n\
+         output result <- show.result;\n",
+    )
+    .unwrap();
+
+    let compiled = page::compile(&dir.join("scene.esn"), Some(&one)).expect("compiled");
+    assert_eq!(compiled.fonts.len(), 1);
+    let decoded = Bundle::decode(&compiled.bundle).expect("bundle decodes");
+    assert_eq!(decoded.fonts.len(), 1);
+    let kept: Vec<u32> = decoded.fonts[0]
+        .glyphs
+        .values()
+        .chunks_exact(8)
+        .map(|row| row[0])
+        .filter(|&code| code as i32 >= 0)
+        .collect();
+    assert_eq!(kept, vec![mapped[0]]);
+    let _ = std::fs::remove_dir_all(&dir);
 }

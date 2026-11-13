@@ -5,14 +5,14 @@
 //! play.
 
 use std::ffi::{CString, c_char, c_int};
+#[cfg(feature = "full")]
 use std::path::Path;
 
 use entelechy_session::play::{Frame, PadAxis, PadButton, PointerLook, View, hud};
 
-use crate::{
-    EntelechyField, EntelechyFiles, EntelechySession, OPEN_ERROR, Opening, c_string, clock, enter,
-    guarded, opened, text,
-};
+use crate::{EntelechyField, EntelechySession, c_string, clock, enter, guarded, text};
+#[cfg(feature = "full")]
+use crate::{EntelechyFiles, OPEN_ERROR, Opening, opened};
 
 /// A pad button by its name in the header.
 fn pad_button(name: &str) -> Option<PadButton> {
@@ -55,6 +55,7 @@ fn pad_axis(name: &str) -> Option<PadAxis> {
 /// # Safety
 /// `files` is a pointer `entelechy_files` returned, not freed yet; `replay`
 /// and `backend` are NULL or NUL-terminated strings.
+#[cfg(feature = "full")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn entelechy_open_replay(
     files: *mut EntelechyFiles,
@@ -233,9 +234,11 @@ pub unsafe extern "C" fn entelechy_play_frame(
         match s.play.frame(&mut s.session, view) {
             Frame::Wait => 1,
             Frame::Shown(shown) => {
-                s.report = c_string(
-                    &entelechy_protocol::report_json(&s.session, &shown.report).to_string(),
-                );
+                #[cfg(feature = "full")]
+                {
+                    *s.report.borrow_mut() = CString::default();
+                    s.last_report = Some(shown.report.clone());
+                }
                 s.shown = Some((shown.picture, shown.sound));
                 if let Some(look) = s.play.pointer_look(&mut s.session, &shown.report) {
                     s.pointer_look = Some(look);
@@ -516,8 +519,8 @@ pub unsafe extern "C" fn entelechy_play_turn(session: *mut EntelechySession) -> 
     let Some(mut s) = (unsafe { enter(session) }) else {
         return -1;
     };
-    for event in s.session.sync_a_turn() {
-        s.play.say(event.to_string());
+    for line in s.session.sync_turn_lines() {
+        s.play.say(line);
     }
     c_int::try_from(s.session.preparing_left()).unwrap_or(c_int::MAX)
 }

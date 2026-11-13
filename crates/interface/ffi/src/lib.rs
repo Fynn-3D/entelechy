@@ -13,9 +13,12 @@ use std::cell::{Cell, RefCell, UnsafeCell};
 use std::ffi::{CStr, CString, c_char, c_int};
 use std::ops::{Deref, DerefMut};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+#[cfg(feature = "full")]
 use std::path::Path;
 
-use entelechy_abi::{Context, Handle, InputState, Shape};
+use entelechy_abi::Handle;
+#[cfg(feature = "full")]
+use entelechy_abi::{Context, InputState, Shape};
 use entelechy_session::Session;
 
 /// The version of the header's contract, `ENTELECHY_ABI_VERSION`.
@@ -129,12 +132,17 @@ unsafe fn enter<'a>(session: *const EntelechySession) -> Option<Entered<'a>> {
 struct Held {
     session: Session,
     error: CString,
-    report: CString,
+    #[cfg(feature = "full")]
+    report: RefCell<CString>,
+    #[cfg(feature = "full")]
+    last_report: Option<entelechy_graph::Report>,
+    #[cfg(feature = "full")]
     response: CString,
     schema: CString,
     /// Each narrow Field read since the last evaluate or request, its
     /// words widened to the header's 32-bit words; each stays until then,
     /// as a wide Field's words in place do.
+    #[cfg(feature = "full")]
     widened: std::collections::BTreeMap<Handle, Vec<u32>>,
     /// The GPU device as a canvas reaches it, on a GPU backend.
     #[cfg_attr(
@@ -205,12 +213,14 @@ unsafe fn text<'a>(pointer: *const c_char) -> Option<&'a str> {
 
 impl Held {
     /// A graph output's Field, `name` `None` for the first.
+    #[cfg(feature = "full")]
     fn output(&self, name: Option<&str>) -> Result<Handle, String> {
         self.session.output(name)
     }
 
     /// Presents an output on the canvas `canvas`; true when drawn, which
     /// needs a picture the GPU holds as float pixels.
+    #[cfg(feature = "full")]
     fn present(&mut self, canvas: &str, name: Option<&str>) -> Result<bool, String> {
         let handle = self.output(name)?;
         Ok(self.present_on(canvas, handle, None)?.is_some())
@@ -310,6 +320,7 @@ impl Held {
     }
 
     /// The words of a materialized Field and the layout around them.
+    #[cfg(feature = "full")]
     fn field(&mut self, handle: Handle, field: &mut EntelechyField) -> Result<(), String> {
         let data = self
             .session
@@ -374,6 +385,7 @@ pub extern "C" fn entelechy_version() -> *const c_char {
 ///
 /// # Safety
 /// `scene`, `backend` and `library` are NULL or NUL-terminated strings.
+#[cfg(feature = "full")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn entelechy_open(
     scene: *const c_char,
@@ -433,10 +445,101 @@ fn waiting() -> entelechy_session::Wait {
     }
 }
 
+fn new_session(
+    session: Session,
+    display: Option<entelechy_gpu::present::Display>,
+    play: entelechy_session::play::Play,
+) -> *mut EntelechySession {
+    Box::into_raw(Box::new(EntelechySession {
+        inside: Cell::new(false),
+        held: UnsafeCell::new(Held {
+            session,
+            error: CString::default(),
+            #[cfg(feature = "full")]
+            report: RefCell::new(CString::default()),
+            #[cfg(feature = "full")]
+            last_report: None,
+            #[cfg(feature = "full")]
+            response: CString::default(),
+            schema: CString::default(),
+            #[cfg(feature = "full")]
+            widened: std::collections::BTreeMap::new(),
+            display,
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            presenter: None,
+            play,
+            shown: None,
+            said: CString::default(),
+            pixels: Vec::new(),
+            picture: (Vec::new(), (0, 0)),
+            sound: Vec::new(),
+            pointer_look: None,
+            pointer_rgba: Vec::new(),
+            queued: 0,
+        }),
+    }))
+}
+
+/// Opens a compiled binary scene bundle (`Bundle::encode`) on `backend`
+/// ("gpu", "jit", or "best"; NULL for "best"); NULL with
+/// `entelechy_open_error` set on failure.
+///
+/// # Safety
+/// `data` points to `len` bytes (or may be NULL when `len` is 0); `backend`
+/// is NULL or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_open_bundle(
+    data: *const u8,
+    len: usize,
+    backend: *const c_char,
+) -> *mut EntelechySession {
+    if cfg!(all(target_arch = "wasm32", target_os = "unknown")) {
+        entelechy_kernel::clock::give(clock);
+    }
+    let set_error = |message: String| {
+        OPEN_ERROR.with(|slot| *slot.borrow_mut() = c_string(&message));
+        std::ptr::null_mut()
+    };
+    if data.is_null() && len > 0 {
+        return set_error("entelechy_open_bundle needs bundle bytes".to_owned());
+    }
+    let bytes = if len == 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(data, len) }
+    };
+    let backend = unsafe { text(backend) }.unwrap_or("best");
+    let turns = cfg!(all(target_arch = "wasm32", target_os = "unknown"));
+    let made = catch_unwind(AssertUnwindSafe(|| {
+        let bundle = entelechy_session::bundle::Bundle::decode(bytes)?;
+        let loaded = Session::open_bundle(
+            bundle,
+            backend,
+            entelechy_session::Limits::default(),
+            waiting(),
+            turns,
+        )?;
+        let mut play = entelechy_session::play::Play::new(clock);
+        for passed in loaded.passed_over {
+            play.say(format!("backend passed over: {passed}"));
+        }
+        for line in loaded.said {
+            play.say(line);
+        }
+        Ok::<_, String>((loaded.session, loaded.display, play))
+    }));
+    match made {
+        Ok(Ok((session, display, play))) => new_session(session, display, play),
+        Ok(Err(message)) => set_error(message),
+        Err(_) => set_error("a panic inside Entelechy while opening".to_owned()),
+    }
+}
+
 /// Opens a scene over `store`, the disk when `None`.
 ///
 /// # Safety
 /// As `entelechy_open`.
+#[cfg(feature = "full")]
 unsafe fn open(
     store: Option<std::sync::Arc<dyn entelechy_session::Store>>,
     scene: *const c_char,
@@ -457,12 +560,14 @@ unsafe fn open(
 
 /// What a session opens on: a scene and a library, or a replay that names
 /// both and is played.
+#[cfg(feature = "full")]
 enum Opening<'a> {
     Scene(&'a Path, Option<&'a Path>),
     Replay(&'a Path),
 }
 
 /// Opens a session; NULL with `entelechy_open_error` set on failure.
+#[cfg(feature = "full")]
 fn opened(
     store: Option<std::sync::Arc<dyn entelechy_session::Store>>,
     opening: Opening<'_>,
@@ -531,29 +636,7 @@ fn opened(
         Ok((session, display, play))
     }));
     match made {
-        Ok(Ok((session, display, play))) => Box::into_raw(Box::new(EntelechySession {
-            inside: Cell::new(false),
-            held: UnsafeCell::new(Held {
-                session,
-                error: CString::default(),
-                report: CString::default(),
-                response: CString::default(),
-                schema: CString::default(),
-                widened: std::collections::BTreeMap::new(),
-                display,
-                #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-                presenter: None,
-                play,
-                shown: None,
-                said: CString::default(),
-                pixels: Vec::new(),
-                picture: (Vec::new(), (0, 0)),
-                sound: Vec::new(),
-                pointer_look: None,
-                pointer_rgba: Vec::new(),
-                queued: 0,
-            }),
-        })),
+        Ok(Ok((session, display, play))) => new_session(session, display, play),
         Ok(Err(message)) => set_error(message),
         Err(_) => set_error("a panic inside Entelechy while opening".to_owned()),
     }
@@ -561,12 +644,14 @@ fn opened(
 
 /// An in-memory file store a session opened on it reads instead of a disk.
 /// Files put after opening are read on the session's next evaluate.
+#[cfg(feature = "full")]
 pub struct EntelechyFiles {
     files: std::sync::Arc<entelechy_session::Memory>,
 }
 
 /// A new, empty set of files. In a page, a file put elsewhere
 /// ([`entelechy_files_put_elsewhere`]) is read through `entelechy.fetch`.
+#[cfg(feature = "full")]
 #[unsafe(no_mangle)]
 pub extern "C" fn entelechy_files() -> *mut EntelechyFiles {
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
@@ -582,7 +667,7 @@ pub extern "C" fn entelechy_files() -> *mut EntelechyFiles {
 // In a page, a file kept by the page: `entelechy.fetch` copies up to
 // `bytes` of its bytes from byte `from` on to `out` and answers how many,
 // or -1.
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(feature = "full", target_arch = "wasm32", target_os = "unknown"))]
 #[link(wasm_import_module = "entelechy")]
 unsafe extern "C" {
     fn fetch(path: *const u8, path_len: usize, from: usize, out: *mut u8, bytes: usize) -> isize;
@@ -593,7 +678,7 @@ unsafe extern "C" {
 // on its way, -1 when it could not be read, else its length;
 // `fetch_copy` copies up to `bytes` of it from byte `from` on to `out` and
 // answers how many; `fetch_end` lets it go.
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(feature = "full", target_arch = "wasm32", target_os = "unknown"))]
 #[link(wasm_import_module = "entelechy")]
 unsafe extern "C" {
     fn fetch_start(path: *const u8, path_len: usize) -> u32;
@@ -603,18 +688,18 @@ unsafe extern "C" {
 }
 
 /// A file the page keeps, on its way ([`entelechy_session::Later`]).
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(feature = "full", target_arch = "wasm32", target_os = "unknown"))]
 struct PageLater(Option<u32>);
 
 /// A file the page keeps, in, held by the page until let go
 /// ([`entelechy_session::Arrived`]).
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(feature = "full", target_arch = "wasm32", target_os = "unknown"))]
 struct PageArrived {
     ticket: u32,
     len: usize,
 }
 
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(feature = "full", target_arch = "wasm32", target_os = "unknown"))]
 impl entelechy_session::Later for PageLater {
     fn poll(&mut self) -> Option<std::io::Result<Box<dyn entelechy_session::Arrived>>> {
         let ticket = self.0?;
@@ -634,7 +719,7 @@ impl entelechy_session::Later for PageLater {
     }
 }
 
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(feature = "full", target_arch = "wasm32", target_os = "unknown"))]
 impl Drop for PageLater {
     fn drop(&mut self) {
         if let Some(ticket) = self.0 {
@@ -643,7 +728,7 @@ impl Drop for PageLater {
     }
 }
 
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(feature = "full", target_arch = "wasm32", target_os = "unknown"))]
 impl entelechy_session::Arrived for PageArrived {
     fn len(&self) -> usize {
         self.len
@@ -665,7 +750,7 @@ impl entelechy_session::Arrived for PageArrived {
     }
 }
 
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(feature = "full", target_arch = "wasm32", target_os = "unknown"))]
 impl Drop for PageArrived {
     fn drop(&mut self) {
         unsafe { fetch_end(self.ticket) };
@@ -674,7 +759,7 @@ impl Drop for PageArrived {
 
 /// A file the page keeps, asked for off the frames
 /// ([`entelechy_session::FetchLaterFn`]).
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(feature = "full", target_arch = "wasm32", target_os = "unknown"))]
 fn page_fetch_later(path: &Path) -> Box<dyn entelechy_session::Later> {
     let name = path.to_string_lossy();
     Box::new(PageLater(Some(unsafe {
@@ -684,7 +769,7 @@ fn page_fetch_later(path: &Path) -> Box<dyn entelechy_session::Later> {
 
 /// A file the page keeps, from byte `from` on into `out`
 /// ([`entelechy_session::FetchFn`]).
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(feature = "full", target_arch = "wasm32", target_os = "unknown"))]
 fn page_fetch(path: &Path, from: usize, out: &mut [u8]) -> std::io::Result<usize> {
     let name = path.to_string_lossy();
     let got = unsafe { fetch(name.as_ptr(), name.len(), from, out.as_mut_ptr(), out.len()) };
@@ -703,6 +788,7 @@ fn page_fetch(path: &Path, from: usize, out: &mut [u8]) -> std::io::Result<usize
 /// # Safety
 /// `files` is a pointer `entelechy_files` returned, not freed yet; `path` is a
 /// NUL-terminated string.
+#[cfg(feature = "full")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn entelechy_files_put_elsewhere(
     files: *mut EntelechyFiles,
@@ -722,6 +808,7 @@ pub unsafe extern "C" fn entelechy_files_put_elsewhere(
 /// `files` is a pointer `entelechy_files` returned, not freed yet; `path` is a
 /// NUL-terminated string; `data` is NULL when `len` is 0, or points to
 /// `len` bytes.
+#[cfg(feature = "full")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn entelechy_files_put(
     files: *mut EntelechyFiles,
@@ -746,6 +833,7 @@ pub unsafe extern "C" fn entelechy_files_put(
 ///
 /// # Safety
 /// `files` is NULL or a pointer `entelechy_files` returned, not freed yet.
+#[cfg(feature = "full")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn entelechy_files_free(files: *mut EntelechyFiles) {
     if !files.is_null() {
@@ -759,6 +847,7 @@ pub unsafe extern "C" fn entelechy_files_free(files: *mut EntelechyFiles) {
 /// # Safety
 /// `files` is a pointer `entelechy_files` returned, not freed yet; `scene`
 /// and `backend` are NULL or NUL-terminated strings.
+#[cfg(feature = "full")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn entelechy_open_files(
     files: *mut EntelechyFiles,
@@ -833,6 +922,7 @@ pub unsafe extern "C" fn entelechy_error(session: *const EntelechySession) -> *c
 ///
 /// # Safety
 /// `session` is a live session; `input` is NULL or points to an `EntelechyInput`.
+#[cfg(feature = "full")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn entelechy_evaluate(
     session: *mut EntelechySession,
@@ -874,8 +964,8 @@ pub unsafe extern "C" fn entelechy_evaluate(
         };
         match s.session.evaluate(&context) {
             Ok(report) => {
-                s.report =
-                    c_string(&entelechy_protocol::report_json(&s.session, &report).to_string());
+                *s.report.borrow_mut() = CString::default();
+                s.last_report = Some(report);
                 0
             }
             Err(error) => s.fail(error.to_string()),
@@ -887,10 +977,20 @@ pub unsafe extern "C" fn entelechy_evaluate(
 ///
 /// # Safety
 /// `session` is NULL or a live session.
+#[cfg(feature = "full")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn entelechy_report(session: *const EntelechySession) -> *const c_char {
     match unsafe { enter(session) } {
-        Some(session) => session.report.as_ptr(),
+        Some(session) => {
+            if session.report.borrow().as_bytes().is_empty()
+                && let Some(report) = &session.last_report
+            {
+                *session.report.borrow_mut() = c_string(
+                    &entelechy_protocol::report_json(&session.session, report).to_string(),
+                );
+            }
+            session.report.borrow().as_ptr()
+        }
         None => EMPTY.as_ptr(),
     }
 }
@@ -900,6 +1000,7 @@ pub unsafe extern "C" fn entelechy_report(session: *const EntelechySession) -> *
 /// # Safety
 /// `session` is a live session; `name` is NULL or a string; `field` points
 /// to an `EntelechyField` to fill.
+#[cfg(feature = "full")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn entelechy_output(
     session: *mut EntelechySession,
@@ -931,6 +1032,7 @@ pub unsafe extern "C" fn entelechy_output(
 ///
 /// # Safety
 /// `session` is a live session; `canvas` is a string, `output` NULL or one.
+#[cfg(feature = "full")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn entelechy_present(
     session: *mut EntelechySession,
@@ -957,6 +1059,7 @@ pub unsafe extern "C" fn entelechy_present(
 /// # Safety
 /// `session` is a live session; `node` is a string, `port` NULL or one;
 /// `field` points to an `EntelechyField` to fill.
+#[cfg(feature = "full")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn entelechy_node(
     session: *mut EntelechySession,
@@ -996,6 +1099,7 @@ pub unsafe extern "C" fn entelechy_node(
 ///
 /// # Safety
 /// `session` is a live session; `allowance` is a NUL-terminated string.
+#[cfg(feature = "full")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn entelechy_allow(
     session: *mut EntelechySession,
@@ -1018,6 +1122,7 @@ pub unsafe extern "C" fn entelechy_allow(
 ///
 /// # Safety
 /// `session` is a live session; `line` is a NUL-terminated string.
+#[cfg(feature = "full")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn entelechy_request(
     session: *mut EntelechySession,
@@ -1047,8 +1152,21 @@ pub unsafe extern "C" fn entelechy_request(
 mod tests {
     use super::*;
 
+    /// Corrupt bundle bytes are refused without panic and leave their
+    /// reason in `entelechy_open_error`.
+    #[test]
+    fn corrupt_bundle_is_refused() {
+        let bad = b"not a bundle";
+        let jit = CString::new("jit").unwrap();
+        let session = unsafe { entelechy_open_bundle(bad.as_ptr(), bad.len(), jit.as_ptr()) };
+        assert!(session.is_null());
+        let why = unsafe { CStr::from_ptr(entelechy_open_error()) }.to_string_lossy();
+        assert!(!why.is_empty());
+    }
+
     /// A call made while another is inside is refused as a NULL session's
     /// is, and the session serves again once the first leaves.
+    #[cfg(feature = "full")]
     #[test]
     fn a_call_while_another_is_inside_is_refused() {
         let dir = std::env::temp_dir().join(format!("entelechy-ffi-inside-{}", std::process::id()));
@@ -1082,6 +1200,7 @@ mod tests {
 
     /// A narrow Field's widened words stay until the next evaluate, as
     /// the header says, however many other Fields are read meanwhile.
+    #[cfg(feature = "full")]
     #[test]
     fn widened_words_outlive_other_reads() {
         let dir =

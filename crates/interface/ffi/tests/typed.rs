@@ -1,6 +1,8 @@
 //! Characters typed, handed over the C ABI: a scene reads them with
 //! `typed()` on the frame after, as it does in the Player.
 
+#![cfg(feature = "full")]
+
 use std::ffi::{CStr, CString};
 
 use entelechy_ffi::EntelechyField;

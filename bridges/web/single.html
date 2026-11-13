@@ -19,32 +19,25 @@
   #loading.failed .what { color: #e5484d; max-width: 80vw; text-align: center; }
 </style>
 </head>
-<body>
+<body data-backend="@@slot:backend@@">
 <!--
-A scene exported whole: this one file is the Player in a page, Entelechy
-itself, and every file the scene reads. `entelechy export <scene.esn> --out
-<page>.html` fills this template (bridges/web/single.html): a `pack` is
-a file beside the template, packed; a `slot` is what the exporter made.
-Nothing is fetched; it opens from the disk.
+A scene exported whole: this one file is the Player in a page, Entelechy's
+bundle runtime (`entelechy_single`), and the scene's compiled binary bundle
+(validated IR modules, lowered Graph, baked Field inputs and font atlases).
+`entelechy export <scene.esn> --out <page>.html` fills this template
+(bridges/web/single.html). Nothing is fetched; it opens from the disk.
 
 Everything large is a zlib stream in UTF-8 base122, which the browser
-inflates: the packed files (the page's own scripts), and the slots `glue`
-(what `wasm-bindgen` wrote), `runtime` (Entelechy built for a page) and
-`files` (the scene's files one after another: a count; then for each a
-path's length, the path, the bytes' length, the bytes; lengths
-little-endian in four bytes). `play` says which file is the scene and what
-runs it.
+inflates: `single.js` (the page's player), `glue` (what `wasm-bindgen`
+wrote), `runtime` (`entelechy_single_bg.wasm`) and `bundle` (`Bundle::encode`).
 -->
 <canvas id="view" tabindex="0"></canvas>
 <canvas id="shown"></canvas>
 <div id="loading"><div class="name">@@slot:title@@</div><div class="bar"><i></i></div><div class="what">unpacking</div></div>
-<script type="text/plain" id="entelechy">@@pack:entelechy.js@@</script>
-<script type="text/plain" id="player">@@pack:player.js@@</script>
-<script type="text/plain" id="host">@@pack:entelechy-host.mjs@@</script>
+<script type="text/plain" id="player">@@pack:single.js@@</script>
 <script type="text/plain" id="glue">@@slot:glue@@</script>
 <script type="text/plain" id="runtime">@@slot:runtime@@</script>
-<script type="text/plain" id="files">@@slot:files@@</script>
-<script type="application/json" id="play">@@slot:play@@</script>
+<script type="text/plain" id="bundle">@@slot:bundle@@</script>
 <script>
 (async () => {
   const text = (id) => document.getElementById(id).textContent;
@@ -69,83 +62,44 @@ runs it.
     }
     return out.subarray(0, n);
   };
-  // A zlib stream in UTF-8 base122, inflated by the browser.
   const inflated = async (id) => {
     const packed = unpack(text(id));
     const stream = new Blob([packed]).stream().pipeThrough(new DecompressionStream("deflate"));
     return new Uint8Array(await new Response(stream).arrayBuffer());
   };
-  // The page while it loads: how far along (0 to 1) and what is being
-  // done, shown before the work begins (a frame is waited for).
   const loading = document.getElementById("loading");
   const told = (part, what) => {
     loading.querySelector("i").style.width = `${Math.round(part * 100)}%`;
     loading.querySelector(".what").textContent = what;
     return new Promise((shown) => requestAnimationFrame(() => setTimeout(shown, 0)));
   };
-  const module = (source) => URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
   const words = async (id) => new TextDecoder().decode(await inflated(id));
-  // A script of the page's own, run as one written in the page is.
-  const run = (source) => {
-    const script = document.createElement("script");
-    script.textContent = source;
-    document.head.appendChild(script);
-  };
   try {
     await told(0.05, "unpacking");
-    run(await words("entelechy"));
-    run(await words("player"));
-    const [wasm, packed, glue, host] = await Promise.all([inflated("runtime"), inflated("files"), words("glue"), words("host")]);
-    const view = new DataView(packed.buffer, packed.byteOffset, packed.byteLength);
-    const decoder = new TextDecoder();
-    const files = [];
-    let at = 4;
-    for (let k = view.getUint32(0, true); k > 0; k--) {
-      const named = view.getUint32(at, true);
-      const path = decoder.decode(packed.subarray(at + 4, at + 4 + named));
-      at += 4 + named;
-      const long = view.getUint32(at, true);
-      files.push([path, packed.subarray(at + 4, at + 4 + long)]);
-      at += 4 + long;
-    }
-    const play = JSON.parse(text("play"));
-    // (Entelechy is loaded once a page, by its glue's address: started here,
-    // it is the one the Player then opens the scene in.)
-    const glued = module(glue);
-    const hosted = module(host);
-    await told(0.2, "starting Entelechy");
-    await Entelechy.EntelechyInPage.load(glued, hosted, wasm);
-    await told(0.4, "reading the scene");
-    const player = await EntelechyPlayer.open({
-      glue: glued,
-      host: hosted,
+    const [playerSource, wasm, bundle, glue] = await Promise.all([
+      words("player"),
+      inflated("runtime"),
+      inflated("bundle"),
+      words("glue"),
+    ]);
+    const script = document.createElement("script");
+    script.textContent = playerSource;
+    document.head.appendChild(script);
+    const player = await globalThis.EntelechySingle.start({
+      glue,
       wasm,
-      files,
-      scene: play.scene,
-      backend: play.backend,
+      bundle,
+      backend: document.body.dataset.backend,
       canvas: document.getElementById("view"),
       shown: document.getElementById("shown"),
+      told,
     });
     globalThis.player = player;
-    player.say();
     document.getElementById("view").focus();
+    told(1, "");
+    loading.classList.add("done");
+    setTimeout(() => loading.remove(), 500);
     player.run();
-    // The scene's Kernels prepare a few a frame, and its frames wait for
-    // them: the page says how many are done, then gives way to the picture.
-    let most = 0;
-    const watch = () => {
-      const left = player.x.entelechy_play_preparing(player.session);
-      most = Math.max(most, left);
-      if (left > 0) {
-        told(0.45 + 0.55 * (1 - left / most), `preparing ${most - left} of ${most}`);
-        requestAnimationFrame(watch);
-      } else {
-        told(1, "");
-        loading.classList.add("done");
-        setTimeout(() => loading.remove(), 500);
-      }
-    };
-    requestAnimationFrame(watch);
   } catch (error) {
     document.title = `Entelechy: ${error.message}`;
     loading.classList.add("failed");

@@ -16,7 +16,7 @@ usage:
               [--filter linear|nearest] [--joints <name>,<name>,...]
               [--double-sided] [--name <family>]
               [--chars <text> | --chars-file <file>]
-              [--web <dir>] [--backend gpu|jit|cpu]
+              [--web <dir>] [--backend gpu|jit]
       To .glb: a vertices .field (rows of position, normal, uv, and a
       tangent where a normal map is read along one), a triangles .field
       (rows of three ints), and PNGs: the base color, a normal map named
@@ -41,16 +41,17 @@ usage:
       family, the file's stem by default; --chars (or --chars-file, a UTF-8
       file) keeps those characters alone.
       To .html: a scene (.esn) as one page that plays it, opened from the
-      disk with nothing beside it: the Player in a page, Entelechy built for
-      a page, and every file the scene reads as it loads, packed into the
-      one file. --web is where Entelechy for the web is (the directory
-      holding bridges/web and target/page: a web release, or a checkout
-      that has built it; the current directory by default). --backend
-      names what runs it in the page; without it the page chooses as the
-      Player does. --chars and --chars-file (each may be given again) name
-      the characters the page's fonts keep: a font the scene reads is
-      carried with those alone, so a page that writes a few words does not
-      carry a whole font; a character not among them is then not drawn.";
+      disk with nothing beside it: the Player in a page, Entelechy's bundle
+      runtime, and the scene compiled into one binary bundle (its validated
+      IR modules, lowered Graph, baked Field inputs and font atlases). --web
+      is where Entelechy for the web is (the directory holding bridges/web
+      and target/page: a web release, or a checkout that has built it; the
+      current directory by default). --backend names what runs it in the
+      page (gpu or jit); without it the page chooses the GPU where WebGPU
+      opens, else the JIT. --chars and --chars-file (each may be given
+      again) name the characters the page's font nodes keep, so a page that
+      writes a few words does not carry a whole font; a character not among
+      them is then not drawn.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -185,11 +186,12 @@ fn export(args: &[String]) -> Result<String, String> {
             )?;
             std::fs::write(&out, &made.page).map_err(|e| format!("{}: {e}", out.display()))?;
             let mut said = format!(
-                "{}: {} bytes ({} file(s) of {} bytes, Entelechy for a page {} bytes)",
+                "{}: {} bytes ({} Kernel(s), {} input(s), bundle {} bytes, Entelechy for a page {} bytes)",
                 out.display(),
                 made.page.len(),
-                made.files,
-                made.files_bytes,
+                made.modules,
+                made.inputs,
+                made.bundle_bytes,
                 made.runtime_bytes
             );
             for (name, read, kept) in &made.fonts {

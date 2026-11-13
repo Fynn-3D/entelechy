@@ -288,20 +288,20 @@ read is written back bit for bit, but a font: its segments come back as
 curves through their ends, within a font unit.
 
 A scene (`.esn`) is exported as one page, `--out <name>.html`: a single
-file that is the Player in a page, Entelechy built for a page, and every
-file the scene reads as it loads. It opens from the disk with nothing
-beside it and fetches nothing. `--web` names where Entelechy for the web
-is (the directory holding `bridges/web` and `target/page`: a web release,
-or a checkout that has built it as [WebAssembly](#webassembly) says; the
-current directory by default), and `--backend` what runs the scene in
-the page (the page chooses as the Player does when none is named). The
-page needs what Entelechy in a page needs: a browser with WebGPU for the
-GPU backend. A file the scene only reads later, by a name it computes,
-is not in the page. `--chars` and `--chars-file` (each may be given
-again) name the characters the page's fonts keep: a font the scene reads
-is carried with those alone, as `entelechy import` and `entelechy export
---chars` would make it, so a page that writes a few words does not carry
-a whole font; a character not among them is then not drawn.
+file that is the Player in a page, Entelechy's slim playback runtime for a
+page, and a compiled binary bundle of the scene's IR, lowered graph, input
+Fields and baked font atlases (with no host paths). It opens from the disk
+with nothing beside it and fetches nothing. `--web` names where Entelechy
+for the web is (the directory holding `bridges/web` and `target/page`: a web
+release, or a checkout that has built it as [WebAssembly](#webassembly) says;
+the current directory by default), and `--backend` (`gpu` or `jit`) what runs
+the scene in the page (by default the page chooses the GPU when WebGPU is
+available, else the JIT). The page needs a browser with WebGPU for the GPU
+backend, or runs on WebAssembly JIT alone. A file the scene only reads later,
+by a name it computes, is not in the page. `--chars` and `--chars-file` (each
+may be given again) name the characters the page's fonts keep: each font's
+atlas is baked with those alone, so a page that writes a few words does not
+carry a whole font; a character not among them is then not drawn.
 
 ## Creation protocol
 
@@ -356,12 +356,18 @@ cargo build --profile small -p entelechy-ffi --target wasm32-unknown-unknown
 wasm-bindgen --target web --keep-lld-exports --no-typescript \
   --remove-name-section --remove-producers-section --out-dir target/page \
   target/wasm32-unknown-unknown/small/entelechy_ffi.wasm
+cargo build --profile small -p entelechy-ffi --no-default-features --target wasm32-unknown-unknown
+wasm-bindgen --target web --keep-lld-exports --no-typescript \
+  --remove-name-section --remove-producers-section --out-name entelechy_single \
+  --out-dir target/page \
+  target/wasm32-unknown-unknown/small/entelechy_ffi.wasm
 node bridges/web/serve.mjs     # then http://127.0.0.1:7789/bridges/web/index.html
 ```
 
 The `small` profile builds Entelechy for a page small (for size, one unit
-linked whole, no unwinding, no names): a page downloads it, and a scene
-exported as one page carries it.
+linked whole, no unwinding, no names): a page downloads `entelechy_ffi`, and
+a scene exported as one page carries `entelechy_single` (the playback runtime
+without the compiler, documents or protocol).
 
 Under WASI, `entelechy` runs scenes on the interpreter and `serve`
 answers on stdin and stdout. In a page, Entelechy is the C ABI with

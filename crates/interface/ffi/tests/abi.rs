@@ -1,6 +1,8 @@
 //! The C ABI driven from Rust as a C caller would: open, evaluate, read
 //! a Field in place, a protocol request, a node's rows, the errors.
 
+#![cfg(feature = "full")]
+
 use std::ffi::{CStr, CString};
 use std::path::PathBuf;
 

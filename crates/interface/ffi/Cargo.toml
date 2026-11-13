@@ -12,9 +12,16 @@ doctest = false
 name = "entelechy_ffi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
+[features]
+# Document stores, `.ent`/`.esn` compilation, replays, and the JSON creation
+# protocol. Disabled for exported single-file HTML pages, which play a
+# compiled `Bundle` (`entelechy_open_bundle` and `entelechy_play_*`).
+default = ["full"]
+full = ["entelechy-session/documents", "dep:entelechy-protocol"]
+
 [dependencies]
-entelechy-session = { path = "../../interface/session" }
-entelechy-protocol = { path = "../../interface/protocol" }
+entelechy-session = { path = "../../interface/session", default-features = false }
+entelechy-protocol = { path = "../../interface/protocol", optional = true }
 entelechy-abi = { path = "../../core/abi" }
 entelechy-graph = { path = "../../core/graph" }
 entelechy-kernel = { path = "../../core/kernel" }

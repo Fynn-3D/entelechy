@@ -64,7 +64,7 @@ fn build_page_module() -> Result<PathBuf, String> {
     };
     let target = root().join("target/web");
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let built = Command::new(cargo)
+    let built = Command::new(&cargo)
         .current_dir(root())
         .args(["build", "--profile", "small", "-p", "entelechy-ffi"])
         .args(["--target", "wasm32-unknown-unknown", "--target-dir"])
@@ -77,7 +77,7 @@ fn build_page_module() -> Result<PathBuf, String> {
         String::from_utf8_lossy(&built.stderr)
     );
     let page = target.join("page");
-    let glued = Command::new(bindgen)
+    let glued = Command::new(&bindgen)
         .args(["--target", "web", "--keep-lld-exports", "--no-typescript"])
         .args(["--remove-name-section", "--remove-producers-section"])
         .arg("--out-dir")
@@ -89,6 +89,38 @@ fn build_page_module() -> Result<PathBuf, String> {
         glued.status.success(),
         "wasm-bindgen:\n{}",
         String::from_utf8_lossy(&glued.stderr)
+    );
+    let single = Command::new(&cargo)
+        .current_dir(root())
+        .args([
+            "build",
+            "--profile",
+            "small",
+            "-p",
+            "entelechy-ffi",
+            "--no-default-features",
+        ])
+        .args(["--target", "wasm32-unknown-unknown", "--target-dir"])
+        .arg(&target)
+        .output()
+        .expect("cargo runs");
+    assert!(
+        single.status.success(),
+        "entelechy-ffi slim bundle runtime does not build:\n{}",
+        String::from_utf8_lossy(&single.stderr)
+    );
+    let single_glued = Command::new(&bindgen)
+        .args(["--target", "web", "--keep-lld-exports", "--no-typescript"])
+        .args(["--remove-name-section", "--remove-producers-section"])
+        .args(["--out-name", "entelechy_single", "--out-dir"])
+        .arg(&page)
+        .arg(target.join("wasm32-unknown-unknown/small/entelechy_ffi.wasm"))
+        .output()
+        .expect("wasm-bindgen runs");
+    assert!(
+        single_glued.status.success(),
+        "wasm-bindgen single:\n{}",
+        String::from_utf8_lossy(&single_glued.stderr)
     );
     Ok(page.join("entelechy_ffi.js"))
 }
@@ -153,11 +185,11 @@ fn a_scene_exported_as_one_page_opens_from_the_disk() {
         web.join("target/page"),
     )
     .expect("a link to the page's build");
-    // (On the interpreter: a headless browser may have no GPU.)
+    // (On the JIT: a headless browser may have no GPU.)
     let made = entelechy_export::page::page(
         &root().join("examples/voxel/scene.esn"),
         &web,
-        Some("cpu"),
+        Some("jit"),
         None,
     )
     .expect("the voxel example exports");

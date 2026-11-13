@@ -118,6 +118,11 @@ void entelechy_files_free(EntelechyFiles *files);
 /* Opens `scene`, a path among `files`, on `backend` as entelechy_open does,
  * reading no disk. */
 EntelechySession *entelechy_open_files(EntelechyFiles *files, const char *scene, const char *backend);
+/* Opens a compiled binary scene bundle (`len` bytes at `data`, written by
+ * Bundle::encode) on `backend` ("gpu", "jit", or "best"; NULL for "best"),
+ * with no compiler or document store. NULL with entelechy_open_error() set on
+ * failure. */
+EntelechySession *entelechy_open_bundle(const uint8_t *data, size_t len, const char *backend);
 /* A scene played, as every interface that shows one plays it: the host
  * hands its person's keys, pointer, wheel and pads to the play, asks it
  * for a frame, shows the picture on its own device and plays the sound
