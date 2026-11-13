@@ -65,7 +65,7 @@ fn vs(@builtin(vertex_index) index: u32) -> Vertex {
 
 fn encode(c: vec3<f32>) -> vec4<f32> {
     if (frame.flags.x > 0.5) {
-        return vec4<f32>(pow(c, vec3<f32>(2.2)), 1.0);
+        return vec4<f32>(select(pow(max(c, vec3<f32>(1e-12)), vec3<f32>(2.2)), vec3<f32>(0.0), c <= vec3<f32>(0.0)), 1.0);
     }
     return vec4<f32>(c, 1.0);
 }
@@ -85,7 +85,9 @@ fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let h = u32(frame.sizes.w);
     let x = min(u32(p.x * frame.sizes.z / frame.place.z), w - 1u);
     let y = min(u32(p.y * frame.sizes.w / frame.place.w), h - 1u);
-    let c = clamp(image[y * w + x].rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+    let raw = image[y * w + x].rgb;
+    let nan = (bitcast<vec3<u32>>(raw) & vec3<u32>(0x7FFFFFFFu)) > vec3<u32>(0x7F800000u);
+    let c = clamp(select(raw, vec3<f32>(0.0), nan), vec3<f32>(0.0), vec3<f32>(1.0));
     return encode(c);
 }
 ";

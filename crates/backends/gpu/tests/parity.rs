@@ -3119,3 +3119,41 @@ fn a_group_exchanges_on_the_device_what_its_workgroup_holds() {
         words
     );
 }
+
+#[test]
+fn pow_and_choosing_builtins_match_on_negative_zero_and_nan_inputs() {
+    let Some(gpu) = gpu() else { return };
+    let cases = vec![
+        [-3.0, 2.0, -2.0, 3.0],
+        [-2.0, -3.0, -0.5, 2.2],
+        [0.0, 0.0, -0.0, 3.0],
+        [0.0, 2.2, -1.0, f32::INFINITY],
+        [1.0, f32::NAN, f32::NAN, 0.0],
+        [f32::NAN, 1.0, -f32::INFINITY, -3.0],
+    ];
+    let n = cases.len() as u32;
+    let source = "kernel test.pow_nan@1 {
+        requires { field.read; field.write; }
+        input source: Image;
+        output result: Image;
+        compute {
+            let c = at(source, coord());
+            let p = pow(vec2(c.r, c.b), vec2(c.g, c.a));
+            let held = clamp(vec3(p.x, p.y, c.r), 0.0, 1.0)
+                + saturate(vec3(p.y, c.a, p.x))
+                + step(vec3(c.r, 0.5, c.b), vec3(0.5, c.a, 0.0));
+            return vec4(
+                pow(c.r, c.g),
+                saturate(pow(c.b, c.a)),
+                held.x + held.y + held.z,
+                float(vec2(p.y, 1.0) == vec2(p.y, 1.0))
+            );
+        }
+    }";
+    let (cpu, gpu_pixels) = both(&gpu, source, &[cases], (n, 1), vec![], Domain::Grid(n, 1));
+    assert_eq!(
+        mismatch(&cpu, &gpu_pixels, 1e-5),
+        0.0,
+        "{cpu:?} vs {gpu_pixels:?}"
+    );
+}

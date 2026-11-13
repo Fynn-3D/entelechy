@@ -533,10 +533,62 @@ fn to_int(x: f32) -> i32 {{
 // which is the middle pixel of anything drawn in polar coordinates —
 // and loses the sign of a zero y beside a negative x. Everything else
 // is the device's.
-// Whether x is not a number, on the words.
+// Whether x is not a number, on the words: `x != x` is what a compiler
+// told there are no NaNs folds to false.
 fn is_nan(x: f32) -> bool {{
-    let b = bitcast<u32>(x);
-    return (b & 0x7F800000u) == 0x7F800000u && (b & 0x007FFFFFu) != 0u;
+    return (bitcast<u32>(x) & 0x7FFFFFFFu) > 0x7F800000u;
+}}
+fn is_nan2(x: vec2<f32>) -> vec2<bool> {{
+    return (bitcast<vec2<u32>>(x) & vec2<u32>(0x7FFFFFFFu)) > vec2<u32>(0x7F800000u);
+}}
+fn is_nan3(x: vec3<f32>) -> vec3<bool> {{
+    return (bitcast<vec3<u32>>(x) & vec3<u32>(0x7FFFFFFFu)) > vec3<u32>(0x7F800000u);
+}}
+fn is_nan4(x: vec4<f32>) -> vec4<bool> {{
+    return (bitcast<vec4<u32>>(x) & vec4<u32>(0x7FFFFFFFu)) > vec4<u32>(0x7F800000u);
+}}
+// IEEE 754 `pow`, where WGSL's own `pow` is `exp2(y * log2(x))` and leaves
+// zero or negative bases undefined (a page's WebGPU answers NaN for any
+// negative base, integer exponents included).
+fn pow_ref(x: f32, y: f32) -> f32 {{
+    let xb = bitcast<u32>(x);
+    let yb = bitcast<u32>(y);
+    let xa = xb & 0x7FFFFFFFu;
+    let ya = yb & 0x7FFFFFFFu;
+    if (xb >= 0x00800000u && xb < 0x7F800000u && ya >= 0x00800000u && ya < 0x7F800000u) {{
+        return pow(x, y);
+    }}
+    if (ya == 0u || xb == 0x3F800000u) {{ return 1.0; }}
+    if (xa > 0x7F800000u || ya > 0x7F800000u) {{ return bitcast<f32>(whole_u32(0x7FC00000u)); }}
+    let ay = bitcast<f32>(ya);
+    let y_int = ya < 0x7F800000u && trunc(y) == y;
+    let y_odd = y_int && ay < 16777216.0 && (u32(ay) & 1u) == 1u;
+    let odd_sign = select(0u, xb & 0x80000000u, y_odd);
+    if (xa == 0u) {{
+        return bitcast<f32>(odd_sign | select(0u, 0x7F800000u, (yb >> 31u) == 1u));
+    }}
+    if (ya == 0x7F800000u && xa == 0x3F800000u) {{ return 1.0; }}
+    if (ya == 0x7F800000u) {{
+        return select(0.0, bitcast<f32>(whole_u32(0x7F800000u)), (xa > 0x3F800000u) == ((yb >> 31u) == 0u));
+    }}
+    if (xa == 0x7F800000u) {{
+        return bitcast<f32>(odd_sign | select(0x7F800000u, 0u, (yb >> 31u) == 1u));
+    }}
+    if ((xb >> 31u) == 1u && !y_int) {{ return bitcast<f32>(whole_u32(0x7FC00000u)); }}
+    if ((xb >> 31u) == 1u) {{
+        let p = pow(bitcast<f32>(xa), y);
+        return select(p, -p, y_odd);
+    }}
+    return pow(x, y);
+}}
+fn pow_ref2(x: vec2<f32>, y: vec2<f32>) -> vec2<f32> {{
+    return vec2<f32>(pow_ref(x.x, y.x), pow_ref(x.y, y.y));
+}}
+fn pow_ref3(x: vec3<f32>, y: vec3<f32>) -> vec3<f32> {{
+    return vec3<f32>(pow_ref(x.x, y.x), pow_ref(x.y, y.y), pow_ref(x.z, y.z));
+}}
+fn pow_ref4(x: vec4<f32>, y: vec4<f32>) -> vec4<f32> {{
+    return vec4<f32>(pow_ref(x.x, y.x), pow_ref(x.y, y.y), pow_ref(x.z, y.z), pow_ref(x.w, y.w));
 }}
 fn atan2_ref(y: f32, x: f32) -> f32 {{
     let yb = bitcast<u32>(y);
@@ -552,12 +604,15 @@ fn atan2_ref(y: f32, x: f32) -> f32 {{
 fn max_ref(a: f32, b: f32) -> f32 {{
     let tie = bitcast<f32>(bitcast<u32>(a) & bitcast<u32>(b));
     let m = select(max(a, b), tie, a == b);
-    return select(select(m, a, b != b), b, a != a);
+    return select(select(m, a, is_nan(b)), b, is_nan(a));
 }}
 fn min_ref(a: f32, b: f32) -> f32 {{
     let tie = bitcast<f32>(bitcast<u32>(a) | bitcast<u32>(b));
     let m = select(min(a, b), tie, a == b);
-    return select(select(m, a, b != b), b, a != a);
+    return select(select(m, a, is_nan(b)), b, is_nan(a));
+}}
+fn step_ref(e: f32, x: f32) -> f32 {{
+    return select(0.0, 1.0, x >= e && !is_nan(e) && !is_nan(x));
 }}
 fn smoothstep_ref(l: f32, h: f32, x: f32) -> f32 {{
     let t = min_ref(max_ref((x - l) / (h - l), f32(0.0)), f32(1.0));
@@ -566,12 +621,15 @@ fn smoothstep_ref(l: f32, h: f32, x: f32) -> f32 {{
 fn max_ref2(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {{
     let tie = bitcast<vec2<f32>>(bitcast<vec2<u32>>(a) & bitcast<vec2<u32>>(b));
     let m = select(max(a, b), tie, a == b);
-    return select(select(m, a, b != b), b, a != a);
+    return select(select(m, a, is_nan2(b)), b, is_nan2(a));
 }}
 fn min_ref2(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {{
     let tie = bitcast<vec2<f32>>(bitcast<vec2<u32>>(a) | bitcast<vec2<u32>>(b));
     let m = select(min(a, b), tie, a == b);
-    return select(select(m, a, b != b), b, a != a);
+    return select(select(m, a, is_nan2(b)), b, is_nan2(a));
+}}
+fn step_ref2(e: vec2<f32>, x: vec2<f32>) -> vec2<f32> {{
+    return select(vec2<f32>(0.0), vec2<f32>(1.0), (x >= e) & !is_nan2(e) & !is_nan2(x));
 }}
 fn smoothstep_ref2(l: vec2<f32>, h: vec2<f32>, x: vec2<f32>) -> vec2<f32> {{
     let t = min_ref2(max_ref2((x - l) / (h - l), vec2<f32>(0.0)), vec2<f32>(1.0));
@@ -580,12 +638,15 @@ fn smoothstep_ref2(l: vec2<f32>, h: vec2<f32>, x: vec2<f32>) -> vec2<f32> {{
 fn max_ref3(a: vec3<f32>, b: vec3<f32>) -> vec3<f32> {{
     let tie = bitcast<vec3<f32>>(bitcast<vec3<u32>>(a) & bitcast<vec3<u32>>(b));
     let m = select(max(a, b), tie, a == b);
-    return select(select(m, a, b != b), b, a != a);
+    return select(select(m, a, is_nan3(b)), b, is_nan3(a));
 }}
 fn min_ref3(a: vec3<f32>, b: vec3<f32>) -> vec3<f32> {{
     let tie = bitcast<vec3<f32>>(bitcast<vec3<u32>>(a) | bitcast<vec3<u32>>(b));
     let m = select(min(a, b), tie, a == b);
-    return select(select(m, a, b != b), b, a != a);
+    return select(select(m, a, is_nan3(b)), b, is_nan3(a));
+}}
+fn step_ref3(e: vec3<f32>, x: vec3<f32>) -> vec3<f32> {{
+    return select(vec3<f32>(0.0), vec3<f32>(1.0), (x >= e) & !is_nan3(e) & !is_nan3(x));
 }}
 fn smoothstep_ref3(l: vec3<f32>, h: vec3<f32>, x: vec3<f32>) -> vec3<f32> {{
     let t = min_ref3(max_ref3((x - l) / (h - l), vec3<f32>(0.0)), vec3<f32>(1.0));
@@ -594,12 +655,15 @@ fn smoothstep_ref3(l: vec3<f32>, h: vec3<f32>, x: vec3<f32>) -> vec3<f32> {{
 fn max_ref4(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {{
     let tie = bitcast<vec4<f32>>(bitcast<vec4<u32>>(a) & bitcast<vec4<u32>>(b));
     let m = select(max(a, b), tie, a == b);
-    return select(select(m, a, b != b), b, a != a);
+    return select(select(m, a, is_nan4(b)), b, is_nan4(a));
 }}
 fn min_ref4(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {{
     let tie = bitcast<vec4<f32>>(bitcast<vec4<u32>>(a) | bitcast<vec4<u32>>(b));
     let m = select(min(a, b), tie, a == b);
-    return select(select(m, a, b != b), b, a != a);
+    return select(select(m, a, is_nan4(b)), b, is_nan4(a));
+}}
+fn step_ref4(e: vec4<f32>, x: vec4<f32>) -> vec4<f32> {{
+    return select(vec4<f32>(0.0), vec4<f32>(1.0), (x >= e) & !is_nan4(e) & !is_nan4(x));
 }}
 fn smoothstep_ref4(l: vec4<f32>, h: vec4<f32>, x: vec4<f32>) -> vec4<f32> {{
     let t = min_ref4(max_ref4((x - l) / (h - l), vec4<f32>(0.0)), vec4<f32>(1.0));
@@ -759,8 +823,8 @@ fn settle_left() {{
                 "fn index_in{index}(c: vec2<f32>) -> u32 {{
     let w = bitcast<u32>(ctx[{slot}].x);
     let h = bitcast<u32>(ctx[{slot}].y);
-    let x = min(u32(select(floor(c.x), 0.0, c.x != c.x)), w - 1u);
-    let y = min(u32(select(floor(c.y), 0.0, c.y != c.y)), h - 1u);
+    let x = min(u32(select(floor(c.x), 0.0, is_nan(c.x))), w - 1u);
+    let y = min(u32(select(floor(c.y), 0.0, is_nan(c.y))), h - 1u);
     return y * w + x;
 }}"
             ),
@@ -770,9 +834,9 @@ fn settle_left() {{
     let w = bitcast<u32>(ctx[{slot}].x);
     let h = bitcast<u32>(ctx[{slot}].y);
     let d = bitcast<u32>(ctx[{slot}].z);
-    let x = min(u32(select(floor(c.x), 0.0, c.x != c.x)), w - 1u);
-    let y = min(u32(select(floor(c.y), 0.0, c.y != c.y)), h - 1u);
-    let z = min(u32(select(floor(c.z), 0.0, c.z != c.z)), d - 1u);
+    let x = min(u32(select(floor(c.x), 0.0, is_nan(c.x))), w - 1u);
+    let y = min(u32(select(floor(c.y), 0.0, is_nan(c.y))), h - 1u);
+    let z = min(u32(select(floor(c.z), 0.0, is_nan(c.z))), d - 1u);
     return (z * h + y) * w + x;
 }}"
             ),
@@ -1013,7 +1077,7 @@ pub(crate) fn emit_linear(
                 "fn linear_in{index}(c: f32) -> {ty} {{
     let w = bitcast<u32>(ctx[{slot}].x);
     let h = 1u;
-    let t = select(c - 0.5, -1.0, c != c);
+    let t = select(c - 0.5, -1.0, is_nan(c));
     let lower = min(u32(floor(t)), w - 1u);
     let upper = min(lower + 1u, w - 1u);
     let f = select(clamp(t - floor(t), 0.0, 1.0), 0.0, t < 0.0);
@@ -1028,7 +1092,7 @@ pub(crate) fn emit_linear(
                 "fn linear_in{index}(c: vec2<f32>) -> {ty} {{
     let w = bitcast<u32>(ctx[{slot}].x);
     let h = bitcast<u32>(ctx[{slot}].y);
-    let t = select(c - vec2<f32>(0.5, 0.5), vec2<f32>(-1.0, -1.0), c != c);
+    let t = select(c - vec2<f32>(0.5, 0.5), vec2<f32>(-1.0, -1.0), is_nan2(c));
     let lower = min(vec2<u32>(floor(t)), vec2<u32>(w - 1u, h - 1u));
     let upper = min(lower + vec2<u32>(1u, 1u), vec2<u32>(w - 1u, h - 1u));
     let f = select(clamp(t - floor(t), vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0)), vec2<f32>(0.0, 0.0), t < vec2<f32>(0.0, 0.0));
@@ -1049,7 +1113,7 @@ pub(crate) fn emit_linear(
     let w = bitcast<u32>(ctx[{slot}].x);
     let h = bitcast<u32>(ctx[{slot}].y);
     let d = bitcast<u32>(ctx[{slot}].z);
-    let t = select(c - vec3<f32>(0.5, 0.5, 0.5), vec3<f32>(-1.0, -1.0, -1.0), c != c);
+    let t = select(c - vec3<f32>(0.5, 0.5, 0.5), vec3<f32>(-1.0, -1.0, -1.0), is_nan3(c));
     let lower = min(vec3<u32>(floor(t)), vec3<u32>(w - 1u, h - 1u, d - 1u));
     let upper = min(lower + vec3<u32>(1u, 1u, 1u), vec3<u32>(w - 1u, h - 1u, d - 1u));
     let f = select(clamp(t - floor(t), vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0)), vec3<f32>(0.0, 0.0, 0.0), t < vec3<f32>(0.0, 0.0, 0.0));

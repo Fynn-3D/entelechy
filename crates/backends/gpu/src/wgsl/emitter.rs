@@ -414,11 +414,17 @@ impl Emitter<'_> {
                     // `x != x` is `is_nan`, which tests the bits (all-ones
                     // exponent, nonzero mantissa): the shader compiler
                     // assumes no NaNs and folds the float comparison.
-                    BinaryOp::NotEqual if a == b && self.type_of(*a) == Type::Float => {
-                        format!("is_nan({})", v(a))
+                    BinaryOp::NotEqual if a == b && float_lanes(self.type_of(*a)) => {
+                        match self.type_of(*a).lanes() {
+                            Some((n, _)) => format!("any(is_nan{n}({}))", v(a)),
+                            None => format!("is_nan({})", v(a)),
+                        }
                     }
-                    BinaryOp::Equal if a == b && self.type_of(*a) == Type::Float => {
-                        format!("!is_nan({})", v(a))
+                    BinaryOp::Equal if a == b && float_lanes(self.type_of(*a)) => {
+                        match self.type_of(*a).lanes() {
+                            Some((n, _)) => format!("!any(is_nan{n}({}))", v(a)),
+                            None => format!("!is_nan({})", v(a)),
+                        }
                     }
                     BinaryOp::Equal if vector => format!("all({} == {})", v(a), v(b)),
                     BinaryOp::NotEqual if vector => format!("any({} != {})", v(a), v(b)),
@@ -829,7 +835,12 @@ impl Emitter<'_> {
                 (_, Type::IVec4) => format!("to_int4({list})"),
                 _ => format!("to_int({list})"),
             },
-            Intrinsic::Pow => format!("pow({}, {})", v(&args[0]), splat(&args[1], ty)),
+            Intrinsic::Pow => format!(
+                "{}({}, {})",
+                suffix("pow_ref"),
+                splat(&args[0], ty),
+                splat(&args[1], ty)
+            ),
             // A device's `tanh` may give NaN far out (Metal's from 45 on);
             // a Float's tanh is exactly ±1 past ±9.01, so the argument is
             // held to ±15 and every answer is the reference's.
@@ -895,7 +906,12 @@ impl Emitter<'_> {
                 v(&args[0]),
                 v(&args[1])
             ),
-            Intrinsic::Step => format!("step({}, {})", splat(&args[0], ty), v(&args[1])),
+            Intrinsic::Step => format!(
+                "{}({}, {})",
+                suffix("step_ref"),
+                splat(&args[0], ty),
+                splat(&args[1], ty)
+            ),
             // The interpreter's rule, defined where `low >= high`; see
             // `smoothstep_ref` in the preamble.
             Intrinsic::Smoothstep => format!(
