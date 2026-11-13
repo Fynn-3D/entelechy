@@ -5,16 +5,16 @@
 //! The exporter gathers and packs. How the page starts is the web
 //! bridge's (`bridges/web/single.html`, a template): an `@@include:<file>@@`
 //! is a file beside the template put in as it is, an `@@pack:<file>@@` that
-//! file packed (a zlib stream in base64, as everything large in the page
-//! is), an `@@slot:<name>@@` what is made here.
+//! file packed (a zlib stream in UTF-8 base122, as everything large in the
+//! page is), an `@@slot:<name>@@` what is made here.
 
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use entelechy_formats::base64::base64;
-use entelechy_formats::deflate::zlib;
+use entelechy_formats::base122::base122;
+use entelechy_formats::deflate::zlib_tight;
 use entelechy_session::store::{Kind, Stamp};
 use entelechy_session::{Later, Limits, Parsed, Session, SessionOptions, Store};
 
@@ -228,10 +228,10 @@ pub fn archive(files: &[(String, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
-/// Bytes as the page carries what is large: a zlib stream in base64, which
-/// the browser inflates.
+/// Bytes as the page carries what is large: a zlib stream in UTF-8
+/// base122, which the browser inflates.
 fn packed(bytes: &[u8]) -> String {
-    base64(&zlib(bytes))
+    base122(&zlib_tight(bytes))
 }
 
 /// Text put inside a `<script>`: nothing in it may end the element.

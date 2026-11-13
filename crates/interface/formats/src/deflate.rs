@@ -13,8 +13,12 @@ const MAX_MATCH: usize = 258;
 /// among, and a length good enough to stop seeking.
 const CHAIN: usize = 128;
 const GOOD: usize = 128;
+const CHAIN_TIGHT: usize = 1024;
+const GOOD_TIGHT: usize = MAX_MATCH;
+const TOO_FAR: usize = 4096;
 /// Symbols a block holds before its codes are written and new ones begun.
 const BLOCK: usize = 1 << 16;
+const BLOCK_TIGHT: usize = 1 << 15;
 
 /// A literal byte, or a match: its length and how far back it is.
 #[derive(Clone, Copy)]
@@ -86,37 +90,39 @@ const PART: usize = 1 << 20;
 /// own thread and joined in order: a match never reaches into the part
 /// before it, so a long stream loses only the matches across the cuts.
 /// Where no thread starts (WebAssembly), a part is matched where it is.
-fn tokens_apart(bytes: &[u8]) -> Vec<Token> {
+fn tokens_apart(bytes: &[u8], chain: usize, good: usize) -> Vec<Token> {
     let cores = std::thread::available_parallelism().map_or(1, usize::from);
     let part = PART.max(bytes.len().div_ceil(cores));
     if cores < 2 || bytes.len() < 2 * part {
-        return tokens(bytes);
+        return tokens(bytes, chain, good);
     }
     let parts: Vec<&[u8]> = bytes.chunks(part).collect();
     std::thread::scope(|scope| {
         let running: Vec<_> = parts
             .iter()
-            .map(|part| std::thread::Builder::new().spawn_scoped(scope, move || tokens(part)))
+            .map(|part| {
+                std::thread::Builder::new().spawn_scoped(scope, move || tokens(part, chain, good))
+            })
             .collect();
         let mut out = Vec::with_capacity(bytes.len() / 2 + 16);
         for (running, part) in running.into_iter().zip(&parts) {
             match running.map(|thread| thread.join()) {
                 Ok(Ok(tokens)) => out.extend(tokens),
-                _ => out.extend(tokens(part)),
+                _ => out.extend(tokens(part, chain, good)),
             }
         }
         out
     })
 }
 
-fn tokens(bytes: &[u8]) -> Vec<Token> {
+fn tokens(bytes: &[u8], chain: usize, good: usize) -> Vec<Token> {
     let n = bytes.len();
     let mut out = Vec::with_capacity(n / 2 + 16);
-    let mut head = vec![usize::MAX; 1 << 15];
+    let mut head = vec![usize::MAX; 1 << 16];
     let mut prev = vec![usize::MAX; WINDOW];
     let hash = |i: usize| -> usize {
-        let v = (bytes[i] as usize) << 10 ^ (bytes[i + 1] as usize) << 5 ^ bytes[i + 2] as usize;
-        v & ((1 << 15) - 1)
+        let word = u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], 0]);
+        (word.wrapping_mul(0x1e35_a7bd) >> 16) as usize
     };
     let insert = |i: usize, head: &mut Vec<usize>, prev: &mut Vec<usize>| {
         if i + MIN_MATCH <= n {
@@ -133,14 +139,15 @@ fn tokens(bytes: &[u8]) -> Vec<Token> {
         let most = (n - i).min(MAX_MATCH);
         let (mut best, mut at) = (0, 0);
         let mut candidate = head[hash(i)];
-        let mut tries = CHAIN;
+        let mut tries = chain;
         while candidate != usize::MAX && i - candidate <= WINDOW && tries > 0 {
             if bytes[candidate + best.min(most - 1)] == bytes[i + best.min(most - 1)] {
                 let length = common(&bytes[candidate..candidate + most], &bytes[i..i + most]);
-                if length > best {
+                let distance = i - candidate;
+                if length > best && (length > MIN_MATCH || distance <= TOO_FAR) {
                     best = length;
-                    at = i - candidate;
-                    if length >= GOOD || length == most {
+                    at = distance;
+                    if length >= good || length == most {
                         break;
                     }
                 }
@@ -168,13 +175,14 @@ fn tokens(bytes: &[u8]) -> Vec<Token> {
             i += 1;
             continue;
         }
-        // One step of lazy matching: a longer match one byte on wins.
-        let (next, _) = if length < GOOD {
+        // One step of lazy matching: a longer match (or an equal one much
+        // nearer) one byte on wins.
+        let (next, next_at) = if length < good {
             longest(i + 1, &head, &prev)
         } else {
             (0, 0)
         };
-        if next > length {
+        if next > length || (next == length && next_at * 4 < distance) {
             out.push(Token::Literal(bytes[i]));
             i += 1;
             continue;
@@ -440,15 +448,14 @@ fn block(bits: &mut Bits, tokens: &[Token], last: bool) {
     bits.put(literal_codes[256] as u32, literal_lengths[256] as u32);
 }
 
-/// Bytes as a DEFLATE stream of compressed blocks.
-pub fn deflate(bytes: &[u8]) -> Vec<u8> {
-    let tokens = tokens_apart(bytes);
+fn deflate_with(bytes: &[u8], chain: usize, good: usize, block_tokens: usize) -> Vec<u8> {
+    let tokens = tokens_apart(bytes, chain, good);
     let mut bits = Bits {
         out: Vec::with_capacity(bytes.len() / 4 + 64),
         acc: 0,
         count: 0,
     };
-    let mut blocks = tokens.chunks(BLOCK).peekable();
+    let mut blocks = tokens.chunks(block_tokens).peekable();
     if blocks.peek().is_none() {
         block(&mut bits, &[], true);
     }
@@ -456,6 +463,24 @@ pub fn deflate(bytes: &[u8]) -> Vec<u8> {
         block(&mut bits, chunk, blocks.peek().is_none());
     }
     bits.finish()
+}
+
+/// Bytes as a DEFLATE stream of compressed blocks.
+pub fn deflate(bytes: &[u8]) -> Vec<u8> {
+    deflate_with(bytes, CHAIN, GOOD, BLOCK)
+}
+
+fn zlib_from(bytes: &[u8], compressed: Vec<u8>) -> Vec<u8> {
+    let body = if compressed.len() < bytes.len() + bytes.len() / 65535 * 5 + 5 {
+        compressed
+    } else {
+        stored(bytes)
+    };
+    let mut out = Vec::with_capacity(body.len() + 6);
+    out.extend_from_slice(&[0x78, 0x9c]);
+    out.extend_from_slice(&body);
+    out.extend_from_slice(&adler32(bytes).to_be_bytes());
+    out
 }
 
 /// Bytes as a zlib stream of stored (uncompressed) blocks.
@@ -477,17 +502,16 @@ fn stored(bytes: &[u8]) -> Vec<u8> {
 
 /// Bytes as a zlib stream: compressed, or stored where that is shorter.
 pub fn zlib(bytes: &[u8]) -> Vec<u8> {
-    let compressed = deflate(bytes);
-    let body = if compressed.len() < bytes.len() + bytes.len() / 65535 * 5 + 5 {
-        compressed
-    } else {
-        stored(bytes)
-    };
-    let mut out = Vec::with_capacity(body.len() + 6);
-    out.extend_from_slice(&[0x78, 0x9c]);
-    out.extend_from_slice(&body);
-    out.extend_from_slice(&adler32(bytes).to_be_bytes());
-    out
+    zlib_from(bytes, deflate(bytes))
+}
+
+/// Bytes as a tightly compressed zlib stream, searching deeper hash chains
+/// and finer blocks for exported artifacts.
+pub fn zlib_tight(bytes: &[u8]) -> Vec<u8> {
+    zlib_from(
+        bytes,
+        deflate_with(bytes, CHAIN_TIGHT, GOOD_TIGHT, BLOCK_TIGHT),
+    )
 }
 
 #[cfg(test)]
@@ -501,6 +525,13 @@ mod tests {
             unzlib(&packed, usize::MAX).unwrap(),
             bytes,
             "{} bytes",
+            bytes.len()
+        );
+        let tight = zlib_tight(bytes);
+        assert_eq!(
+            unzlib(&tight, usize::MAX).unwrap(),
+            bytes,
+            "{} bytes (tight)",
             bytes.len()
         );
         packed.len()

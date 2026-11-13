@@ -27,12 +27,13 @@ itself, and every file the scene reads. `entelechy export <scene.esn> --out
 a file beside the template, packed; a `slot` is what the exporter made.
 Nothing is fetched; it opens from the disk.
 
-Everything large is a zlib stream in base64, which the browser inflates:
-the packed files (the page's own scripts), and the slots `glue` (what
-`wasm-bindgen` wrote), `runtime` (Entelechy built for a page) and `files`
-(the scene's files one after another: a count; then for each a path's
-length, the path, the bytes' length, the bytes; lengths little-endian in
-four bytes). `play` says which file is the scene and what runs it.
+Everything large is a zlib stream in UTF-8 base122, which the browser
+inflates: the packed files (the page's own scripts), and the slots `glue`
+(what `wasm-bindgen` wrote), `runtime` (Entelechy built for a page) and
+`files` (the scene's files one after another: a count; then for each a
+path's length, the path, the bytes' length, the bytes; lengths
+little-endian in four bytes). `play` says which file is the scene and what
+runs it.
 -->
 <canvas id="view" tabindex="0"></canvas>
 <canvas id="shown"></canvas>
@@ -47,9 +48,30 @@ four bytes). `play` says which file is the scene and what runs it.
 <script>
 (async () => {
   const text = (id) => document.getElementById(id).textContent;
-  // A zlib stream in base64, inflated by the browser.
+  const BAD = [0, 10, 13, 34, 38, 60, 62, 92];
+  const unpack = (s) => {
+    const out = new Uint8Array(((s.length * 14) >> 3) + 1);
+    let acc = 0, bits = 0, n = 0;
+    const push = (seven) => {
+      acc = (acc << 7) | seven;
+      bits += 7;
+      if (bits >= 8) {
+        bits -= 8;
+        out[n++] = acc >> bits;
+        acc &= (1 << bits) - 1;
+      }
+    };
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c < 128) push(c);
+      else if (c < 0x500) { const v = c - 0x100; push(BAD[v >> 7]); push(v & 127); }
+      else push(BAD[c - 0x500]);
+    }
+    return out.subarray(0, n);
+  };
+  // A zlib stream in UTF-8 base122, inflated by the browser.
   const inflated = async (id) => {
-    const packed = Uint8Array.from(atob(text(id).trim()), (c) => c.charCodeAt(0));
+    const packed = unpack(text(id));
     const stream = new Blob([packed]).stream().pipeThrough(new DecompressionStream("deflate"));
     return new Uint8Array(await new Response(stream).arrayBuffer());
   };

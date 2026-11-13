@@ -94,12 +94,15 @@ fn a_template_is_filled() {
         filled,
         "<title>ant</title><script>let end = \"<\\/script>\";</script>"
     );
-    // (A file packed is a zlib stream in base64: nothing of the file shows.)
+    // (A file packed is a zlib stream in UTF-8 base122: nothing of the file shows.)
     let packed = page::fill("@@pack:part.js@@", &dir, &slots).expect("packed");
-    assert!(
-        packed.starts_with('e') && !packed.contains('<') && !packed.contains("end"),
-        "{packed}"
-    );
+    assert!(!packed.contains('<') && !packed.contains("end"), "{packed}");
+    let unzipped = entelechy_formats::inflate::unzlib(
+        &entelechy_formats::base122::unbase122(&packed).expect("base122"),
+        usize::MAX,
+    )
+    .expect("zlib");
+    assert_eq!(unzipped, b"let end = \"</script>\";");
     assert!(
         page::fill("@@slot:other@@", &dir, &slots).is_err(),
         "a slot nobody fills"
