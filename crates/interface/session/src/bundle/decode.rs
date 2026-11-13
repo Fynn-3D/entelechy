@@ -31,16 +31,43 @@ impl Bundle {
         let inputs = r.list(MAX_ITEMS, |r| Ok((r.str()?, r.field_data()?)))?;
         let presented = r.list(MAX_ITEMS, |r| Ok((r.str()?, r.str()?)))?;
         let feeds = r.list(MAX_ITEMS, |r| Ok((r.str()?, r.str()?)))?;
-        let fonts = r.list(MAX_ITEMS, |r| {
-            Ok(BundledFont {
-                node: r.str()?,
-                codes: r.source()?,
-                outputs: [r.str()?, r.str()?, r.str()?],
-                glyphs: r.field_data()?,
-                segments: r.field_data()?,
-                metrics: r.field_data()?,
-            })
-        })?;
+        let font_count = r.len(MAX_ITEMS)?;
+        let mut fonts: Vec<BundledFont> = Vec::with_capacity(font_count.min(64));
+        for _ in 0..font_count {
+            let node = r.str()?;
+            let codes = r.source()?;
+            let outputs = [r.str()?, r.str()?, r.str()?];
+            let (glyphs, segments, metrics, compact) = match r.byte()? {
+                0 => {
+                    let idx = r.len(fonts.len().saturating_sub(1))?;
+                    let prev = fonts
+                        .get(idx)
+                        .ok_or_else(|| "bundle font atlas index out of range".to_owned())?;
+                    (
+                        prev.glyphs.clone(),
+                        prev.segments.clone(),
+                        prev.metrics.clone(),
+                        prev.compact.clone(),
+                    )
+                }
+                1 => (r.field_data()?, r.field_data()?, r.field_data()?, None),
+                2 => {
+                    let compact = entelechy_formats::font::CompactFont::read_from(&mut r.rest)?;
+                    let (glyphs, segments, metrics) = compact.to_fields()?;
+                    (glyphs, segments, metrics, Some(compact))
+                }
+                other => return Err(format!("unknown bundled font tag {other}")),
+            };
+            fonts.push(BundledFont {
+                node,
+                codes,
+                outputs,
+                glyphs,
+                segments,
+                metrics,
+                compact,
+            });
+        }
         if !r.rest.is_empty() {
             return Err(format!(
                 "bundle has {} trailing byte(s) after its end",

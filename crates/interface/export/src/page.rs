@@ -15,6 +15,8 @@ use std::sync::Arc;
 
 use entelechy_formats::base122::base122;
 use entelechy_formats::deflate::zlib_tight;
+use entelechy_formats::font::CompactFont;
+use entelechy_session::bundle::BundledAtlas;
 use entelechy_session::{Event, Limits, Session, SessionOptions, Wait};
 
 /// A scene compiled into its binary [`Bundle`](entelechy_session::bundle::Bundle)
@@ -23,29 +25,23 @@ pub struct Compiled {
     pub bundle: Vec<u8>,
     pub modules: usize,
     pub inputs: usize,
-    /// Each font node subsetted by `--chars`: `(node, font_file_bytes, atlas_bytes)`.
+    /// Each font node subsetted (by `--chars` or static `codes`):
+    /// `(node, font_file_bytes, compact_bytes)`.
     pub fonts: Vec<(String, usize, usize)>,
 }
 
-/// Loads `scene` as a front does, checks that nothing in it or its inputs was
-/// refused, bakes every static input and font atlas (`chars` keeping those
-/// characters alone when given), and encodes the binary bundle. No host path
-/// is written into the bundle.
+/// Loads `scene` as a front does (ignoring any runtime save files the scene
+/// writes for itself), checks that nothing in it or its inputs was refused,
+/// bakes every static input and compact font atlas (`chars` keeping those
+/// characters alone when given, else static `codes` when invariant), and
+/// encodes the binary bundle. No host path is written into the bundle.
 pub fn compile(scene: &Path, chars: Option<&str>) -> Result<Compiled, String> {
     let under = SessionOptions::from_environment().store();
-    let loaded = Session::open_loaded(
-        Arc::clone(&under),
-        scene,
-        None,
-        "cpu",
-        Limits::default(),
-        Wait::blocking(),
-        false,
-    )
-    .map_err(|why| format!("{}: {why}", scene.display()))?;
-    let mut session = loaded.session;
-    let mut events = loaded.events;
-    events.extend(session.sync());
+    let built = Session::build("cpu", Limits::default(), Wait::blocking())
+        .map_err(|why| format!("{}: {why}", scene.display()))?;
+    let mut session = Session::open_in(Arc::clone(&under), scene, None, built.runtime);
+    session.start_from_nothing_saved();
+    let events = session.sync();
     for event in &events {
         match event {
             Event::SceneRejected(error) => return Err(format!("{}: {error}", scene.display())),
@@ -55,22 +51,33 @@ pub fn compile(scene: &Path, chars: Option<&str>) -> Result<Compiled, String> {
             _ => {}
         }
     }
+    if session.graph().is_none() {
+        return Err(format!("{}: scene did not load", scene.display()));
+    }
     let mut fonts = Vec::new();
+    let mut font_cache: BTreeMap<PathBuf, (usize, usize, CompactFont)> = BTreeMap::new();
     let bundled = session
-        .bundle_with_fonts(|node, path| {
-            let bytes = under
-                .read(path)
-                .map_err(|e| format!("{}: {e}", path.display()))?;
-            let (fields, _) = entelechy_import::font::read(&bytes, chars)
-                .map_err(|e| format!("{}: {e}", path.display()))?;
-            if chars.is_some() {
-                let kept = (fields.glyphs.storage().len()
-                    + fields.segments.storage().len()
-                    + fields.metrics.storage().len())
-                    * 4;
-                fonts.push((node.to_owned(), bytes.len(), kept));
+        .bundle_with_fonts(|node, path, static_chars| {
+            let chosen = chars.or(static_chars);
+            let (raw_len, kept_len, compact) = if let Some(cached) = font_cache.get(path) {
+                cached.clone()
+            } else {
+                let bytes = under
+                    .read(path)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                let (compact, _) =
+                    entelechy_import::font::read_compact(&bytes, chosen, chars.is_none())
+                        .map_err(|e| format!("{}: {e}", path.display()))?;
+                let mut encoded = Vec::new();
+                compact.write_to(&mut encoded);
+                let entry = (bytes.len(), encoded.len(), compact);
+                font_cache.insert(path.to_path_buf(), entry.clone());
+                entry
+            };
+            if chosen.is_some() {
+                fonts.push((node.to_owned(), raw_len, kept_len));
             }
-            Ok((fields.glyphs, fields.segments, fields.metrics))
+            Ok(BundledAtlas::Compact(compact))
         })
         .map_err(|why| format!("{}: {why}", scene.display()))?;
     let modules = bundled.modules.len();

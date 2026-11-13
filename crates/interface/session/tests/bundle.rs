@@ -110,10 +110,11 @@ fn pack_scene(scene_path: &Path) -> (Session, Vec<u8>) {
     let events = docs.sync();
     assert!(docs.graph().is_some(), "{events:?}");
     let bundle = docs
-        .bundle_with_fonts(|_node, path: &Path| {
+        .bundle_with_fonts(|_node, path: &Path, static_chars| {
             let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-            let (fields, _) = entelechy_import::font::read(&bytes, None)?;
-            Ok((fields.glyphs, fields.segments, fields.metrics))
+            let (compact, _) =
+                entelechy_import::font::read_compact(&bytes, static_chars, static_chars.is_some())?;
+            Ok(entelechy_session::bundle::BundledAtlas::Compact(compact))
         })
         .expect("scene bundles cleanly");
     let encoded = bundle.encode();

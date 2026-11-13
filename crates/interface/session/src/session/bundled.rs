@@ -12,6 +12,8 @@ use entelechy_kernel::{
 
 use super::{BEST, Backing, Session, TURN};
 use crate::Limits;
+#[cfg(feature = "documents")]
+use crate::bundle::BundledAtlas;
 use crate::bundle::{Bundle, BundledFont, glyphs_from_atlas};
 use crate::memory::COPY_LEAST;
 
@@ -526,15 +528,14 @@ impl Session {
     }
 
     /// Packs the currently loaded document-backed scene into a self-contained
-    /// [`Bundle`], calling `font_atlas(node, path)` to bake each `font` node's
-    /// `[glyphs, segments, metrics]` atlas Fields.
+    /// [`Bundle`], calling `font_atlas(node, path, static_chars)` to bake each
+    /// `font` node's atlas. `static_chars` is `Some` when every `font` node
+    /// reading `path` computes its `codes` from static inputs and pure Kernels
+    /// alone, naming the union of characters they can ever ask for.
     #[cfg(feature = "documents")]
     pub fn bundle_with_fonts(
         &mut self,
-        mut font_atlas: impl FnMut(
-            &str,
-            &std::path::Path,
-        ) -> Result<(FieldData, FieldData, FieldData), String>,
+        mut font_atlas: impl FnMut(&str, &std::path::Path, Option<&str>) -> Result<BundledAtlas, String>,
     ) -> Result<Bundle, String> {
         let mut graph = self
             .graph()
@@ -556,6 +557,8 @@ impl Session {
         if !files.file_nodes.is_empty() || !files.field_nodes.is_empty() {
             return Err("a scene with dynamic `files` or `fields` directory nodes cannot be exported as a single-file bundle".to_owned());
         }
+
+        let static_chars = self.static_font_chars(&graph, &files);
 
         let mut wanted_ids = BTreeSet::new();
         for node in &graph.nodes {
@@ -608,7 +611,19 @@ impl Session {
 
         let mut fonts = Vec::with_capacity(files.fonts.len());
         for font in &files.fonts {
-            let (glyphs, segments, metrics) = font_atlas(&font.node, &font.path)?;
+            let inferred = static_chars.get(&font.path).map(String::as_str);
+            let baked = font_atlas(&font.node, &font.path, inferred)?;
+            let (glyphs, segments, metrics, compact) = match baked {
+                BundledAtlas::Compact(c) => {
+                    let (g, s, m) = c.to_fields()?;
+                    (g, s, m, Some(c))
+                }
+                BundledAtlas::Fields {
+                    glyphs,
+                    segments,
+                    metrics,
+                } => (glyphs, segments, metrics, None),
+            };
             let port_ext = |port: &str| {
                 font.outputs
                     .iter()
@@ -633,6 +648,7 @@ impl Session {
                 glyphs,
                 segments,
                 metrics,
+                compact,
             });
         }
 
@@ -675,6 +691,379 @@ impl Session {
             feeds,
             fonts,
         })
+    }
+
+    #[cfg(feature = "documents")]
+    fn static_font_chars(
+        &mut self,
+        graph: &Graph,
+        files: &entelechy_scene::Files,
+    ) -> BTreeMap<std::path::PathBuf, String> {
+        if files.fonts.is_empty() {
+            return BTreeMap::new();
+        }
+        let dynamic_exts: BTreeSet<&str> = files
+            .feeds
+            .iter()
+            .map(|f| f.input.as_str())
+            .chain(
+                files
+                    .fonts
+                    .iter()
+                    .flat_map(|f| f.outputs.iter().map(|(_, ext)| ext.as_str())),
+            )
+            .collect();
+        let fallbacks: BTreeMap<&str, &Source> = graph
+            .fallbacks
+            .iter()
+            .map(|(n, s)| (n.as_str(), s))
+            .collect();
+        let node_map: BTreeMap<&entelechy_graph::NodeId, &entelechy_graph::Node> =
+            graph.nodes.iter().map(|n| (&n.id, n)).collect();
+        let held = self.backing.docs().inputs.handles();
+
+        let mut needed_nodes = BTreeSet::new();
+        let mut needed_exts = BTreeSet::new();
+        let mut resolved_fonts: Vec<(usize, Source)> = Vec::new();
+        let mut dynamic_paths: BTreeSet<std::path::PathBuf> = BTreeSet::new();
+
+        for (idx, font) in files.fonts.iter().enumerate() {
+            let mut local_nodes = BTreeSet::new();
+            let mut local_exts = BTreeSet::new();
+            let mut visiting = BTreeSet::new();
+            let resolved = match &font.codes {
+                Source::Node { node, port } => graph
+                    .producer(node, port)
+                    .map(|(n, p)| Source::Node { node: n, port: p }),
+                Source::External(ext) => Some(Source::External(ext.clone())),
+            };
+            let ok = resolved.as_ref().is_some_and(|src| {
+                is_static_source(
+                    src,
+                    graph,
+                    &node_map,
+                    &self.runtime,
+                    held,
+                    &dynamic_exts,
+                    &fallbacks,
+                    &mut visiting,
+                    &mut local_nodes,
+                    &mut local_exts,
+                )
+            });
+            if ok && let Some(src) = resolved {
+                needed_nodes.extend(local_nodes);
+                needed_exts.extend(local_exts);
+                resolved_fonts.push((idx, src));
+            } else {
+                dynamic_paths.insert(font.path.clone());
+            }
+        }
+        resolved_fonts.retain(|(idx, _)| !dynamic_paths.contains(&files.fonts[*idx].path));
+        if resolved_fonts.is_empty() {
+            return BTreeMap::new();
+        }
+
+        let ext_handles: Vec<(String, Handle)> = needed_exts
+            .into_iter()
+            .filter_map(|name| held.get(&name).copied().map(|h| (name, h)))
+            .collect();
+        let mut ext_data = Vec::with_capacity(ext_handles.len());
+        for (name, handle) in ext_handles {
+            let Ok(data) = self.field(handle) else {
+                return BTreeMap::new();
+            };
+            ext_data.push((name, data.clone()));
+        }
+
+        let backend: Box<dyn entelechy_kernel::Backend> = entelechy_jit::JitBackend::new()
+            .map(|jit| Box::new(jit) as Box<dyn entelechy_kernel::Backend>)
+            .unwrap_or_else(|_| Box::new(entelechy_cpu::CpuBackend));
+        let mut temp_rt = Runtime::with_backend(self.runtime.host().budget_words(), backend);
+        temp_rt.host_mut().set_work(self.runtime.host().work());
+
+        let mut static_kernels = BTreeSet::new();
+        for id in &needed_nodes {
+            if let Some(node) = node_map.get(id) {
+                static_kernels.insert(node.kernel.clone());
+            }
+        }
+        let mut candidates = Vec::new();
+        for kernel_id in static_kernels {
+            let Some(version) = self.runtime.kernel(&kernel_id) else {
+                return BTreeMap::new();
+            };
+            if let Some(validated) = version.module() {
+                let Ok(prepared) = temp_rt.prepare_module(validated.clone(), "") else {
+                    return BTreeMap::new();
+                };
+                candidates.push((prepared, Expect::Absent));
+            }
+        }
+        if !candidates.is_empty() && temp_rt.publish_all(candidates).is_err() {
+            return BTreeMap::new();
+        }
+
+        let mut temp_handles = BTreeMap::new();
+        for (name, data) in ext_data {
+            let Ok(h) = temp_rt.host_mut().adopt(data) else {
+                return BTreeMap::new();
+            };
+            temp_handles.insert(name, h);
+        }
+
+        let mut node_outputs = Vec::new();
+        for &(idx, ref src) in &resolved_fonts {
+            let effective = resolve_fallback(src, &temp_handles, &fallbacks);
+            if matches!(effective, Source::Node { .. }) {
+                node_outputs.push((format!("f{idx}"), effective));
+            }
+        }
+
+        let mut report_handles: BTreeMap<String, Handle> = BTreeMap::new();
+        if !node_outputs.is_empty() {
+            let nodes: Vec<entelechy_graph::Node> = graph
+                .nodes
+                .iter()
+                .filter(|n| needed_nodes.contains(&n.id))
+                .cloned()
+                .collect();
+            let kept_fallbacks = graph
+                .fallbacks
+                .iter()
+                .filter(|(_, s)| match s {
+                    Source::External(_) => true,
+                    Source::Node { node, .. } => needed_nodes.contains(node),
+                })
+                .cloned()
+                .collect();
+            let sub = Graph {
+                name: graph.name.clone(),
+                externals: graph.externals.clone(),
+                texts: Vec::new(),
+                params: Vec::new(),
+                requirements: Vec::new(),
+                times_params: Vec::new(),
+                times_rows: Vec::new(),
+                nodes,
+                outputs: node_outputs,
+                fallbacks: kept_fallbacks,
+                placed: Vec::new(),
+                repeated: Vec::new(),
+            };
+            let mut eval = entelechy_graph::Evaluator::new();
+            let Ok(report) = eval.evaluate(
+                &sub,
+                &mut temp_rt,
+                &temp_handles,
+                &entelechy_kernel::Context::default(),
+                &BTreeMap::new(),
+            ) else {
+                return BTreeMap::new();
+            };
+            for (name, h) in report.outputs {
+                report_handles.insert(name, h);
+            }
+        }
+
+        let mut chars_by_path: BTreeMap<std::path::PathBuf, BTreeSet<char>> = BTreeMap::new();
+        for (idx, src) in resolved_fonts {
+            let effective = resolve_fallback(&src, &temp_handles, &fallbacks);
+            let handle = match effective {
+                Source::External(ext) => temp_handles.get(&ext).copied(),
+                Source::Node { .. } => report_handles.get(&format!("f{idx}")).copied(),
+            };
+            let Some(handle) = handle else {
+                return BTreeMap::new();
+            };
+            if temp_rt.materialize(handle).is_err() {
+                return BTreeMap::new();
+            }
+            let Ok(data) = temp_rt.host().data(handle) else {
+                return BTreeMap::new();
+            };
+            if data.schema().scalars() != [Scalar::Int] {
+                return BTreeMap::new();
+            }
+            let set = chars_by_path
+                .entry(files.fonts[idx].path.clone())
+                .or_default();
+            for &w in data.storage() {
+                let code = w as i32;
+                if code > 0
+                    && let Some(c) = char::from_u32(code as u32)
+                {
+                    set.insert(c);
+                }
+            }
+        }
+        chars_by_path
+            .into_iter()
+            .map(|(path, set)| (path, set.into_iter().collect()))
+            .collect()
+    }
+}
+
+#[cfg(feature = "documents")]
+fn resolve_fallback(
+    src: &Source,
+    held: &BTreeMap<String, Handle>,
+    fallbacks: &BTreeMap<&str, &Source>,
+) -> Source {
+    let mut cur = src;
+    let mut guard = 0usize;
+    while let Source::External(ext) = cur {
+        if held.contains_key(ext) || guard > 32 {
+            break;
+        }
+        let Some(next) = fallbacks.get(ext.as_str()) else {
+            break;
+        };
+        cur = next;
+        guard += 1;
+    }
+    cur.clone()
+}
+
+#[cfg(feature = "documents")]
+fn domain_expr_is_static(
+    expr: &entelechy_graph::DomainExpr,
+    kernel_params: &[entelechy_ir::Param],
+) -> bool {
+    use entelechy_graph::DomainExpr;
+    match expr {
+        DomainExpr::Int(_)
+        | DomainExpr::Float(_)
+        | DomainExpr::Count(_)
+        | DomainExpr::Size(_)
+        | DomainExpr::Value(..) => true,
+        DomainExpr::Context(_) => false,
+        DomainExpr::Name(name) => kernel_params.iter().any(|p| p.name == *name),
+        DomainExpr::Vector(parts) | DomainExpr::Call(_, parts) => parts
+            .iter()
+            .all(|part| domain_expr_is_static(part, kernel_params)),
+        DomainExpr::Neg(inner) => domain_expr_is_static(inner, kernel_params),
+        DomainExpr::Binary(_, a, b) => {
+            domain_expr_is_static(a, kernel_params) && domain_expr_is_static(b, kernel_params)
+        }
+    }
+}
+
+#[cfg(feature = "documents")]
+#[allow(clippy::too_many_arguments)]
+fn is_static_source(
+    source: &Source,
+    graph: &Graph,
+    node_map: &BTreeMap<&entelechy_graph::NodeId, &entelechy_graph::Node>,
+    runtime: &Runtime,
+    held: &BTreeMap<String, Handle>,
+    dynamic_exts: &BTreeSet<&str>,
+    fallbacks: &BTreeMap<&str, &Source>,
+    visiting: &mut BTreeSet<String>,
+    needed_nodes: &mut BTreeSet<entelechy_graph::NodeId>,
+    needed_exts: &mut BTreeSet<String>,
+) -> bool {
+    match source {
+        Source::External(ext) => {
+            if dynamic_exts.contains(ext.as_str()) {
+                return false;
+            }
+            if held.contains_key(ext) {
+                needed_exts.insert(ext.clone());
+                return true;
+            }
+            if let Some(fb) = fallbacks.get(ext.as_str()) {
+                let tag = format!("ext:{ext}");
+                if !visiting.insert(tag.clone()) {
+                    return false;
+                }
+                let ok = is_static_source(
+                    fb,
+                    graph,
+                    node_map,
+                    runtime,
+                    held,
+                    dynamic_exts,
+                    fallbacks,
+                    visiting,
+                    needed_nodes,
+                    needed_exts,
+                );
+                visiting.remove(&tag);
+                return ok;
+            }
+            false
+        }
+        Source::Node { node, port } => {
+            let Some((real_id, _)) = graph.producer(node, port) else {
+                return false;
+            };
+            if needed_nodes.contains(&real_id) {
+                return true;
+            }
+            let tag = format!("node:{real_id}");
+            if !visiting.insert(tag.clone()) {
+                return false;
+            }
+            let Some(n) = node_map.get(&real_id) else {
+                visiting.remove(&tag);
+                return false;
+            };
+            if n.is_async
+                || !n.awake.is_empty()
+                || n.params
+                    .values()
+                    .any(|v| matches!(v, entelechy_graph::ParamValue::Graph(_)))
+            {
+                visiting.remove(&tag);
+                return false;
+            }
+            let Some(version) = runtime.kernel(&n.kernel) else {
+                visiting.remove(&tag);
+                return false;
+            };
+            let reqs = &version.manifest().requires;
+            if reqs.contains(entelechy_abi::Capability::TimeRead)
+                || reqs.contains(entelechy_abi::Capability::InputRead)
+            {
+                visiting.remove(&tag);
+                return false;
+            }
+            if let Some(entelechy_graph::DomainSpec::Expr(expr)) = &n.domain
+                && !domain_expr_is_static(expr, &version.manifest().params)
+            {
+                visiting.remove(&tag);
+                return false;
+            }
+            for binding in n.inputs.values() {
+                match binding {
+                    Binding::Previous { .. } => {
+                        visiting.remove(&tag);
+                        return false;
+                    }
+                    Binding::Now(src) => {
+                        if !is_static_source(
+                            src,
+                            graph,
+                            node_map,
+                            runtime,
+                            held,
+                            dynamic_exts,
+                            fallbacks,
+                            visiting,
+                            needed_nodes,
+                            needed_exts,
+                        ) {
+                            visiting.remove(&tag);
+                            return false;
+                        }
+                    }
+                }
+            }
+            visiting.remove(&tag);
+            needed_nodes.insert(real_id);
+            true
+        }
     }
 }
 

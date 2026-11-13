@@ -16,11 +16,9 @@ use std::path::{Path, PathBuf};
 
 use entelechy_host::{Domain, FieldData, Schema};
 
-/// How finely curves are cut: the largest distance, in ems, a segment may
-/// stray from its curve.
-const TOLERANCE: f32 = 1.0 / 2048.0;
-
-pub use entelechy_formats::font::{glyph_schema, metrics_schema, segment_schema};
+pub use entelechy_formats::font::{
+    CompactFont, CompactGlyph, Outline, Verb, glyph_schema, metrics_schema, segment_schema,
+};
 
 /// What a font import produced.
 #[derive(Debug)]
@@ -73,11 +71,20 @@ pub fn import(path: &Path, out_dir: &Path, chars: Option<&str>) -> Result<Import
     Ok(Imported { files, ..imported })
 }
 
-/// Reads a font into the Fields of `chars` (every mapped character when
-/// `None`) and what was left out.
-pub fn read(bytes: &[u8], chars: Option<&str>) -> Result<(Fields, Imported), String> {
+/// Reads a font into unflattened [`CompactFont`] contours for `chars` (every
+/// mapped character when `None`). When `allow_empty` is false, a non-empty
+/// character filter that maps nothing in the font is refused.
+pub fn read_compact(
+    bytes: &[u8],
+    chars: Option<&str>,
+    allow_empty: bool,
+) -> Result<(CompactFont, Imported), String> {
     let face = ttf_parser::Face::parse(bytes, 0)
         .map_err(|e| format!("not a TrueType or OpenType font this reads: {e}"))?;
+    let units = face.units_per_em();
+    if units == 0 {
+        return Err("font has zero units per em".into());
+    }
     let mut codes: Vec<char> = match chars {
         Some(text) => text.chars().collect(),
         None => {
@@ -103,28 +110,81 @@ pub fn read(bytes: &[u8], chars: Option<&str>) -> Result<(Fields, Imported), Str
             None => missing.push(c),
         }
     }
-    if entries.len() == 1 {
+    if entries.len() == 1 && !allow_empty {
         return Err("the font maps none of the characters asked for".into());
     }
-    let mut drawer = Drawer::new(&face);
-    let mut glyphs: Vec<u32> = Vec::new();
+    let mut seen_shapes: std::collections::HashMap<u16, u32> = std::collections::HashMap::new();
+    let mut shapes: Vec<Vec<Verb>> = Vec::new();
+    let mut glyphs: Vec<CompactGlyph> = Vec::with_capacity(entries.len());
     for &(code, id) in &entries {
-        glyphs.extend(drawer.row(code, id));
+        let advance = i32::from(face.glyph_hor_advance(id).unwrap_or(0));
+        let shape = if let Some(&existing) = seen_shapes.get(&id.0) {
+            existing
+        } else {
+            let idx = shapes.len() as u32;
+            let mut recorder = Recorder::default();
+            face.outline_glyph(id, &mut recorder);
+            shapes.push(recorder.0);
+            seen_shapes.insert(id.0, idx);
+            idx
+        };
+        glyphs.push(CompactGlyph {
+            code,
+            advance,
+            shape,
+        });
     }
-    let first = drawer.first;
-    let fields = drawer.fields(glyphs, entries.len())?;
-    let mut notes = vec!["kerning, ligatures and shaping are left out; each character is its own glyph at its own advance".to_owned()];
+    let em = 1.0 / f32::from(units);
+    let metrics = [
+        i32::from(units) as u32,
+        (f32::from(face.ascender()) * em).to_bits(),
+        (f32::from(face.descender()) * em).to_bits(),
+        (f32::from(face.line_gap()) * em).to_bits(),
+    ];
+    let mut notes = vec![
+        "kerning, ligatures and shaping are left out; each character is its own glyph at its own advance"
+            .to_owned(),
+    ];
     if face.is_variable() {
         notes.push("a variable font is read at its default instance".into());
     }
     let imported = Imported {
         files: Vec::new(),
         glyphs: entries.len() - 1,
-        segments: first,
+        segments: 0,
         missing,
         notes,
     };
-    Ok((fields, imported))
+    Ok((
+        CompactFont {
+            units,
+            metrics,
+            glyphs,
+            shapes,
+        },
+        imported,
+    ))
+}
+
+/// Reads a font into the Fields of `chars` (every mapped character when
+/// `None`) and what was left out.
+pub fn read(bytes: &[u8], chars: Option<&str>) -> Result<(Fields, Imported), String> {
+    let (compact, mut imported) = read_compact(bytes, chars, false)?;
+    let (glyphs, segments, metrics) = compact.to_fields()?;
+    let any_segments = glyphs.storage().chunks_exact(8).any(|row| row[3] > 0);
+    imported.segments = if any_segments {
+        segments.domain().count()
+    } else {
+        0
+    };
+    Ok((
+        Fields {
+            glyphs,
+            segments,
+            metrics,
+        },
+        imported,
+    ))
 }
 
 /// The Fields of the characters `codes` asks for, a glyph row each in the
@@ -209,28 +269,22 @@ impl<'a> Drawer<'a> {
                 hi_y,
             ];
         }
-        let mut outline = Outline {
-            em: self.em,
-            tolerance: TOLERANCE,
-            start: [0.0; 2],
-            at: [0.0; 2],
-            segments: Vec::new(),
-        };
-        self.face.outline_glyph(id, &mut outline);
-        outline.close();
+        let mut flat = FlatBuilder(Outline::new(self.em));
+        self.face.outline_glyph(id, &mut flat);
+        let segs = flat.0.finish();
         let (mut lo, mut hi) = ([0.0f32; 2], [0.0f32; 2]);
-        if let Some(s) = outline.segments.first() {
+        if let Some(s) = segs.first() {
             lo = [s[0], s[1]];
             hi = lo;
         }
-        for s in &outline.segments {
+        for s in &segs {
             for (x, y) in [(s[0], s[1]), (s[2], s[3])] {
                 lo = [lo[0].min(x), lo[1].min(y)];
                 hi = [hi[0].max(x), hi[1].max(y)];
             }
             self.segments.extend(s.iter().map(|v| v.to_bits()));
         }
-        let count = outline.segments.len();
+        let count = segs.len();
         let [lo_x, lo_y, hi_x, hi_y] = [lo[0], lo[1], hi[0], hi[1]].map(f32::to_bits);
         let row = [self.first as u32, count as u32, lo_x, lo_y, hi_x, hi_y];
         self.drawn.insert(id.0, row);
@@ -275,94 +329,52 @@ impl<'a> Drawer<'a> {
     }
 }
 
-/// A glyph's outline as line segments in ems, curves cut until within
-/// `tolerance` of them.
-struct Outline {
-    em: f32,
-    tolerance: f32,
-    start: [f32; 2],
-    at: [f32; 2],
-    segments: Vec<[f32; 4]>,
-}
+#[derive(Default)]
+struct Recorder(Vec<Verb>);
 
-impl Outline {
-    fn line(&mut self, to: [f32; 2]) {
-        if to != self.at {
-            self.segments.push([self.at[0], self.at[1], to[0], to[1]]);
-        }
-        self.at = to;
-    }
-
-    fn close(&mut self) {
-        self.line(self.start);
-    }
-
-    fn scaled(&self, x: f32, y: f32) -> [f32; 2] {
-        [x * self.em, y * self.em]
-    }
-
-    // How many pieces a curve bending `bend` from its chord is cut into.
-    fn pieces(&self, bend: f32) -> usize {
-        ((bend / self.tolerance).sqrt().ceil() as usize).clamp(1, 64)
-    }
-}
-
-impl ttf_parser::OutlineBuilder for Outline {
+impl ttf_parser::OutlineBuilder for Recorder {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.close();
-        self.start = self.scaled(x, y);
-        self.at = self.start;
+        self.0.push(Verb::MoveTo(x, y));
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
-        let to = self.scaled(x, y);
-        self.line(to);
+        self.0.push(Verb::LineTo(x, y));
     }
 
     fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
-        let (p0, p1, p2) = (self.at, self.scaled(x1, y1), self.scaled(x, y));
-        let bend = 0.25 * (p0[0] - 2.0 * p1[0] + p2[0]).hypot(p0[1] - 2.0 * p1[1] + p2[1]);
-        let n = self.pieces(bend);
-        for k in 1..=n {
-            let t = k as f32 / n as f32;
-            let u = 1.0 - t;
-            let to = [
-                u * u * p0[0] + 2.0 * u * t * p1[0] + t * t * p2[0],
-                u * u * p0[1] + 2.0 * u * t * p1[1] + t * t * p2[1],
-            ];
-            self.line(if k == n { p2 } else { to });
-        }
+        self.0.push(Verb::QuadTo(x1, y1, x, y));
     }
 
     fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-        let (p0, p1, p2, p3) = (
-            self.at,
-            self.scaled(x1, y1),
-            self.scaled(x2, y2),
-            self.scaled(x, y),
-        );
-        let d1 = (p0[0] - 2.0 * p1[0] + p2[0]).hypot(p0[1] - 2.0 * p1[1] + p2[1]);
-        let d2 = (p1[0] - 2.0 * p2[0] + p3[0]).hypot(p1[1] - 2.0 * p2[1] + p3[1]);
-        let n = self.pieces(0.75 * d1.max(d2));
-        for k in 1..=n {
-            let t = k as f32 / n as f32;
-            let u = 1.0 - t;
-            let to = [
-                u * u * u * p0[0]
-                    + 3.0 * u * u * t * p1[0]
-                    + 3.0 * u * t * t * p2[0]
-                    + t * t * t * p3[0],
-                u * u * u * p0[1]
-                    + 3.0 * u * u * t * p1[1]
-                    + 3.0 * u * t * t * p2[1]
-                    + t * t * t * p3[1],
-            ];
-            self.line(if k == n { p3 } else { to });
-        }
+        self.0.push(Verb::CurveTo(x1, y1, x2, y2, x, y));
     }
 
     fn close(&mut self) {
-        Outline::close(self);
+        self.0.push(Verb::Close);
+    }
+}
+
+struct FlatBuilder(Outline);
+
+impl ttf_parser::OutlineBuilder for FlatBuilder {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.0.move_to(x, y);
+    }
+
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.0.line_to(x, y);
+    }
+
+    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+        self.0.quad_to(x1, y1, x, y);
+    }
+
+    fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+        self.0.curve_to(x1, y1, x2, y2, x, y);
+    }
+
+    fn close(&mut self) {
+        self.0.close();
     }
 }
 

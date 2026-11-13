@@ -151,5 +151,52 @@ fn a_font_node_is_baked_with_the_characters_named() {
         .filter(|&code| code as i32 >= 0)
         .collect();
     assert_eq!(kept, vec![mapped[0]]);
+
+    // Without `--chars`, a static `codes` producer subsets the font on its own.
+    let auto = page::compile(&dir.join("scene.esn"), None).expect("auto-subsetted");
+    let auto_decoded = Bundle::decode(&auto.bundle).expect("bundle decodes");
+    let auto_kept: Vec<u32> = auto_decoded.fonts[0]
+        .glyphs
+        .values()
+        .chunks_exact(8)
+        .map(|row| row[0])
+        .filter(|&code| code as i32 >= 0)
+        .collect();
+    assert_eq!(auto_kept, vec![73]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Runtime save files (`output ... to "save.field"` paired with an `input ... else`
+/// fallback) on the exporter's disk are not baked into an exported page.
+#[test]
+fn runtime_save_files_are_not_baked_into_exported_pages() {
+    use entelechy_host::{Domain, FieldData, Scalar, Schema};
+    let dir = std::env::temp_dir().join(format!("entelechy-page-save-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let stale_save = FieldData::from_storage(
+        Schema::new(vec![Scalar::Int]),
+        Domain::Rows(1),
+        vec![999u32],
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("save.field"),
+        entelechy_formats::file::encode_data(&stale_save),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.esn"),
+        "kernel s.fresh@1 { requires { field.write; } output result: Rows<Int>; compute { return 1; } }\n\
+         kernel s.id@1 { requires { field.read; field.write; } input v: Rows<Int>; output result: Rows<Int>; compute { return at(v, 0); } }\n\
+         node fresh: s.fresh@1 { domain = 1; }\n\
+         input saved: Rows<Int> = \"save.field\" else fresh.result;\n\
+         node shown: s.id@1 { v <- saved; domain = 1; }\n\
+         output result <- shown.result;\n\
+         output kept <- shown.result to \"save.field\";\n",
+    )
+    .unwrap();
+    let compiled = page::compile(&dir.join("scene.esn"), None).expect("compiled");
+    assert_eq!(compiled.inputs, 0, "stale save.field must not be bundled");
     let _ = std::fs::remove_dir_all(&dir);
 }

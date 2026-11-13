@@ -290,18 +290,19 @@ curves through their ends, within a font unit.
 A scene (`.esn`) is exported as one page, `--out <name>.html`: a single
 file that is the Player in a page, Entelechy's slim playback runtime for a
 page, and a compiled binary bundle of the scene's IR, lowered graph, input
-Fields and baked font atlases (with no host paths). It opens from the disk
-with nothing beside it and fetches nothing. `--web` names where Entelechy
-for the web is (the directory holding `bridges/web` and `target/page`: a web
-release, or a checkout that has built it as [WebAssembly](#webassembly) says;
-the current directory by default), and `--backend` (`gpu` or `jit`) what runs
-the scene in the page (by default the page chooses the GPU when WebGPU is
-available, else the JIT). The page needs a browser with WebGPU for the GPU
-backend, or runs on WebAssembly JIT alone. A file the scene only reads later,
-by a name it computes, is not in the page. `--chars` and `--chars-file` (each
-may be given again) name the characters the page's fonts keep: each font's
-atlas is baked with those alone, so a page that writes a few words does not
-carry a whole font; a character not among them is then not drawn.
+Fields and compact font contours (with no host paths or local save files). It
+opens from the disk with nothing beside it and fetches nothing. `--web` names
+where Entelechy for the web is (the directory holding `bridges/web` and
+`target/page`: a web release, or a checkout that has built it as
+[WebAssembly](#webassembly) says; the current directory by default), and
+`--backend` (`gpu` or `jit`) what runs the scene in the page (by default the
+page chooses the GPU when WebGPU is available, else the JIT). The page needs a
+browser with WebGPU for the GPU backend, or runs on WebAssembly JIT alone. A
+file the scene only reads later, by a name it computes, is not in the page.
+Each `font` node whose `codes` come from static inputs alone keeps only those
+characters; `--chars` and `--chars-file` (each may be given again) name the
+characters to keep instead when a scene computes them as it runs, and a
+character not among them is then not drawn.
 
 ## Creation protocol
 

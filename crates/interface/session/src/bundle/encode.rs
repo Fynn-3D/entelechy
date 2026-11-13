@@ -37,16 +37,30 @@ impl Bundle {
             w.str(inp);
             w.str(dev);
         });
-        w.list(&self.fonts, |w, font| {
+        w.u32(self.fonts.len() as u32);
+        for (i, font) in self.fonts.iter().enumerate() {
             w.str(&font.node);
             w.source(&font.codes);
             for out in &font.outputs {
                 w.str(out);
             }
-            w.field_data(&font.glyphs);
-            w.field_data(&font.segments);
-            w.field_data(&font.metrics);
-        });
+            if let Some(prev) = self.fonts[..i].iter().position(|earlier| {
+                earlier.compact == font.compact
+                    && earlier.glyphs == font.glyphs
+                    && earlier.segments == font.segments
+                    && earlier.metrics == font.metrics
+            }) {
+                w.tag_u32(0, prev as u32);
+            } else if let Some(compact) = &font.compact {
+                w.byte(2);
+                compact.write_to(&mut w.body);
+            } else {
+                w.byte(1);
+                w.field_data(&font.glyphs);
+                w.field_data(&font.segments);
+                w.field_data(&font.metrics);
+            }
+        }
         w.finish()
     }
 }

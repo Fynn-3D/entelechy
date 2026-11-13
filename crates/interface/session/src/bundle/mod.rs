@@ -40,6 +40,23 @@ pub struct Bundle {
     pub fonts: Vec<BundledFont>,
 }
 
+/// How a `font` node's atlas is handed to [`crate::Session::bundle_with_fonts`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum BundledAtlas {
+    /// Unflattened contours (`entelechy_import::font::read_compact`), encoded
+    /// compactly in the bundle and flattened on open.
+    Compact(entelechy_formats::font::CompactFont),
+    /// Pre-flattened `(glyphs, segments, metrics)` Fields.
+    Fields {
+        /// Glyph rows.
+        glyphs: FieldData,
+        /// Flattened segments.
+        segments: FieldData,
+        /// Font metrics.
+        metrics: FieldData,
+    },
+}
+
 /// One `font` node's pre-baked glyph table, curve segments and metrics.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BundledFont {
@@ -52,10 +69,13 @@ pub struct BundledFont {
     /// Atlas glyph rows (`[code, advance, first, count, lo_x, lo_y, hi_x, hi_y]`),
     /// row 0 holding `.notdef` (`code == -1`) and rows `1..` sorted ascending by `code`.
     pub glyphs: FieldData,
-    /// Atlas quadratic curve segments (`Vec4` per segment).
+    /// Atlas line segments (`Vec4` per segment).
     pub segments: FieldData,
-    /// Font metrics (`Vec3`: `[ascender, descender, line_gap]`).
+    /// Font metrics (`[units, ascender, descender, line_gap]`).
     pub metrics: FieldData,
+    /// Unflattened contours when available, so `Bundle::encode` carries curves
+    /// instead of flattened segment `f32`s.
+    pub compact: Option<entelechy_formats::font::CompactFont>,
 }
 
 /// Slices the glyph rows and curve segments for `codes` out of a pre-baked
