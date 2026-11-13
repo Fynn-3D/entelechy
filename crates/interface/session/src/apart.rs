@@ -332,7 +332,7 @@ impl Backend for Apart {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "documents"))]
 mod tests {
     use super::*;
 

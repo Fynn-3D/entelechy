@@ -3,9 +3,9 @@
 //! ([`words`]), held again when they change. A session watches its own
 //! until the caller gives it another's ([`crate::Session::watch`]).
 
-use entelechy_kernel::{Domain, FieldData, Host, Preparing, Progress, Scalar, Schema, Stage};
-
-use crate::Event;
+use entelechy_kernel::{
+    Domain, FieldData, Handle, Host, Preparing, Progress, Scalar, Schema, Stage,
+};
 
 /// The words before the nodes' stages.
 pub const HEAD: usize = 6;
@@ -72,17 +72,18 @@ impl Watched {
     pub(crate) fn sync(
         &mut self,
         names: &[String],
+        already_held: bool,
         own: &Progress,
-        inputs: &mut entelechy_documents::inputs::Inputs,
         host: &mut Host,
-        events: &mut Vec<Event>,
-    ) {
+        mut hold: impl FnMut(&mut Host, &str, Handle),
+    ) -> Vec<String> {
+        let mut said = Vec::new();
         if names.is_empty() {
-            return;
+            return said;
         }
         let words = words(&self.progress.as_ref().unwrap_or(own).now());
-        if self.held.as_ref() == Some(&words) && names.iter().all(|name| inputs.holds(name)) {
-            return;
+        if self.held.as_ref() == Some(&words) && already_held {
+            return said;
         }
         for name in names {
             let data = FieldData::from_storage(
@@ -93,13 +94,11 @@ impl Watched {
             .map_err(|e| e.to_string())
             .and_then(|data| host.adopt(data).map_err(|e| e.to_string()));
             match data {
-                Ok(handle) => inputs.hold(host, name, handle),
-                Err(why) => events.push(Event::Rejected {
-                    path: "progress".into(),
-                    error: crate::Diagnostic::new(why),
-                }),
+                Ok(handle) => hold(host, name, handle),
+                Err(why) => said.push(why),
             }
         }
         self.held = Some(words);
+        said
     }
 }

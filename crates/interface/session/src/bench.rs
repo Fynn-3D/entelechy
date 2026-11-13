@@ -6,6 +6,7 @@
 //! the runs. `--json` output reads back with `--compare`.
 
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(feature = "documents")]
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -14,6 +15,7 @@ use entelechy_kernel::Context;
 use crate::Session;
 
 /// How to measure.
+#[cfg(feature = "documents")]
 #[derive(Clone, Debug)]
 pub struct Options {
     /// The session each backend opens; `backends` overrides its backend.
@@ -36,6 +38,7 @@ pub struct Options {
     pub compare: Option<PathBuf>,
 }
 
+#[cfg(feature = "documents")]
 impl Default for Options {
     fn default() -> Self {
         Self {
@@ -92,6 +95,7 @@ pub struct Measured {
 }
 
 /// Measures every backend the options name.
+#[cfg(feature = "documents")]
 pub fn bench(options: &Options) -> Result<Vec<Measured>, String> {
     let mut measured = Vec::new();
     for backend in &options.backends {
@@ -101,6 +105,7 @@ pub fn bench(options: &Options) -> Result<Vec<Measured>, String> {
 }
 
 /// Measures one backend in its own session.
+#[cfg(feature = "documents")]
 fn one(options: &Options, backend: &str) -> Result<Measured, String> {
     let mut session = open(options, backend)?;
     let (size, scale) = options.window.unwrap_or(([0.0, 0.0], 1.0));
@@ -133,14 +138,7 @@ pub fn measure(
     base: Context,
     nodes: bool,
 ) -> Result<Measured, String> {
-    let options = Options {
-        frames,
-        repeat,
-        rate,
-        nodes,
-        ..Options::default()
-    };
-    let options = &options;
+    let run_frames = frames.max(1);
     let context = |frame: u32| Context {
         time: base.time + f64::from(frame) / f64::from(rate),
         ..base
@@ -166,11 +164,11 @@ pub fn measure(
         .set_overlap(true)
         .map_err(|e| format!("{backend}: {e}"))?;
     let ms = |duration: std::time::Duration| duration.as_secs_f64() * 1000.0;
-    for _ in 0..options.repeat.max(1) {
+    for _ in 0..repeat.max(1) {
         let started = Instant::now();
         let waited_before = session.device_waited();
         let mut waits: BTreeMap<String, f64> = BTreeMap::new();
-        for _ in 0..options.frames.max(1) {
+        for _ in 0..run_frames {
             let report = session
                 .evaluate(&context(frame))
                 .map_err(|e| format!("{backend}: {e}"))?;
@@ -186,8 +184,8 @@ pub fn measure(
         session.runtime().settle_device();
         let took = started.elapsed().as_secs_f64() * 1000.0;
         let waited = ms(session.device_waited().saturating_sub(waited_before));
-        let frames = f64::from(options.frames.max(1));
-        runs.push((took / frames, waited / frames, waits));
+        let frames_f = f64::from(run_frames);
+        runs.push((took / frames_f, waited / frames_f, waits));
     }
     session
         .set_overlap(overlapped)
@@ -195,19 +193,19 @@ pub fn measure(
     runs.sort_by(|a, b| a.0.total_cmp(&b.0));
     // What a frame waited for, node by node and at its end: the best
     // run's, as its own wait is.
-    let frames = f64::from(options.frames.max(1));
+    let frames_f = f64::from(run_frames);
     let median = runs[runs.len() / 2].0;
     let (best, wait, best_waits) = runs.swap_remove(0);
     let mut waits: Vec<(String, f64)> = best_waits
         .into_iter()
-        .map(|(node, sum)| (node, sum / frames))
+        .map(|(node, sum)| (node, sum / frames_f))
         .filter(|(_, ms)| *ms >= 0.005)
         .collect();
     waits.sort_by(|a, b| b.1.total_cmp(&a.1));
     let by_nodes: f64 = waits.iter().map(|(_, ms)| ms).sum();
     let wait_after = (wait - by_nodes).max(0.0);
-    let run = if options.nodes {
-        node_times(session, options, &context, &mut frame, backend)?
+    let run = if nodes {
+        node_times(session, run_frames, &context, &mut frame, backend)?
     } else {
         NodeRun {
             nodes: Vec::new(),
@@ -248,13 +246,13 @@ struct NodeRun {
 /// waits for the device after every node ([`measured_node_times`]).
 fn node_times(
     session: &mut Session,
-    options: &Options,
+    frames: u32,
     context: &impl Fn(u32) -> Context,
     frame: &mut u32,
     backend: &str,
 ) -> Result<NodeRun, String> {
     if !session.runtime().has_device() {
-        return measured_node_times(session, options, context, frame, backend);
+        return measured_node_times(session, frames, context, frame, backend);
     }
     let overlapped = session.overlaps();
     session
@@ -275,7 +273,7 @@ fn node_times(
             }
         }
     };
-    let frames = options.frames.max(1);
+    let frames = frames.max(1);
     let evaluated = (|| {
         for _ in 0..frames {
             let report = session
@@ -297,7 +295,7 @@ fn node_times(
     evaluated?;
     // A device that tells no frame done keeps no clock to read.
     if told.is_empty() {
-        return measured_node_times(session, options, context, frame, backend);
+        return measured_node_times(session, frames, context, frame, backend);
     }
     let heard = told.len() as f64;
     let mut nodes = calls.nodes(0.0);
@@ -321,14 +319,14 @@ fn node_times(
 /// is its call and the wait after it: where the device keeps no clock.
 fn measured_node_times(
     session: &mut Session,
-    options: &Options,
+    frames: u32,
     context: &impl Fn(u32) -> Context,
     frame: &mut u32,
     backend: &str,
 ) -> Result<NodeRun, String> {
     session.set_measured(true);
     let mut profile = Profile::default();
-    let frames = options.frames.max(1);
+    let frames = frames.max(1);
     for _ in 0..frames {
         let report = session
             .evaluate(&context(*frame))
@@ -480,6 +478,7 @@ fn pattern(node: &str) -> String {
         .join(".")
 }
 
+#[cfg(feature = "documents")]
 fn open(options: &Options, backend: &str) -> Result<Session, String> {
     let mut session = options.session.open(backend)?;
     let events = session.sync();
@@ -499,6 +498,7 @@ fn open(options: &Options, backend: &str) -> Result<Session, String> {
 
 /// The measurement as a table: a line per backend, compared against the
 /// first, then node costs when measured.
+#[cfg(feature = "documents")]
 pub fn table(options: &Options, measured: &[Measured], before: Option<&[Measured]>) -> String {
     let mut out = String::new();
     let window = match options.window {
@@ -695,6 +695,7 @@ pub fn bytes_text(bytes: u64) -> String {
 }
 
 /// The measurement as JSON, for `--compare` on a later build.
+#[cfg(feature = "documents")]
 pub fn json(options: &Options, measured: &[Measured]) -> String {
     let backends: Vec<String> = measured
         .iter()
@@ -737,6 +738,7 @@ pub fn json(options: &Options, measured: &[Measured]) -> String {
 
 /// Reads back the numbers a comparison needs from `--json` output; a
 /// malformed file is an error.
+#[cfg(feature = "documents")]
 pub fn read(path: &Path) -> Result<Vec<Measured>, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut measured = Vec::new();

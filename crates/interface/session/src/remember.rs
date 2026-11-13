@@ -268,7 +268,7 @@ impl Warm {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "documents"))]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 

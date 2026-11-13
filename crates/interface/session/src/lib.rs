@@ -17,14 +17,19 @@
 
 pub mod apart;
 pub mod bench;
+pub mod bundle;
 mod clipboard;
 mod clocked;
+mod devices;
 mod memory;
+#[cfg(feature = "documents")]
 mod observe;
+#[cfg(feature = "documents")]
 mod options;
 pub mod play;
 pub mod preparing;
 pub mod remember;
+#[cfg(feature = "documents")]
 pub mod replay;
 mod session;
 pub mod watch;
@@ -33,22 +38,28 @@ use std::fmt;
 use std::path::PathBuf;
 
 use entelechy_formats::ppm;
+#[cfg(feature = "documents")]
 use entelechy_kernel::{Generation, KernelId, Validated};
 
+#[cfg(feature = "documents")]
 pub use entelechy_documents::history::{Attempt, Change, Origin, Record};
+#[cfg(feature = "documents")]
 pub use entelechy_documents::store::{
     Arrived, Disk, FetchFn, FetchLaterFn, Kept, Later, Memory, Parsed, Store,
 };
+#[cfg(feature = "documents")]
 pub use entelechy_documents::{
     Allowance, Diagnostic, Event, Fix, Refusal, SourcePlace, history, overrides, package,
     parse_allow, store,
 };
 /// How a device is waited for: blocking, or giving a page turns.
 pub use entelechy_gpu::Wait;
+#[cfg(feature = "documents")]
 pub use options::{SessionOptions, environment_packages};
 
 /// The world at one moment, taken for its caller to keep
 /// ([`Session::snapshot`]).
+#[cfg(feature = "documents")]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Snapshot {
     /// The revision it was taken at.
@@ -65,6 +76,7 @@ pub struct Snapshot {
 }
 
 /// What structure a restored snapshot runs in.
+#[cfg(feature = "documents")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Structure {
     /// The scene as it stands.
@@ -75,6 +87,7 @@ pub enum Structure {
 }
 
 /// What laws a restored snapshot runs under.
+#[cfg(feature = "documents")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Laws {
     /// The running laws; state migrates where a layout changed.
@@ -84,6 +97,7 @@ pub enum Laws {
 }
 
 /// One port's committed state in a snapshot.
+#[cfg(feature = "documents")]
 #[derive(Clone, Debug, PartialEq)]
 pub struct StateCopy {
     /// The producing node.
@@ -102,18 +116,22 @@ pub use memory::{HeldBytes, MemoryMap};
 pub use remember::Warm;
 pub use session::Session;
 
+#[cfg(feature = "documents")]
 pub use entelechy_documents::sources::{
     Declarations, PACKAGE_VERSION, declarations_for, declarations_within, locate_document,
     package_manifest, read_document, used_documents,
 };
+#[cfg(feature = "documents")]
 pub use observe::parse_target;
 
 /// What `trace` returns: the reference interpreter's record of one
 /// element, re-exported so interfaces read it here.
+#[cfg(feature = "documents")]
 pub use entelechy_cpu::{CALL_RECORDS, Trace, TraceFault, TraceValue};
 
 /// A traced element: the trace, the Kernel it ran, and where its failure,
 /// if any, is written.
+#[cfg(feature = "documents")]
 #[derive(Clone, Debug)]
 pub struct Traced {
     /// What the interpreter recorded.
@@ -129,6 +147,7 @@ pub struct Traced {
 
 pub use clipboard::{Clipboard, Held};
 
+#[cfg(feature = "documents")]
 pub use entelechy_documents::check::{
     Checked, LARGE, check_document, check_document_with, large, large_past,
 };
@@ -145,6 +164,7 @@ pub struct Built {
 
 /// A `publish` being prepared ([`Session::publish_later`]), finished by
 /// [`Session::publishing`].
+#[cfg(feature = "documents")]
 pub struct Publishing {
     ticket: entelechy_kernel::Ticket,
     expect: entelechy_kernel::Expect,
@@ -152,6 +172,7 @@ pub struct Publishing {
 }
 
 /// A session opened and its scene read ([`Session::open_loaded`]).
+#[cfg(feature = "documents")]
 pub struct Loaded {
     /// The session, its scene loaded.
     pub session: Session,
@@ -159,6 +180,18 @@ pub struct Loaded {
     pub display: Option<entelechy_gpu::present::Display>,
     /// What reading the scene said.
     pub events: Vec<Event>,
+    /// The backends tried first and passed over, as `name: why`.
+    pub passed_over: Vec<String>,
+}
+
+/// A session opened over a compiled [`bundle::Bundle`] ([`Session::open_bundle`]).
+pub struct LoadedBundle {
+    /// The session, its bundle loaded or preparing in turns.
+    pub session: Session,
+    /// The device's display, when the backend has one.
+    pub display: Option<entelechy_gpu::present::Display>,
+    /// What opening the bundle said.
+    pub said: Vec<String>,
     /// The backends tried first and passed over, as `name: why`.
     pub passed_over: Vec<String>,
 }

@@ -8,13 +8,10 @@
 //! `--allow clipboard.write`).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
 use std::time::Duration;
 
 use entelechy_graph::Report;
 use entelechy_kernel::{Domain, FieldData, Handle, Host, Runtime, Scalar, Schema};
-
-use crate::{Diagnostic, Event};
 
 /// A clipboard of text.
 pub trait Clipboard: Send {
@@ -62,7 +59,7 @@ pub(crate) struct Board {
     /// Refusals said, each once.
     said: BTreeSet<&'static str>,
     /// What putting said, until the next sync takes it.
-    events: Vec<Event>,
+    refusals: Vec<String>,
 }
 
 impl Default for Board {
@@ -76,7 +73,7 @@ impl Default for Board {
             looked: None,
             put: BTreeMap::new(),
             said: BTreeSet::new(),
-            events: Vec::new(),
+            refusals: Vec::new(),
         }
     }
 }
@@ -91,17 +88,20 @@ impl Board {
         self.said.clear();
     }
 
+    #[cfg_attr(not(feature = "documents"), allow(dead_code))]
     pub(crate) fn allow_read(&mut self) {
         self.read = true;
         self.held = None;
     }
 
+    #[cfg_attr(not(feature = "documents"), allow(dead_code))]
     pub(crate) fn allow_write(&mut self) {
         self.write = true;
     }
 
     /// Puts `text` on the clipboard as the person would elsewhere, and
     /// has the inputs read it at once.
+    #[cfg_attr(not(feature = "documents"), allow(dead_code))]
     pub(crate) fn place(&mut self, text: &str) -> Result<(), String> {
         self.device.put(text)?;
         self.held = None;
@@ -110,21 +110,21 @@ impl Board {
 
     /// Holds the clipboard's text in each of `names`: read again when the
     /// last look is old enough, or never was, and held again only when it
-    /// changed.
+    /// changed. Returns refusals raised since the last sync.
     pub(crate) fn sync(
         &mut self,
         names: &[String],
-        inputs: &mut entelechy_documents::inputs::Inputs,
+        already_held: bool,
         host: &mut Host,
-        events: &mut Vec<Event>,
-    ) {
-        events.append(&mut self.events);
+        mut hold: impl FnMut(&mut Host, &str, Handle),
+    ) -> Vec<String> {
+        let mut said = std::mem::take(&mut self.refusals);
         if names.is_empty() {
-            return;
+            return said;
         }
         let fresh = self.held.is_some() && self.looked.is_some_and(|at| at.elapsed() < LOOK);
-        if fresh && names.iter().all(|name| inputs.holds(name)) {
-            return;
+        if fresh && already_held {
+            return said;
         }
         // Where there is no clock the clipboard is looked at each time.
         self.looked = entelechy_kernel::clock::now();
@@ -132,15 +132,13 @@ impl Board {
             self.device.text().unwrap_or_default()
         } else {
             self.refuse(
-                events,
+                &mut said,
                 "reading the clipboard is not allowed; run with `--allow clipboard.read`",
             );
             String::new()
         };
-        if self.held.as_deref() == Some(text.as_str())
-            && names.iter().all(|name| inputs.holds(name))
-        {
-            return;
+        if self.held.as_deref() == Some(text.as_str()) && already_held {
+            return said;
         }
         let mut words: Vec<u32> = text.chars().map(u32::from).collect();
         words.push(0);
@@ -153,73 +151,69 @@ impl Board {
             .map_err(|e| e.to_string())
             .and_then(|data| host.adopt(data).map_err(|e| e.to_string()));
             match data {
-                Ok(handle) => inputs.hold(host, name, handle),
-                Err(why) => events.push(rejected(why)),
+                Ok(handle) => hold(host, name, handle),
+                Err(why) => said.push(why),
             }
         }
         self.held = Some(text);
+        said
     }
 
     /// Puts on the clipboard each output `to clipboard` whose text the
     /// evaluation behind `report` changed: its characters to the first 0,
     /// unless none. An output that gives its text the frame it is copied
     /// and none after puts the same text again when copied again.
-    pub(crate) fn after(
+    pub(crate) fn after<'a>(
         &mut self,
-        presented: &[entelechy_scene::Present],
+        to_clipboard: impl Iterator<Item = &'a str>,
         report: &Report,
         runtime: &mut Runtime,
     ) {
-        let to_clipboard = presented
-            .iter()
-            .filter(|present| present.device == entelechy_documents::devices::CLIPBOARD);
-        for write in to_clipboard {
+        for output in to_clipboard {
             let Some(handle) = report
                 .outputs
                 .iter()
-                .find(|(name, _)| name == &write.output)
+                .find(|(name, _)| name == output)
                 .map(|(_, handle)| *handle)
             else {
                 continue;
             };
-            let last = self.put.get(&write.output);
+            let last = self.put.get(output);
             if last.is_some_and(|(read, _)| *read == handle) {
                 continue;
             }
             let text = match text_of(runtime, handle) {
                 Ok(text) => text,
                 Err(why) => {
-                    self.events
-                        .push(rejected(format!("output `{}`: {why}", write.output)));
+                    self.refusals.push(format!("output `{output}`: {why}"));
                     continue;
                 }
             };
             let same = last.is_some_and(|(_, put)| *put == text);
-            self.put
-                .insert(write.output.clone(), (handle, text.clone()));
+            self.put.insert(output.to_owned(), (handle, text.clone()));
             if same || text.is_empty() {
                 continue;
             }
             if self.system && !self.write {
-                let mut said = std::mem::take(&mut self.events);
+                let mut said = std::mem::take(&mut self.refusals);
                 self.refuse(
                     &mut said,
                     "writing the clipboard is not allowed; run with `--allow clipboard.write`",
                 );
-                self.events = said;
+                self.refusals = said;
                 continue;
             }
             if let Err(why) = self.device.put(&text) {
-                self.events.push(rejected(why));
+                self.refusals.push(why);
             }
             // What is put is what the inputs read next.
             self.held = None;
         }
     }
 
-    fn refuse(&mut self, events: &mut Vec<Event>, why: &'static str) {
+    fn refuse(&mut self, said: &mut Vec<String>, why: &'static str) {
         if self.said.insert(why) {
-            events.push(rejected(why.to_owned()));
+            said.push(why.to_owned());
         }
     }
 }
@@ -237,11 +231,4 @@ fn text_of(runtime: &mut Runtime, handle: Handle) -> Result<String, String> {
         .take_while(|&&word| word != 0)
         .filter_map(|&word| char::from_u32(word))
         .collect())
-}
-
-fn rejected(why: String) -> Event {
-    Event::Rejected {
-        path: PathBuf::from("clipboard"),
-        error: Diagnostic::new(why),
-    }
 }

@@ -16,40 +16,51 @@ impl Session {
     /// request's channel while it is answered), returning the previous
     /// one. Records carry it.
     pub fn act_for(&mut self, origin: crate::Origin) -> crate::Origin {
-        std::mem::replace(&mut self.origin, origin)
+        std::mem::replace(&mut self.backing.docs_mut().origin, origin)
     }
 
     /// Records the next scene loaded as the current request's change (a
     /// `compose`, a param that resizes the graph).
     pub fn claim_scene(&mut self) {
-        self.claim = super::Claim::Asked;
+        self.backing.docs_mut().claim = super::Claim::Asked;
     }
 
     /// The world's position: its revision (moved by every change but
     /// running) and the frames committed since.
     pub fn position(&self) -> (u64, u64) {
-        self.history.position()
+        self.backing.docs().history.position()
     }
 
     /// The remembered changes after revision `since`, oldest first.
     pub fn changes_since(&self, since: u64) -> Vec<crate::Record> {
-        self.history.changes(since).cloned().collect()
+        self.backing
+            .docs()
+            .history
+            .changes(since)
+            .cloned()
+            .collect()
     }
 
     /// The attempts refused at or after revision `since`, oldest first.
     pub fn attempts_since(&self, since: u64) -> Vec<crate::Attempt> {
-        self.history.attempts(since).cloned().collect()
+        self.backing
+            .docs()
+            .history
+            .attempts(since)
+            .cloned()
+            .collect()
     }
 
     /// Why no scene is loaded, when none is: the scene document's last
     /// refusal the history keeps, or that it has not loaded.
     pub fn why_no_scene(&self) -> Option<String> {
-        if self.scene.graph().is_some() {
+        let docs = self.backing.docs();
+        if docs.scene.graph().is_some() {
             return None;
         }
-        let root = self.scene.root().display().to_string();
+        let root = docs.scene.root().display().to_string();
         Some(
-            self.history
+            docs.history
                 .attempts(0)
                 .filter(|attempt| attempt.subject == root)
                 .last()
@@ -71,26 +82,36 @@ impl Session {
             Some(version) if version.generation() == generation => {
                 Some(version.source().to_owned())
             }
-            _ => self.history.source_of(id, generation).map(str::to_owned),
+            _ => self
+                .backing
+                .docs()
+                .history
+                .source_of(id, generation)
+                .map(str::to_owned),
         }
     }
 
     /// A scene document a remembered change loaded, by its digest.
     pub fn scene_at(&self, digest: u64) -> Option<String> {
-        self.history.scene_text(digest).map(str::to_owned)
+        self.backing
+            .docs()
+            .history
+            .scene_text(digest)
+            .map(str::to_owned)
     }
 
     /// The text the scene's document at `path` (as a compose names it,
     /// [`Session::composable`]) had at version `digest`, when the session
     /// remembers a compose that wrote it, or for the scene, a change that
     /// loaded it.
-    pub fn document_at(&self, path: &std::path::Path, digest: u64) -> Result<String, String> {
+    pub fn document_at(&self, path: &Path, digest: u64) -> Result<String, String> {
         let landed = self.composable(path)?;
+        let docs = self.backing.docs();
         let root = self
             .store()
-            .canonical(self.scene.root())
-            .unwrap_or_else(|_| self.scene.root().to_path_buf());
-        self.history
+            .canonical(docs.scene.root())
+            .unwrap_or_else(|_| docs.scene.root().to_path_buf());
+        docs.history
             .document_text(&landed, digest, landed == root)
             .map(str::to_owned)
             .ok_or_else(|| {
@@ -105,7 +126,7 @@ impl Session {
     /// every port's committed state (uncommitted outputs excluded), and
     /// the scene document. Device Fields are brought back first.
     pub fn snapshot(&mut self) -> Result<crate::Snapshot, String> {
-        let (revision, frame) = self.history.position();
+        let (revision, frame) = self.backing.docs().history.position();
         let laws = self
             .runtime
             .kernels()
@@ -141,7 +162,7 @@ impl Session {
             frame,
             laws,
             states,
-            scene: self.scene.text().map(str::to_owned),
+            scene: self.backing.docs().scene.text().map(str::to_owned),
         })
     }
 
@@ -161,17 +182,20 @@ impl Session {
     ) -> Result<Report, String> {
         // Disk edits are part of the world a refused restore returns to.
         self.sync_settled();
-        let history = self.history.clone();
-        // Kept in memory: the text on disk may not load.
-        let scene_kept = self.scene.keep();
-        let kernels_kept = self.kernels.keep();
-        // Every running version, to be put back exactly.
+        let (history, scene_kept, kernels_kept, origin) = {
+            let docs = self.backing.docs();
+            (
+                docs.history.clone(),
+                docs.scene.keep(),
+                docs.kernels.keep(),
+                docs.origin.clone(),
+            )
+        };
         let registry: Vec<(KernelId, Arc<KernelVersion>)> = self
             .runtime
             .kernels()
             .map(|version| (version.id().clone(), Arc::clone(version)))
             .collect();
-        let origin = self.origin.clone();
         let mut scene_before = None;
         let mut published = Vec::new();
         let restored = self.restore_steps(
@@ -184,10 +208,10 @@ impl Session {
         );
         match restored {
             Ok(report) => {
-                // Record the laws the restore published.
+                let docs = self.backing.docs_mut();
                 for id in &published {
                     if let Some(version) = self.runtime.kernel(id) {
-                        self.history.published(
+                        docs.history.published(
                             id,
                             version.generation(),
                             version.source(),
@@ -195,7 +219,7 @@ impl Session {
                         );
                     }
                 }
-                self.history.changed(
+                docs.history.changed(
                     crate::Change::Restored {
                         revision: snapshot.revision,
                         laws: laws == crate::Laws::Snapshot,
@@ -205,10 +229,8 @@ impl Session {
                 Ok(report)
             }
             Err(why) => {
-                // Write the document's bytes back; put the scene, ledger
-                // and running versions back from memory.
                 let mut why = why;
-                let root = self.scene.root().to_path_buf();
+                let root = self.backing.docs().scene.root().to_path_buf();
                 if let Some(before) = scene_before
                     && let Err(also) = self.store().write(&root, before.as_bytes())
                 {
@@ -216,8 +238,11 @@ impl Session {
                         format!("{why}; and the scene document could not be written back: {also}");
                 }
                 let stamp = self.store().stamp(&root);
-                self.scene.put_back(scene_kept, stamp);
-                self.kernels.put_back(kernels_kept, &mut self.runtime);
+                {
+                    let docs = self.backing.docs_mut();
+                    docs.scene.put_back(scene_kept, stamp);
+                    docs.kernels.put_back(kernels_kept, &mut self.runtime);
+                }
                 let mut back: Vec<(KernelId, Option<Arc<KernelVersion>>)> = self
                     .runtime
                     .kernels()
@@ -230,10 +255,10 @@ impl Session {
                         .map(|(id, version)| (id, Some(version))),
                 );
                 self.runtime.reinstate(back);
-                // The inputs and placements follow the scene put back.
                 self.sync();
-                self.history = history;
-                self.history.refused(
+                let docs = self.backing.docs_mut();
+                docs.history = history;
+                docs.history.refused(
                     format!("the snapshot of revision {}", snapshot.revision),
                     why.clone(),
                     None,
@@ -244,8 +269,6 @@ impl Session {
         }
     }
 
-    /// The restore's steps, in order, noting what each replaced for
-    /// [`Session::restore`] to put back.
     fn restore_steps(
         &mut self,
         snapshot: &crate::Snapshot,
@@ -260,8 +283,7 @@ impl Session {
                 .scene
                 .as_deref()
                 .ok_or("the snapshot holds no scene to restore")?;
-            // The document on disk is what a failure writes back.
-            let root = self.scene.root().to_path_buf();
+            let root = self.backing.docs().scene.root().to_path_buf();
             let before = self
                 .store()
                 .read_text(&root)
@@ -274,7 +296,7 @@ impl Session {
                 self.replace_scene(text)?;
             }
         }
-        if self.scene.graph().is_none() {
+        if self.backing.docs().scene.graph().is_none() {
             return Err("no scene is loaded".into());
         }
         if laws == crate::Laws::Snapshot {
@@ -321,14 +343,15 @@ impl Session {
                 }
             }
         }
-        let graph = self.scene.graph().ok_or("no scene is loaded")?;
+        let docs = self.backing.docs();
+        let graph = docs.scene.graph().ok_or("no scene is loaded")?;
         self.evaluator
             .restore(
                 graph,
                 &mut self.runtime,
-                self.inputs.handles(),
+                docs.inputs.handles(),
                 context,
-                self.scene.params(),
+                docs.scene.params(),
                 states,
             )
             .map_err(|error| format!("the restored world does not run: {error}"))
@@ -339,14 +362,16 @@ impl Session {
     /// published or refused.
     pub fn sync_settled(&mut self) -> Vec<Event> {
         let mut events = self.sync();
-        // Documents compiled on another thread publish at the sync after.
-        while self.scene.compiling() {
-            self.scene.wait_compiled();
+        while self.backing.docs().scene.compiling() {
+            self.backing.docs_mut().scene.wait_compiled();
             events.extend(self.sync());
         }
         let mut landed = Vec::new();
-        self.scene
-            .wait(&mut self.kernels, &mut self.runtime, &mut landed);
+        {
+            let docs = self.backing.docs_mut();
+            docs.scene
+                .wait(&mut docs.kernels, &mut self.runtime, &mut landed);
+        }
         self.remember(&landed);
         events.extend(landed);
         events
@@ -355,13 +380,11 @@ impl Session {
     /// Replaces the scene document whole and reads it, its Kernels
     /// settled; the error is why it was refused.
     pub(super) fn replace_scene(&mut self, text: &str) -> Result<(), String> {
-        let root = self.scene.root().to_path_buf();
+        let root = self.backing.docs().scene.root().to_path_buf();
         self.store()
             .write(&root, text.as_bytes())
             .map_err(|e| format!("{}: {e}", root.display()))?;
         let events = self.sync_settled();
-        // Refusals of the scene document itself: its lowering or its own
-        // Kernels.
         let refused = events.iter().find(|event| match event {
             Event::SceneRejected(_) => true,
             Event::Rejected { path, .. } => *path == root,
@@ -378,89 +401,101 @@ impl Session {
     /// request's. One sync is at most one scene change.
     pub(super) fn remember(&mut self, events: &[Event]) {
         use super::Claim;
-        // A scene read in the claimed one's place is its document's.
-        let superseded = self.scene.take_superseded();
-        let (claimant, landed) = match std::mem::take(&mut self.claim) {
-            Claim::Asked => (Some(self.origin.clone()), None),
+        let waiting_now = self.scene_waiting();
+        let superseded = self.backing.docs_mut().scene.take_superseded();
+        let (claimant, landed) = match std::mem::take(&mut self.backing.docs_mut().claim) {
+            Claim::Asked => (Some(self.backing.docs().origin.clone()), None),
             Claim::Waiting(origin, mut gathered) if !superseded => {
-                // The later syncs' events are the request's answer.
                 gathered.extend(events.iter().cloned());
                 (Some(origin), Some(gathered))
             }
             Claim::Landed(events) => (None, Some(events)),
             Claim::Waiting(..) | Claim::None => (None, None),
         };
-        self.claim = match (&claimant, landed) {
-            (Some(origin), gathered) if self.scene_waiting() => {
+        self.backing.docs_mut().claim = match (&claimant, landed) {
+            (Some(origin), gathered) if waiting_now => {
                 Claim::Waiting(origin.clone(), gathered.unwrap_or_default())
             }
             (_, Some(events)) => Claim::Landed(events),
             _ => Claim::None,
         };
-        let scene_origin =
-            claimant.unwrap_or_else(|| crate::Origin::Document(self.scene.root().to_path_buf()));
-        // A document as the scene's own output wrote it is the scene's.
-        let store = std::sync::Arc::clone(self.scene.store());
-        let writes = &self.writes;
-        let document = |path: &Path| match writes.author(store.as_ref(), path) {
-            Some(output) => crate::Origin::Output(output.to_owned()),
-            None => crate::Origin::Document(path.to_path_buf()),
-        };
+        let scene_origin = claimant.unwrap_or_else(|| {
+            crate::Origin::Document(self.backing.docs().scene.root().to_path_buf())
+        });
         let mut scene_loaded = false;
-        for event in events {
-            match event {
-                Event::Published {
-                    path,
-                    id,
-                    generation,
-                } => {
-                    let source = self
-                        .runtime
-                        .kernel(id)
-                        .map(|version| version.source().to_owned())
-                        .unwrap_or_default();
-                    self.history
-                        .published(id, *generation, &source, document(path));
+        {
+            let docs = self.backing.docs_mut();
+            let store = Arc::clone(docs.scene.store());
+            let writes = &docs.writes;
+            let document = |path: &Path| match writes.author(store.as_ref(), path) {
+                Some(output) => crate::Origin::Output(output.to_owned()),
+                None => crate::Origin::Document(path.to_path_buf()),
+            };
+            for event in events {
+                match event {
+                    Event::Published {
+                        path,
+                        id,
+                        generation,
+                    } => {
+                        let source = self
+                            .runtime
+                            .kernel(id)
+                            .map(|version| version.source().to_owned())
+                            .unwrap_or_default();
+                        docs.history
+                            .published(id, *generation, &source, document(path));
+                    }
+                    Event::Retired { path, id } => docs.history.retired(id, document(path)),
+                    Event::SceneLoaded => scene_loaded = true,
+                    Event::Rejected { path, error } => docs.history.refused(
+                        path.display().to_string(),
+                        error.to_string(),
+                        None,
+                        document(path),
+                    ),
+                    Event::SceneRejected(error) => {
+                        let subject = docs.scene.root().display().to_string();
+                        docs.history.refused(
+                            subject,
+                            error.to_string(),
+                            None,
+                            scene_origin.clone(),
+                        );
+                    }
+                    _ => {}
                 }
-                Event::Retired { path, id } => self.history.retired(id, document(path)),
-                Event::SceneLoaded => scene_loaded = true,
-                Event::Rejected { path, error } => self.history.refused(
-                    path.display().to_string(),
-                    error.to_string(),
-                    None,
-                    document(path),
-                ),
-                Event::SceneRejected(error) => {
-                    let subject = self.scene.root().display().to_string();
-                    self.history
-                        .refused(subject, error.to_string(), None, scene_origin.clone());
-                }
-                _ => {}
             }
         }
         if scene_loaded {
-            let text = self.scene.text().unwrap_or_default().to_owned();
+            let text = self
+                .backing
+                .docs()
+                .scene
+                .text()
+                .unwrap_or_default()
+                .to_owned();
             let loaded = self.loaded_documents();
-            self.history.scene(&text, &loaded, scene_origin);
+            self.backing
+                .docs_mut()
+                .history
+                .scene(&text, &loaded, scene_origin);
         }
     }
 
-    /// The scene's other documents a compose may write, each with its text
-    /// as the session read it: a document changed on disk since, or whose
-    /// text does not parse, is left for the load that reads it.
     fn loaded_documents(&self) -> Vec<(PathBuf, String)> {
         let store = self.store();
-        let root = self.scene.root();
-        let mut loaded: Vec<(PathBuf, String)> = self
+        let docs = self.backing.docs();
+        let root = docs.scene.root();
+        let mut loaded: Vec<(PathBuf, String)> = docs
             .scene
             .placed()
-            .chain(self.kernels.stamps())
+            .chain(docs.kernels.stamps())
             .filter(|(path, stamp)| *path != root && stamp.is_some())
             .filter_map(|(path, stamp)| {
                 let landed = self.composable(&store.whole(path)).ok()?;
                 let text = store.read_text(path).ok()?;
                 let unchanged = store.stamp(path) == stamp;
-                // Parsed once a stamp: the store keeps what it parsed.
                 let parses = store.document(path).is_ok();
                 (unchanged && parses).then_some((landed, text))
             })

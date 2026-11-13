@@ -16,6 +16,7 @@ pub use entelechy_rules::placement::{Placement, placement};
 pub use pad::{Pad, PadAxis, PadButton};
 
 use crate::Session;
+#[cfg(feature = "documents")]
 use crate::replay::{Replay, Replayer};
 
 /// Deduplicates a run of failures: the first frame of a failure is
@@ -311,6 +312,7 @@ pub struct Play {
     panel: Option<hud::Panel>,
     reported: Reporting,
     /// A replay and when its first frame was shown.
+    #[cfg(feature = "documents")]
     replaying: Option<(Replayer, Option<f64>)>,
     /// How the last picture reached the window.
     path: String,
@@ -371,6 +373,7 @@ impl Play {
             stats: hud::Stats::default(),
             panel: None,
             reported: Reporting::default(),
+            #[cfg(feature = "documents")]
             replaying: None,
             path: String::new(),
             downloads: 0,
@@ -389,6 +392,7 @@ impl Play {
 
     /// Plays `replay`: its inputs drive the scene at its times until it
     /// ends; then the person does.
+    #[cfg(feature = "documents")]
     pub fn replay(&mut self, replay: &Replay, session: &mut Session) {
         self.replaying = Some((Replayer::start(replay, session), None));
         self.said
@@ -397,7 +401,14 @@ impl Play {
 
     /// Whether a replay is playing.
     pub fn replaying(&self) -> bool {
-        self.replaying.is_some()
+        #[cfg(feature = "documents")]
+        {
+            self.replaying.is_some()
+        }
+        #[cfg(not(feature = "documents"))]
+        {
+            false
+        }
     }
 
     /// The scene's time: seconds since the play began, less the time it
@@ -459,7 +470,7 @@ impl Play {
     pub fn key(&mut self, session: &mut Session, name: &str, down: bool) {
         match name {
             "F7" | "F8" | "F9" => {
-                if down && self.replaying.is_none() {
+                if down && !self.replaying() {
                     match name {
                         "F8" => self.pause(!self.paused()),
                         "F9" => self.step(1),
@@ -637,14 +648,12 @@ impl Play {
         let waited_before = session.device_waited();
         // Kernels waiting their turn (a page) are prepared by syncs: every
         // frame then, so the turns go on.
-        let due = self.replaying.is_some()
+        let due = self.replaying()
             || session.preparing_left() > 0
             || self.synced.is_none_or(|at| begun - at >= SYNC_EVERY);
         if due {
             self.synced = Some(begun);
-            for event in session.sync_on_frame() {
-                self.said.push(event.to_string());
-            }
+            self.said.extend(session.sync_lines());
         }
         // A first load still waiting for its Kernels has nothing to run
         // yet; once a frame is shown, a replacement waits behind the
@@ -687,6 +696,7 @@ impl Play {
         });
         match evaluated {
             Ok(report) => {
+                #[cfg(feature = "documents")]
                 if replayed.is_some()
                     && let Some((replayer, _)) = &mut self.replaying
                 {
@@ -696,6 +706,9 @@ impl Play {
                     self.said
                         .extend(report.refused.iter().map(ToString::to_string));
                 }
+                #[cfg(not(feature = "documents"))]
+                self.said
+                    .extend(report.refused.iter().map(ToString::to_string));
                 // A preview let go cold is made again to be shown.
                 if let Some(node) = &self.preview {
                     let _ = session.warm(node, "result");
@@ -750,7 +763,14 @@ impl Play {
                 // Where in a Kernel it failed, traced again only when the
                 // failure is news: a scene failing every frame is traced once.
                 let told = session.told(&error);
-                self.failed(&told, || session.failure_place(&error, &context));
+                #[cfg(feature = "documents")]
+                self.failed(&told, || {
+                    session
+                        .failure_place(&error, &context)
+                        .map(|place| place.to_string())
+                });
+                #[cfg(not(feature = "documents"))]
+                self.failed(&told, || None);
                 Frame::Failed
             }
         }
@@ -866,7 +886,7 @@ impl Play {
     /// Says a failed evaluation once, and keeps it as the status. The
     /// sound and the pointer fetched behind the frame before are not
     /// taken: that frame is taken back with them.
-    fn failed(&mut self, told: &str, place: impl FnOnce() -> Option<crate::SourcePlace>) {
+    fn failed(&mut self, told: &str, place: impl FnOnce() -> Option<String>) {
         self.sound_behind = None;
         self.pointer_behind = None;
         self.pointer_wanted = None;
@@ -983,6 +1003,7 @@ impl Play {
 
     /// The replay's next due frame. After the last, the outcome is said
     /// and the person has the scene.
+    #[cfg(feature = "documents")]
     fn replay_frame(&mut self, session: &mut Session) -> Replayed {
         let now = (self.clock)();
         let Some((replayer, since)) = &mut self.replaying else {
@@ -1026,6 +1047,11 @@ impl Play {
                 Replayed::Not
             }
         }
+    }
+
+    #[cfg(not(feature = "documents"))]
+    fn replay_frame(&mut self, _session: &mut Session) -> Replayed {
+        Replayed::Not
     }
 
     /// The F10 panel: groups laid left to right as the window has room,
@@ -1135,6 +1161,7 @@ enum Held {
 }
 
 /// A replay's answer for the next frame.
+#[cfg_attr(not(feature = "documents"), allow(dead_code))]
 enum Replayed {
     Wait,
     Frame(Box<Context>),

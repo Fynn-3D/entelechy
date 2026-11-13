@@ -10,23 +10,35 @@ rust-version.workspace = true
 # The crate has no doc tests, so `cargo test` skips the rustdoc pass.
 doctest = false
 
+[features]
+# Source documents, the `.ent` compiler, the reference interpreter, and
+# replays. Disabled when an exported page plays a compiled `Bundle`.
+default = ["documents"]
+documents = [
+    "dep:entelechy-compiler",
+    "dep:entelechy-language",
+    "dep:entelechy-scene",
+    "dep:entelechy-cpu",
+    "dep:entelechy-documents",
+]
+
 [dependencies]
-entelechy-compiler = { path = "../../frontend/compiler" }
-entelechy-language = { path = "../../frontend/language" }
+entelechy-abi = { path = "../../core/abi" }
+entelechy-compiler = { path = "../../frontend/compiler", optional = true }
+entelechy-language = { path = "../../frontend/language", optional = true }
 entelechy-ir = { path = "../../core/ir" }
 entelechy-graph = { path = "../../core/graph" }
-entelechy-scene = { path = "../../frontend/scene" }
+entelechy-scene = { path = "../../frontend/scene", optional = true }
 entelechy-kernel = { path = "../../core/kernel" }
 entelechy-rules = { path = "../../core/rules" }
-entelechy-cpu = { path = "../../backends/cpu" }
+entelechy-cpu = { path = "../../backends/cpu", optional = true }
 entelechy-gpu = { path = "../../backends/gpu" }
 entelechy-jit = { path = "../../backends/jit" }
 entelechy-formats = { path = "../../interface/formats" }
-entelechy-documents = { path = "../../interface/documents" }
+entelechy-documents = { path = "../../interface/documents", optional = true }
 
 [dev-dependencies]
 entelechy-import = { path = "../../interface/import", default-features = false }
-entelechy-abi = { path = "../../core/abi" }
 entelechy-conformance = { path = "../../backends/conformance" }
 
 [lints]

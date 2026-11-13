@@ -1,116 +1,196 @@
-//! The session: the four parts, their shared runtime, and their sync
-//! order. Its fields are private to this module; a part reaches only what
-//! the session hands it.
+//! The session: its runtime, evaluator and backing scene (either live
+//! source documents or a compiled [`crate::bundle::Bundle`]).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+#[cfg(feature = "documents")]
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use entelechy_formats::ppm;
+#[cfg(feature = "documents")]
+use entelechy_documents::{Event, inputs, kernels, scene, writes};
 use entelechy_graph::{EvaluateError, Evaluator, Graph, Report};
-use entelechy_kernel::{Backend, Context, Expect, Handle, KernelId, Runtime, Value};
+use entelechy_kernel::{Backend, Context, Handle, KernelId, Runtime, Value};
 
-use entelechy_documents::store::Store;
-use entelechy_documents::{Event, SourcePlace, inputs, kernels, scene, writes};
+use crate::{Limits, SessionError};
 
-use crate::{Limits, Publishing, SessionError, Traced, observe};
-
+mod bundled;
+#[cfg(feature = "documents")]
+mod docs;
+#[cfg(feature = "documents")]
+mod inspect;
+#[cfg(feature = "documents")]
 mod time;
 
-/// A scene, the libraries it uses, and the runtime state built from them.
+#[cfg(feature = "documents")]
+pub(super) const BEST: &[&str] = &["gpu", "jit", "cpu"];
+#[cfg(not(feature = "documents"))]
+pub(super) const BEST: &[&str] = &["gpu", "jit"];
+
+/// A scene, the Kernels it uses, and the runtime state built from them.
 pub struct Session {
-    scene: scene::Scene,
-    kernels: kernels::Kernels,
-    inputs: inputs::Inputs,
+    pub(super) backing: Backing,
     /// The inputs whose Host copies were let go once on a device
     /// ([`Session::let_go_of_input_copies`]).
-    pub(crate) copies_let_go: std::collections::BTreeSet<Handle>,
-    /// What the session may read; its store reads only there.
-    reads: Arc<std::sync::Mutex<entelechy_documents::reads::Reads>>,
-    writes: writes::Writes,
-    /// Whether what the scene saved for itself on disk is read as absent
-    /// until this run writes it ([`Session::start_from_nothing_saved`]).
-    nothing_saved: bool,
-    runtime: Runtime,
-    evaluator: Evaluator,
-    /// Where each node was last said to run, so a change is said once.
-    placed: BTreeMap<String, Option<entelechy_kernel::Routed>>,
-    /// The Kernels last said to be published and used by no node, by
-    /// document ([`Event::Idle`]).
-    idle: BTreeMap<PathBuf, Vec<KernelId>>,
-    /// What was last said of nodes whose default domain leaves elements
-    /// unrun ([`Event::Unrun`]), by node.
-    unrun: BTreeMap<String, String>,
-    /// The graph and the published Kernels' revision `idle` and `unrun`
-    /// were last worked out under: both are theirs alone, and a sync
-    /// under the same two says nothing new of either.
-    shaped: Option<(Arc<entelechy_graph::Graph>, u64)>,
+    pub(crate) copies_let_go: BTreeSet<Handle>,
+    pub(super) runtime: Runtime,
+    pub(super) evaluator: Evaluator,
     /// The Kernels the graph's nodes use, by the version last seen
     /// ([`Session::finish_used`]).
-    used: BTreeMap<entelechy_kernel::KernelId, entelechy_kernel::Generation>,
+    used: BTreeMap<KernelId, entelechy_kernel::Generation>,
     /// The headless window: size in pixels and scale factor.
     window: Option<([f32; 2], f32)>,
-    /// What changed the world, and what was refused.
-    history: entelechy_documents::history::History,
-    /// Where the current request comes from.
-    origin: crate::Origin,
-    /// The request whose change the scene being read is
-    /// ([`Session::claim_scene`]).
-    claim: Claim,
-    /// What reading on a scene lowered on another thread said outside a
-    /// sync ([`Session::settle_lowering`]), said by the next sync.
-    later: Vec<Event>,
-    /// A node's `times` row said another count on the last frame: the
-    /// scene is lowered again before the next.
-    resized: bool,
     /// The names asked to stay materialized ([`Session::pin`]), resolved
     /// against the running graph before each evaluation.
-    pins: Vec<entelechy_graph::NodeId>,
+    pub(super) pins: Vec<entelechy_graph::NodeId>,
     /// Each clocked frame's nodes' runs, until the device tells the frame.
     node_clock: crate::clocked::NodeClock,
-    /// The externals bound to files by the caller's overrides, as bound.
-    bound: BTreeMap<String, PathBuf>,
-    /// The folder last chosen ([`Session::choose_folder`]) and what it was
-    /// allowed.
-    chosen: Option<(PathBuf, Vec<crate::Allowance>)>,
     /// The clipboard: the session's own, or the system's given.
-    board: crate::clipboard::Board,
+    pub(super) board: crate::clipboard::Board,
     /// The Kernels an input `= progress` reads: the session's own, or
     /// another's given.
     watched: crate::preparing::Watched,
     /// The context the last frame was evaluated under, which outputs let
     /// go cold are made again under when read ([`Session::warm`]).
-    last_context: Context,
-    /// Why the last evaluation failed, until one succeeds: what a read of
-    /// a value it kept from being made is told.
-    failing: Option<String>,
+    pub(super) last_context: Context,
+    /// Why the last evaluation failed, until one succeeds.
+    pub(super) failing: Option<String>,
     /// Whether what only shows is shown from the processor while the
     /// device's compiler builds it ([`Session::show_while_building`]).
     shown_while_building: bool,
     /// The Kernels handed to threads of their own to be built there
     /// ([`Session::finish_used`]).
-    handed: BTreeSet<entelechy_kernel::KernelId>,
+    handed: BTreeSet<KernelId>,
 }
 
-/// A request's claim on the scene it wrote, from asked to landed. A scene
-/// read in its place (a document changed on disk) ends it.
+pub(super) enum Backing {
+    #[cfg(feature = "documents")]
+    Documents(Box<Docs>),
+    Bundled(Box<bundled::BundledScene>),
+}
+
+#[cfg(feature = "documents")]
+pub(super) struct Docs {
+    pub(super) scene: scene::Scene,
+    pub(super) kernels: kernels::Kernels,
+    pub(super) inputs: inputs::Inputs,
+    pub(super) reads: Arc<std::sync::Mutex<entelechy_documents::reads::Reads>>,
+    pub(super) writes: writes::Writes,
+    pub(super) nothing_saved: bool,
+    pub(super) placed: BTreeMap<String, Option<entelechy_kernel::Routed>>,
+    pub(super) idle: BTreeMap<PathBuf, Vec<KernelId>>,
+    pub(super) unrun: BTreeMap<String, String>,
+    pub(super) shaped: Option<(Arc<Graph>, u64)>,
+    pub(super) history: entelechy_documents::history::History,
+    pub(super) origin: crate::Origin,
+    pub(super) claim: Claim,
+    pub(super) later: Vec<Event>,
+    pub(super) resized: bool,
+    pub(super) bound: BTreeMap<String, PathBuf>,
+    pub(super) chosen: Option<(PathBuf, Vec<crate::Allowance>)>,
+}
+
+/// A request's claim on the scene it wrote, from asked to landed.
+#[cfg(feature = "documents")]
 #[derive(Default)]
 pub(crate) enum Claim {
-    /// No request's.
     #[default]
     None,
-    /// The next scene read is the change of the request being answered.
     Asked,
-    /// The request's scene waits for its Kernels, with the events of the
-    /// syncs since it was asked.
     Waiting(crate::Origin, Vec<Event>),
-    /// The request's scene landed on a later sync, with that sync's
-    /// events ([`Session::take_landing`]).
     Landed(Vec<Event>),
 }
 
+impl Backing {
+    #[cfg(feature = "documents")]
+    pub(super) fn docs(&self) -> &Docs {
+        match self {
+            Self::Documents(docs) => docs,
+            Self::Bundled(_) => panic!("document operation called on a bundled session"),
+        }
+    }
+
+    #[cfg(feature = "documents")]
+    pub(super) fn docs_mut(&mut self) -> &mut Docs {
+        match self {
+            Self::Documents(docs) => docs,
+            Self::Bundled(_) => panic!("document operation called on a bundled session"),
+        }
+    }
+
+    pub(super) fn bundled_mut(&mut self) -> Option<&mut bundled::BundledScene> {
+        match self {
+            #[cfg(feature = "documents")]
+            Self::Documents(_) => None,
+            Self::Bundled(b) => Some(b),
+        }
+    }
+
+    pub(super) fn graph(&self) -> Option<&Graph> {
+        match self {
+            #[cfg(feature = "documents")]
+            Self::Documents(docs) => docs.scene.graph(),
+            Self::Bundled(b) => b.graph.as_deref(),
+        }
+    }
+
+    pub(super) fn shared_graph(&self) -> Option<&Arc<Graph>> {
+        match self {
+            #[cfg(feature = "documents")]
+            Self::Documents(docs) => docs.scene.shared_graph(),
+            Self::Bundled(b) => b.graph.as_ref(),
+        }
+    }
+
+    pub(super) fn handles(&self) -> &BTreeMap<String, Handle> {
+        match self {
+            #[cfg(feature = "documents")]
+            Self::Documents(docs) => docs.inputs.handles(),
+            Self::Bundled(b) => &b.handles,
+        }
+    }
+
+    pub(super) fn params(&self) -> &BTreeMap<String, Value> {
+        match self {
+            #[cfg(feature = "documents")]
+            Self::Documents(docs) => docs.scene.params(),
+            Self::Bundled(b) => &b.params,
+        }
+    }
+
+    fn is_presented(&self, output: &str) -> bool {
+        match self {
+            #[cfg(feature = "documents")]
+            Self::Documents(docs) => docs
+                .scene
+                .files()
+                .presented
+                .iter()
+                .any(|p| p.output == output),
+            Self::Bundled(b) => b.presented.iter().any(|(out, _)| out == output),
+        }
+    }
+
+    fn presented_output(&self, device: &str) -> Option<&str> {
+        match self {
+            #[cfg(feature = "documents")]
+            Self::Documents(docs) => docs
+                .scene
+                .files()
+                .presented
+                .iter()
+                .find(|p| p.device == device)
+                .map(|p| p.output.as_str()),
+            Self::Bundled(b) => b
+                .presented
+                .iter()
+                .find(|(_, dev)| dev == device)
+                .map(|(out, _)| out.as_str()),
+        }
+    }
+}
+
 /// The error an evaluation returns when no scene has loaded.
-fn no_scene() -> EvaluateError {
+pub(super) fn no_scene() -> EvaluateError {
     EvaluateError::Graph(entelechy_graph::GraphError::UnknownOutput(
         entelechy_graph::Source::External("<no scene>".into()),
     ))
@@ -131,67 +211,20 @@ type Display = entelechy_gpu::present::Display;
 type Opened = (Box<dyn Backend>, Option<Box<dyn Backend>>, Option<Display>);
 
 /// How long a sync prepares Kernels where no thread can start, at least
-/// one each: briefly, so one sync holds the page, and the device it
-/// shares, only a moment, while a scene's hundreds of Kernels need few
-/// syncs.
-const TURN: std::time::Duration = std::time::Duration::from_millis(12);
+/// one each.
+pub(super) const TURN: std::time::Duration = std::time::Duration::from_millis(12);
 
 impl Session {
-    /// Creates a CPU-backed session; [`Session::sync`] loads files.
-    /// `library` is an extra directory or file of Kernels.
-    pub fn open(scene: &Path, library: Option<&Path>, budget_words: usize) -> Self {
-        Self::open_with(
-            scene,
-            library,
-            Runtime::with_backend(budget_words, Box::new(entelechy_cpu::CpuBackend)),
-        )
-    }
-
-    /// Creates a session over a runtime the caller built.
-    pub fn open_with(scene: &Path, library: Option<&Path>, runtime: Runtime) -> Self {
-        Self::open_in(Arc::new(crate::Disk::default()), scene, library, runtime)
-    }
-
-    /// Creates a session whose documents are in `store`: the disk, or
-    /// files handed in ([`crate::Memory`]).
-    pub fn open_in(
-        store: Arc<dyn Store>,
-        scene: &Path,
-        library: Option<&Path>,
-        runtime: Runtime,
-    ) -> Self {
-        let reads = Arc::new(std::sync::Mutex::new(
-            entelechy_documents::reads::Reads::default(),
-        ));
-        let store: Arc<dyn Store> = Arc::new(entelechy_documents::reads::Held::new(
-            store,
-            Arc::clone(&reads),
-        ));
+    pub(super) fn from_backing(runtime: Runtime, backing: Backing) -> Self {
         Self {
-            scene: scene::Scene::new(store, scene, library),
-            kernels: kernels::Kernels::default(),
-            inputs: inputs::Inputs::default(),
-            copies_let_go: std::collections::BTreeSet::new(),
-            reads,
-            writes: writes::Writes::default(),
-            nothing_saved: false,
+            backing,
+            copies_let_go: BTreeSet::new(),
             runtime,
             evaluator: Evaluator::new(),
-            placed: BTreeMap::new(),
-            idle: BTreeMap::new(),
-            unrun: BTreeMap::new(),
-            shaped: None,
             used: BTreeMap::new(),
             window: None,
-            history: entelechy_documents::history::History::default(),
-            origin: crate::Origin::Local,
-            claim: Claim::None,
-            later: Vec::new(),
-            resized: false,
             pins: Vec::new(),
             node_clock: crate::clocked::NodeClock::default(),
-            bound: BTreeMap::new(),
-            chosen: None,
             board: crate::clipboard::Board::default(),
             watched: crate::preparing::Watched::default(),
             last_context: Context::default(),
@@ -199,13 +232,6 @@ impl Session {
             shown_while_building: false,
             handed: BTreeSet::new(),
         }
-    }
-
-    /// Where the session's documents are. Callers acting for others go
-    /// through [`Session::read_file`], [`Session::write_file`] and
-    /// [`Session::write_scene`], which check allowances first.
-    pub(crate) fn store(&self) -> &dyn Store {
-        self.scene.store().as_ref()
     }
 
     /// The runtime, for inspection.
@@ -219,9 +245,9 @@ impl Session {
         Self::build(backend, limits, entelechy_gpu::Wait::blocking()).map(|built| built.runtime)
     }
 
-    /// Builds a runtime over `cpu`, `gpu`, `jit`, or `best` (the first of
-    /// GPU, JIT, interpreter that opens). The device is waited for as
-    /// `wait` says.
+    /// Builds a runtime over `cpu`, `gpu`, `jit`, or `best` (the first
+    /// available backend that opens). The device is waited for as `wait`
+    /// says.
     pub fn build(
         backend: &str,
         limits: Limits,
@@ -230,7 +256,7 @@ impl Session {
         let mut passed_over = Vec::new();
         let one = [backend];
         let named: &[&str] = match backend {
-            "best" => &["gpu", "jit", "cpu"],
+            "best" => BEST,
             _ => &one,
         };
         for name in named {
@@ -251,82 +277,11 @@ impl Session {
         Err(format!("no backend opens: {}", passed_over.join("; ")))
     }
 
-    /// Opens `scene` in `store` on `backend` and reads it, reads
-    /// restricted from the start when `hold_reads`
-    /// ([`Session::restrict_reads`]). With `best`, the first of GPU, JIT,
-    /// interpreter on which the runtime opens and the scene loads; each
-    /// passed over is listed with why. The error is why the scene failed
-    /// on the last tried.
-    pub fn open_loaded(
-        store: Arc<dyn Store>,
-        scene: &Path,
-        library: Option<&Path>,
-        backend: &str,
-        limits: Limits,
-        wait: entelechy_gpu::Wait,
-        hold_reads: bool,
-    ) -> Result<crate::Loaded, String> {
-        let one = [backend];
-        let named: &[&str] = match backend {
-            "best" => &["gpu", "jit", "cpu"],
-            _ => &one,
-        };
-        let mut passed_over = Vec::new();
-        let mut last = String::new();
-        for name in named {
-            let built = match Self::build(name, limits, wait) {
-                Ok(built) => built,
-                Err(why) if named.len() > 1 => {
-                    passed_over.push(format!("{name}: {why}"));
-                    continue;
-                }
-                Err(why) => return Err(why),
-            };
-            let mut session = Self::open_in(Arc::clone(&store), scene, library, built.runtime);
-            if hold_reads {
-                session.restrict_reads()?;
-            }
-            // In a page (no thread can start) the Kernels prepare in turns
-            // from the first load: it is opened waiting for them, and the
-            // frames prepare them a few at a time instead of one long sync.
-            let turns = cfg!(all(target_arch = "wasm32", target_os = "unknown"));
-            if turns {
-                session.set_background(true);
-            }
-            let events = session.sync_a_turn();
-            let refused = events
-                .iter()
-                .any(|event| matches!(event, Event::SceneRejected(_) | Event::Rejected { .. }));
-            if session.graph().is_some() || (turns && session.scene_waiting() && !refused) {
-                return Ok(crate::Loaded {
-                    session,
-                    display: built.display,
-                    events,
-                    passed_over,
-                });
-            }
-            last = events
-                .iter()
-                .find_map(|event| match event {
-                    Event::SceneRejected(error) => Some(error.to_string()),
-                    Event::Rejected { path, error } => Some(format!("{}: {error}", path.display())),
-                    _ => None,
-                })
-                .unwrap_or_else(|| format!("{} did not load", scene.display()));
-            passed_over.push(format!("{name}: the scene did not load: {last}"));
-        }
-        Err(if last.is_empty() {
-            format!("no backend opens: {}", passed_over.join("; "))
-        } else {
-            last
-        })
-    }
-
     fn backend_runtime(
         backend: &str,
         budget_words: usize,
         wait: entelechy_gpu::Wait,
-    ) -> Result<(Runtime, Option<entelechy_gpu::present::Display>), String> {
+    ) -> Result<(Runtime, Option<Display>), String> {
         let (main, ordered, display) = Self::opened(backend, wait)?;
         Ok((Runtime::with_backends(budget_words, main, ordered), display))
     }
@@ -339,9 +294,14 @@ impl Session {
 
     fn opened(backend: &str, wait: entelechy_gpu::Wait) -> Result<Opened, String> {
         match backend {
+            #[cfg(feature = "documents")]
             "cpu" => Ok((Box::new(entelechy_cpu::CpuBackend), None, None)),
+            #[cfg(not(feature = "documents"))]
+            "cpu" => Err(
+                "the interpreter backend is not included in this runtime; use gpu, jit, or best"
+                    .to_owned(),
+            ),
             "gpu" => {
-                // The JIT runs scans; the GPU runs everything else.
                 let gpu = entelechy_gpu::GpuBackend::with_wait(wait)
                     .map_err(|error| error.to_string())?;
                 let display = gpu.display();
@@ -361,80 +321,15 @@ impl Session {
 
     /// The current graph, if the scene loaded.
     pub fn graph(&self) -> Option<&Graph> {
-        self.scene.graph()
-    }
-
-    /// The scene's font nodes, every level's: each the externals its
-    /// glyphs, outlines and metrics are in, and where its codes come from.
-    pub fn fonts(&self) -> &[entelechy_scene::FontNode] {
-        &self.scene.files().fonts
-    }
-
-    /// The outputs the scene gives Host devices (`to sound`, `to pointer`,
-    /// ...), one a device.
-    pub fn devices(&self) -> &[entelechy_scene::Present] {
-        &self.scene.files().presented
-    }
-
-    /// The scene's files nodes, at every level.
-    pub fn file_nodes(&self) -> &[entelechy_scene::FilesNode] {
-        &self.scene.files().file_nodes
-    }
-
-    /// The scene's fields nodes, at every level.
-    pub fn field_nodes(&self) -> &[entelechy_scene::FieldsNode] {
-        &self.scene.files().field_nodes
-    }
-
-    /// The scene document.
-    pub fn root(&self) -> &Path {
-        self.scene.root()
-    }
-
-    /// The type of the param `name` the scene declares, as written; an
-    /// undeclared one is refused, saying where it lives instead. `None`
-    /// before a scene loads, which holds any name.
-    pub fn param_type(&mut self, name: &str) -> Result<Option<String>, String> {
-        self.settle_lowering();
-        self.scene
-            .declared_param(name)
-            .map(|param| param.map(|param| param.ty.to_string()))
-    }
-
-    /// Overrides a graph parameter for later evaluations, in the shape of
-    /// its declared type (`[[1, 0], [0, 1]]` for a `Mat2`); another layout
-    /// is refused. Unknown names are kept for a later declaration.
-    pub fn set_param(&mut self, name: &str, value: Value) -> Result<(), String> {
-        self.settle_lowering();
-        self.scene.set_param(name, value)?;
-        self.history.changed(
-            crate::Change::Param {
-                name: name.to_owned(),
-            },
-            self.origin.clone(),
-        );
-        Ok(())
-    }
-
-    /// Reads on a scene being lowered on another thread, waiting for it:
-    /// a param is judged by the newest scene read, whatever the thread's
-    /// timing. What it says is said by the next sync.
-    fn settle_lowering(&mut self) {
-        let mut events = Vec::new();
-        self.scene
-            .land_lowering(&mut self.kernels, &mut self.runtime, &mut events);
-        self.later.extend(events);
+        self.backing.graph()
     }
 
     /// Current graph parameter overrides.
     pub fn params(&self) -> &BTreeMap<String, Value> {
-        self.scene.params()
+        self.backing.params()
     }
 
-    /// Names the run the next evaluations are, from its first frame: each
-    /// frame takes from the same frame of the last run of that name what
-    /// nothing it reads has changed, and is remembered for the next
-    /// ([`entelechy_graph::Evaluator::recall_as`]). `None` remembers nothing.
+    /// Names the run the next evaluations are, from its first frame.
     pub fn recall_as(&mut self, name: Option<String>) {
         self.evaluator.recall_as(name);
     }
@@ -444,329 +339,8 @@ impl Session {
         self.evaluator.recalled_bytes()
     }
 
-    /// Starts the world over as the scene opened it, the Kernels and the
-    /// documents kept: every `async` run landed, every pin dropped, every
-    /// port's committed state forgotten, every parameter back at its
-    /// default, what the frames gave the font and files nodes forgotten
-    /// (their codes, their paths and the files read for them), and the
-    /// documents read again. What a replay needs before
-    /// it plays on a session another played on: the session's Kernels,
-    /// prepared and compiled, and the outputs no state feeds, stay as
-    /// they were.
-    pub fn start_over(&mut self) -> Vec<Event> {
-        let _ = self.settle();
-        for pin in std::mem::take(&mut self.pins) {
-            for inner in self.pinned_by(&pin) {
-                self.evaluator.unpin(&inner);
-            }
-        }
-        self.reset_state();
-        self.inputs
-            .start_fed_over(self.scene.files(), self.runtime.host_mut());
-        self.settle_lowering();
-        let overridden: Vec<String> = self.scene.params().keys().cloned().collect();
-        self.scene.clear_params();
-        for name in overridden {
-            self.history
-                .changed(crate::Change::Param { name }, self.origin.clone());
-        }
-        self.sync()
-    }
-
-    /// Every document the session currently watches.
-    pub fn watched(&self) -> Vec<PathBuf> {
-        self.kernels
-            .documents()
-            .into_iter()
-            .chain(self.inputs.watched())
-            .collect()
-    }
-
-    /// Imports a PPM file as the external image `name`.
-    pub fn bind_external(&mut self, name: &str, path: &Path) -> Result<(), SessionError> {
-        let image = ppm::read(path).map_err(|e| SessionError::Image(path.to_path_buf(), e))?;
-        let host = self.runtime.host_mut();
-        let handle = host.adopt_image(image).map_err(SessionError::Host)?;
-        self.inputs.hold(host, name, handle);
-        Ok(())
-    }
-
-    /// Reconciles the runtime with its store and reports what changed, in
-    /// order: finished replacements, documents, inputs, placements. A
-    /// changed scene is read and said by this sync.
-    pub fn sync(&mut self) -> Vec<Event> {
-        let mut events = self.sync_apart(false);
-        // Asked for, a sync lands what it read: in turns (a page), what
-        // waits is prepared now. Frames and loading take a turn at a time
-        // ([`Session::sync_a_turn`]).
-        if self.runtime.prepares_in_turns() && self.preparing_left() > 0 {
-            self.runtime.prepare_turn(usize::MAX);
-            events.extend(self.sync_apart(false));
-        }
-        events
-    }
-
-    /// A sync that, where Kernels prepare in turns (a page), prepares only
-    /// a turn's few: what loading a scene, frame by frame, gives the page
-    /// between. Elsewhere it is [`Session::sync`].
-    pub fn sync_a_turn(&mut self) -> Vec<Event> {
-        self.sync_apart(false)
-    }
-
-    /// [`Session::sync`] for a frame: where replacements prepare off the
-    /// frames, a changed scene is lowered on another thread while the
-    /// running one goes on, and said by the sync it lands on.
-    pub fn sync_on_frame(&mut self) -> Vec<Event> {
-        self.sync_apart(true)
-    }
-
-    fn sync_apart(&mut self, apart: bool) -> Vec<Event> {
-        let mut events = std::mem::take(&mut self.later);
-        // Where no thread can start (a page), the Kernels waiting are
-        // prepared for a moment each sync ([`TURN`]), so the page and its
-        // device get their turns between them; elsewhere the workers do.
-        let began = entelechy_kernel::clock::now();
-        while self.runtime.prepare_turn(1) > 0 && entelechy_kernel::clock::since(began) < TURN {}
-        let store = Arc::clone(self.scene.store());
-        // Every document walks the files it reaches; a path is looked at
-        // once a sync.
-        store.sync_begins();
-        let reads = Arc::clone(&self.reads);
-        let readable =
-            |path: &Path| entelechy_documents::reads::lock(&reads).check(store.as_ref(), path);
-        self.scene.sync(
-            &mut self.kernels,
-            &mut self.runtime,
-            &mut events,
-            &readable,
-            apart,
-        );
-        // Externals the caller's overrides bind to files, bound when new.
-        for (name, path) in self.scene.bound().to_vec() {
-            if self.bound.get(&name) == Some(&path) {
-                continue;
-            }
-            match self.bind_external(&name, &path) {
-                Ok(()) => {
-                    events.push(Event::Loaded {
-                        name: name.clone(),
-                        path: path.clone(),
-                        detail: "bound by the caller".into(),
-                    });
-                    self.bound.insert(name, path);
-                }
-                Err(error) => events.push(Event::Rejected {
-                    path: path.clone(),
-                    error: crate::Diagnostic::new(error.to_string()),
-                }),
-            }
-        }
-        // The first-loaded scene's own documents and input files, worked
-        // out only while reads wait for them. A first load whose Kernels
-        // still prepare in turns (a page) has no scene running yet: it reads
-        // freely until it lands, and is fixed then.
-        let landing = self.scene.graph().is_none() && self.scene_waiting();
-        let read_from: Vec<std::path::PathBuf> =
-            if entelechy_documents::reads::lock(&reads).wants_directories() && !landing {
-                let files = self.scene.files();
-                self.scene
-                    .read_from()
-                    .into_iter()
-                    .chain(
-                        files
-                            .assets
-                            .iter()
-                            .filter_map(|asset| asset.path.parent().map(Path::to_path_buf)),
-                    )
-                    .chain(files.sequences.iter().map(|(_, dir, ..)| dir.clone()))
-                    .chain(files.checks.iter().map(|(_, path)| path.clone()))
-                    .chain(files.files.iter().map(|(_, dir)| dir.clone()))
-                    .chain(files.outlines.iter().map(|(_, path)| path.clone()))
-                    .chain(
-                        files
-                            .fonts
-                            .iter()
-                            .filter_map(|font| font.path.parent().map(Path::to_path_buf)),
-                    )
-                    .chain(files.file_nodes.iter().map(|node| node.dir.clone()))
-                    .chain(files.field_nodes.iter().map(|node| node.dir.clone()))
-                    .collect()
-            } else {
-                Vec::new()
-            };
-        if !landing {
-            entelechy_documents::reads::lock(&reads).settle(store.as_ref(), &read_from);
-        }
-        let tables = entelechy_documents::inputs::table_elements(self.scene.graph(), &self.runtime);
-        let unread: Vec<PathBuf> = if self.nothing_saved {
-            self.scene
-                .files()
-                .writes
-                .iter()
-                .filter(|write| self.writes.author(store.as_ref(), &write.path).is_none())
-                .map(|write| write.path.clone())
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let declared = entelechy_documents::inputs::Declared {
-            graph: self.scene.graph(),
-            files: self.scene.files(),
-            tables: &tables,
-            unread: &unread,
-        };
-        let on_device =
-            self.inputs
-                .sync(&store, &declared, &readable, &mut self.runtime, &mut events);
-        self.copies_let_go.extend(on_device);
-        let clipboards = self
-            .scene
-            .files()
-            .fed_by(entelechy_documents::devices::CLIPBOARD);
-        self.board.sync(
-            &clipboards,
-            &mut self.inputs,
-            self.runtime.host_mut(),
-            &mut events,
-        );
-        self.finish_used();
-        self.sync_placements(&mut events);
-        self.sync_shape(&mut events);
-        events.append(&mut self.inputs.take_frame_events());
-        events.append(&mut self.writes.take_events());
-        self.remember(&events);
-        store.sync_ends();
-        events
-    }
-
-    /// Reads what the scene saved for itself on disk as if it were not
-    /// there, until this run writes it: a replay starts from the same
-    /// files whoever has played the scene before it.
-    pub fn start_from_nothing_saved(&mut self) {
-        self.nothing_saved = true;
-    }
-
-    /// Allows the scene's outputs to be written to files in `dir` and
-    /// under it (`output name <- source to "file";`). Outputs are written
-    /// only where allowed.
-    pub fn allow_writes(&mut self, dir: &Path) -> Result<(), String> {
-        self.writes.allow(self.scene.store().as_ref(), dir)
-    }
-
-    /// Allows an output `to files` to remove and rename files in `dir` and
-    /// under it; writing them still needs [`Session::allow_writes`].
-    pub fn allow_deletes(&mut self, dir: &Path) -> Result<(), String> {
-        self.writes.allow_deletes(self.scene.store().as_ref(), dir)
-    }
-
-    /// Restricts input reads to the scene's own directories (its own, its
-    /// placed graphs', its libraries' and packages') and those
-    /// [`Session::allow_reads`] allowed; for sessions an agent drives
-    /// (`serve`, `--serve`, `entelechy_request`). Refused after the first
-    /// sync; the directories are fixed as the scene first loads.
-    pub fn restrict_reads(&mut self) -> Result<(), String> {
-        entelechy_documents::reads::lock(&self.reads).restrict()
-    }
-
-    /// Allows the scene's inputs to be read from files in `dir` and under
-    /// it, where reads are restricted ([`Session::restrict_reads`]).
-    pub fn allow_reads(&mut self, dir: &Path) -> Result<(), String> {
-        entelechy_documents::reads::lock(&self.reads).allow(self.store(), dir)
-    }
-
-    /// Allows a write to the one file `path`, named by the person running
-    /// the session (`--save`, `--out`). Its directory stays closed.
-    pub fn allow_write_to(&mut self, path: &Path) -> Result<(), String> {
-        self.writes.allow_file(self.scene.store().as_ref(), path)
-    }
-
-    /// Places the scene's inputs and outputs where `overrides` say: the
-    /// running scene's at once (read again at the next sync), every scene
-    /// read after. A name the scene does not read or write from a file is
-    /// refused, and nothing changes.
-    pub fn place(
-        &mut self,
-        overrides: entelechy_documents::overrides::Overrides,
-    ) -> Result<(), String> {
-        self.scene.place(overrides)
-    }
-
-    /// Where the caller places the scene's inputs and outputs.
-    pub fn overrides(&self) -> &entelechy_documents::overrides::Overrides {
-        self.scene.overrides()
-    }
-
-    /// A folder the person chose for the scene: each of `names`, an input
-    /// or an output that reads or writes a directory (`files`, `checks`,
-    /// `outline`, `to files`), placed there, and the folder given each of
-    /// `grants` (`file.read`, `file.write`, `file.delete`), reads always.
-    /// A folder chosen before gives back what it was given. Refused,
-    /// nothing changes.
-    pub fn choose_folder(
-        &mut self,
-        names: &[String],
-        dir: &Path,
-        grants: &[String],
-    ) -> Result<(), String> {
-        if self.scene.graph().is_none() {
-            return Err("no scene runs to take a folder".into());
-        }
-        if !self.store().is_dir(dir) {
-            return Err(format!("{} is not a directory", dir.display()));
-        }
-        let mut overrides = self.scene.overrides().clone();
-        for name in names {
-            match entelechy_documents::overrides::kind_of(self.scene.written(), name) {
-                Some(entelechy_documents::overrides::Kind::Directory) => {}
-                Some(entelechy_documents::overrides::Kind::File) => {
-                    return Err(format!(
-                        "`{name}` reads or writes a file, not a directory: a folder cannot be chosen for it"
-                    ));
-                }
-                None => {
-                    return Err(format!(
-                        "the scene reads and writes nothing named `{name}` from files"
-                    ));
-                }
-            }
-            if self
-                .scene
-                .written()
-                .writes
-                .iter()
-                .any(|w| &w.output == name)
-            {
-                overrides.outputs.insert(name.clone(), dir.to_path_buf());
-            } else {
-                overrides.inputs.insert(name.clone(), dir.to_path_buf());
-            }
-        }
-        let allowances = std::iter::once("file.read")
-            .chain(grants.iter().map(String::as_str))
-            .map(|grant| crate::parse_allow(&format!("{grant}={}", dir.display())))
-            .collect::<Result<Vec<_>, _>>()?;
-        self.scene.place(overrides)?;
-        if let Some((before, _)) = self.chosen.take() {
-            self.writes.revoke(self.scene.store().as_ref(), &before);
-            entelechy_documents::reads::lock(&self.reads)
-                .revoke(self.scene.store().as_ref(), &before);
-        }
-        for allowance in &allowances {
-            self.allow(allowance)?;
-        }
-        self.chosen = Some((dir.to_path_buf(), allowances));
-        Ok(())
-    }
-
-    /// The folder last chosen ([`Session::choose_folder`]).
-    pub fn chosen_folder(&self) -> Option<&Path> {
-        self.chosen.as_ref().map(|(dir, _)| dir.as_path())
-    }
-
     /// The system's clipboard for the scene's `= clipboard` inputs and `to
-    /// clipboard` outputs, in the session's own one's stead; reading and
-    /// writing it then need `--allow clipboard.read` and
-    /// `--allow clipboard.write`.
+    /// clipboard` outputs, in the session's own one's stead.
     pub fn give_clipboard(&mut self, device: Box<dyn crate::Clipboard>) {
         self.board.give(device);
     }
@@ -777,399 +351,10 @@ impl Session {
         self.watched.give(progress);
     }
 
-    /// Puts `text` on the clipboard, as a person copying elsewhere would,
-    /// and has the scene's `= clipboard` inputs hold it at once.
-    pub fn place_clipboard(&mut self, text: &str) -> Result<(), String> {
-        self.board.place(text)?;
-        let clipboards = self
-            .scene
-            .files()
-            .fed_by(entelechy_documents::devices::CLIPBOARD);
-        let mut events = Vec::new();
-        self.board.sync(
-            &clipboards,
-            &mut self.inputs,
-            self.runtime.host_mut(),
-            &mut events,
-        );
-        self.remember(&events);
-        Ok(())
-    }
-
-    /// Grants what a command line's `--allow` said.
-    pub fn allow(&mut self, allowance: &crate::Allowance) -> Result<(), String> {
-        match allowance {
-            crate::Allowance::FileRead(dir) => self.allow_reads(dir),
-            crate::Allowance::FileWrite(dir) => self.allow_writes(dir),
-            crate::Allowance::FileDelete(dir) => self.allow_deletes(dir),
-            crate::Allowance::ClipboardRead => {
-                self.board.allow_read();
-                Ok(())
-            }
-            crate::Allowance::ClipboardWrite => {
-                self.board.allow_write();
-                Ok(())
-            }
-        }
-    }
-
-    /// Whether `text`, as the scene document, would be taken whole: it
-    /// lowers, its placed documents load, and each Kernel it defines
-    /// compiles within the session's grants. Side-effect free; callers ask
-    /// before replacing the document.
-    pub fn check_scene(&self, text: &str) -> Result<(), crate::Diagnostic> {
-        let granted = |module: &entelechy_ir::Validated| {
-            self.runtime
-                .granted(module)
-                .map_err(|why| crate::Diagnostic::new(why.to_string()))
-        };
-        let readable = |path: &Path| self.allowed_read(path);
-        self.scene.check(text, &readable, &granted)
-    }
-
-    /// Whether `path` may be read on the session's behalf: anywhere,
-    /// unless reads are restricted ([`Session::restrict_reads`]), and then
-    /// where the scene's documents are or use, in a package directory, or
-    /// where allowed.
-    pub fn allowed_read(&self, path: &Path) -> Result<(), String> {
-        entelechy_documents::reads::lock(&self.reads).check(self.store(), path)
-    }
-
-    /// Where a write to `path` lands, if inside an allowed directory
-    /// ([`Session::allow_writes`]). Callers acting for an agent ask this
-    /// before every write.
-    pub fn allowed_write(&self, path: &Path) -> Result<std::path::PathBuf, String> {
-        self.writes.place(self.scene.store().as_ref(), path)
-    }
-
-    /// The scene document's text as it stands in the store.
-    pub fn scene_text(&self) -> std::io::Result<String> {
-        self.store().read_text(self.scene.root())
-    }
-
-    /// Reads `path` where the session may read ([`Session::allowed_read`]).
-    pub fn read_file(&self, path: &Path) -> Result<String, String> {
-        self.allowed_read(path)?;
-        self.store()
-            .read_text(path)
-            .map_err(|e| format!("{}: {e}", path.display()))
-    }
-
-    /// Writes `bytes` to `path`, whole, where the session may write
-    /// ([`Session::allowed_write`]); answers where they landed.
-    pub fn write_file(&self, path: &Path, bytes: &[u8]) -> Result<std::path::PathBuf, String> {
-        let target = self.allowed_write(path)?;
-        self.store()
-            .write(&target, bytes)
-            .map_err(|e| format!("{}: {e}", target.display()))?;
-        Ok(target)
-    }
-
-    /// Replaces the scene document with `text`, whole, once
-    /// [`Session::check_scene`] accepts it; a refusal leaves the document
-    /// as it is and is recorded as an attempt
-    /// ([`Session::attempts_since`]). The outer error is the store's; the
-    /// inner, the refusal.
-    pub fn write_scene(
-        &mut self,
-        text: &str,
-    ) -> Result<Result<(), crate::Diagnostic>, SessionError> {
-        if let Err(why) = self.check_scene(text) {
-            let subject = self.scene.root().display().to_string();
-            self.history
-                .refused(subject, why.to_string(), Some(text), self.origin.clone());
-            return Ok(Err(why));
-        }
-        let root = self.scene.root();
-        self.store()
-            .write(root, text.as_bytes())
-            .map_err(|e| SessionError::Io(root.to_path_buf(), e))?;
-        Ok(Ok(()))
-    }
-
-    /// Where `path`, spelled from the scene's directory or whole, lands as
-    /// a document a compose may write: a `.ent`, `.esn` or `.replay` file
-    /// under the scene's directory, judged where it lands after its links, and in
-    /// no package directory. A package is the person's, kept as found.
-    pub fn composable(&self, path: &Path) -> Result<PathBuf, String> {
-        let store = self.store();
-        let dir = self.scene.root().parent().unwrap_or_else(|| Path::new("."));
-        let home = store.canonical(dir).unwrap_or_else(|_| store.whole(dir));
-        let wanted = store.whole(&dir.join(path));
-        if !matches!(
-            wanted.extension().and_then(|e| e.to_str()),
-            Some("ent" | "esn" | "replay")
-        ) {
-            return Err(format!(
-                "`{}` is not a document: a compose writes `.ent`, `.esn` and `.replay` files",
-                path.display()
-            ));
-        }
-        // Where it lands: its nearest directory that exists, after links,
-        // and the rest of its path, made new.
-        let mut existing = wanted.clone();
-        let mut rest = Vec::new();
-        while store.kind(&existing).is_none() {
-            let (Some(up), Some(name)) = (existing.parent(), existing.file_name()) else {
-                break;
-            };
-            rest.push(name.to_owned());
-            existing = up.to_path_buf();
-        }
-        let mut landed = store.canonical(&existing).unwrap_or(existing);
-        for name in rest.iter().rev() {
-            landed.push(name);
-        }
-        if !landed.starts_with(&home) {
-            return Err(format!(
-                "`{}` is outside the scene's directory `{}`: a compose writes the scene's documents there and nowhere else",
-                path.display(),
-                home.display()
-            ));
-        }
-        for packages in store.packages() {
-            let packages = store
-                .canonical(packages)
-                .unwrap_or_else(|_| store.whole(packages));
-            if landed.starts_with(&packages) {
-                return Err(format!(
-                    "`{}` is in the package directory `{}`: a package is kept as it was found, not composed",
-                    path.display(),
-                    packages.display()
-                ));
-            }
-        }
-        Ok(landed)
-    }
-
-    /// The document a compose names by `path` ([`Session::composable`]):
-    /// where it lands, and its text, none when it is new.
-    pub fn composed_document(&self, path: &Path) -> Result<(PathBuf, Option<String>), String> {
-        let landed = self.composable(path)?;
-        if self.store().kind(&landed).is_none() {
-            return Ok((landed, None));
-        }
-        self.allowed_read(&landed)?;
-        let text = self
-            .store()
-            .read_text(&landed)
-            .map_err(|e| format!("{}: {e}", landed.display()))?;
-        Ok((landed, Some(text)))
-    }
-
-    /// Replaces documents of the scene, each whole, all or none: each where
-    /// a compose may write ([`Session::composable`]), each the scene uses or
-    /// places once all are written (a new one is used by the same change)
-    /// or a replay that parses and names a scene there,
-    /// and the scene with all of them checked as `entelechy check` checks
-    /// it, their Kernels compiled and granted, before any reaches the
-    /// store. The scene is written last. A refusal names the document at
-    /// fault, leaves every document as it was, and is recorded as an
-    /// attempt. The outer error is the store's.
-    pub fn write_documents(
-        &mut self,
-        changes: &[(PathBuf, String)],
-    ) -> Result<Result<(), crate::Refusal>, SessionError> {
-        let checked = self.check_documents(changes);
-        let landed = match checked {
-            Ok(landed) => landed,
-            Err(refusal) => {
-                let text = changes
-                    .iter()
-                    .find(|(path, _)| {
-                        self.composable(path).ok().as_deref() == Some(refusal.path.as_path())
-                    })
-                    .map(|(_, text)| text.as_str());
-                self.history.refused(
-                    refusal.path.display().to_string(),
-                    refusal.diagnostic.to_string(),
-                    text,
-                    self.origin.clone(),
-                );
-                return Ok(Err(refusal));
-            }
-        };
-        let root = self
-            .store()
-            .canonical(self.scene.root())
-            .unwrap_or_else(|_| self.scene.root().to_path_buf());
-        // The documents the scene reaches first, so the scene, read
-        // again, finds them all.
-        let (scene, others): (Vec<_>, Vec<_>) =
-            landed.into_iter().partition(|(path, _)| *path == root);
-        for (path, text) in others.iter().chain(&scene) {
-            self.store()
-                .write(path, text.as_bytes())
-                .map_err(|e| SessionError::Io(path.clone(), e))?;
-        }
-        // What was written is remembered, each document's text, so any of
-        // them can be read back and composed again.
-        let written: Vec<(PathBuf, String)> = others.into_iter().chain(scene).collect();
-        self.history.documents(&written, self.origin.clone());
-        Ok(Ok(()))
-    }
-
-    fn check_documents(
-        &self,
-        changes: &[(PathBuf, String)],
-    ) -> Result<Vec<(PathBuf, String)>, crate::Refusal> {
-        let store = self.store();
-        let refused = |path: PathBuf, message: String| crate::Refusal {
-            path,
-            diagnostic: crate::Diagnostic::new(message),
-        };
-        let mut landed: Vec<(PathBuf, String)> = Vec::new();
-        for (path, text) in changes {
-            let at = self
-                .composable(path)
-                .map_err(|why| refused(path.clone(), why))?;
-            if landed.iter().any(|(seen, _)| *seen == at) {
-                return Err(refused(
-                    at,
-                    "this document is named twice in one compose".into(),
-                ));
-            }
-            landed.push((at, text.clone()));
-        }
-        let root = store
-            .canonical(self.scene.root())
-            .unwrap_or_else(|_| self.scene.root().to_path_buf());
-        let overlay = entelechy_documents::store::Overlay::new(store, &landed);
-        let root_text = match landed.iter().find(|(path, _)| *path == root) {
-            Some((_, text)) => text.clone(),
-            None => (&overlay as &dyn Store)
-                .read_text(&root)
-                .map_err(|e| refused(root.clone(), e.to_string()))?,
-        };
-        // A replay written parses, and the scene and Kernels it names are
-        // there once all is written; it names a scene, no scene names it.
-        let is_replay = |path: &Path| path.extension().is_some_and(|e| e == "replay");
-        for (path, text) in landed.iter().filter(|(path, _)| is_replay(path)) {
-            let base = path.parent().unwrap_or_else(|| Path::new("."));
-            let replay = crate::replay::parse(text, base).map_err(|error| crate::Refusal {
-                path: path.clone(),
-                diagnostic: crate::Diagnostic {
-                    message: error.message.clone(),
-                    at: Some((error.line, 1)),
-                    fix: None,
-                },
-            })?;
-            let scene_written = overlay.kind(&overlay.whole(&replay.scene))
-                == Some(entelechy_documents::store::Kind::File)
-                && replay.scene.extension().is_some_and(|e| e == "esn");
-            if !scene_written {
-                return Err(refused(
-                    path.clone(),
-                    format!(
-                        "the scene it names, `{}`, is not a scene document there",
-                        replay.scene.display()
-                    ),
-                ));
-            }
-            if let Some(kernels) = &replay.kernels
-                && overlay.kind(&overlay.whole(kernels)).is_none()
-            {
-                return Err(refused(
-                    path.clone(),
-                    format!(
-                        "the Kernels it names, `{}`, are not there",
-                        kernels.display()
-                    ),
-                ));
-            }
-        }
-        // Each document written is one the scene, as written, uses or places;
-        // a reach that cannot be worked out is the whole check's to say.
-        let reached = reached_documents(&overlay, &root, &root_text);
-        for (path, _) in &landed {
-            if let Some(reached) = &reached
-                && *path != root
-                && !is_replay(path)
-                && !reached.contains(path)
-            {
-                return Err(refused(
-                    path.clone(),
-                    format!(
-                        "`{}` is written but the scene neither uses nor places it: a document a compose adds is used in the same compose",
-                        path.display()
-                    ),
-                ));
-            }
-        }
-        // The scene checked whole, as `entelechy check` checks it.
-        let checked = entelechy_documents::check::check_document(&overlay, &root, false);
-        if let Some((_, line)) = checked.lines.iter().find(|(problem, _)| *problem) {
-            let mut refusal = placed(&overlay, line, &root, &landed);
-            refusal.diagnostic.fix = checked
-                .fixes
-                .iter()
-                .find(|(said, _)| said == line)
-                .map(|(_, fix)| Box::new(mended_in(&overlay, fix, &landed)));
-            return Err(refusal);
-        }
-        let readable = |path: &Path| self.allowed_read(path);
-        let granted = |module: &entelechy_ir::Validated| {
-            self.runtime
-                .granted(module)
-                .map_err(|why| crate::Diagnostic::new(why.to_string()))
-        };
-        self.scene
-            .check_in(&overlay, &root_text, &readable, &granted)
-            .map_err(|diagnostic| crate::Refusal {
-                path: root.clone(),
-                diagnostic,
-            })?;
-        // A written Kernel document's Kernels are granted as the scene's are.
-        for (path, _) in landed.iter().filter(|(path, _)| *path != root) {
-            if path.extension().and_then(|e| e.to_str()) != Some("ent") {
-                continue;
-            }
-            let mut document = (&overlay as &dyn Store)
-                .document(path)
-                .map(|document| (*document).clone())
-                .map_err(|why| refused(path.clone(), why))?;
-            let dir = path.parent().unwrap_or_else(|| Path::new("."));
-            let entelechy_language::Declarations {
-                structs,
-                types,
-                functions,
-                qualified,
-            } = entelechy_documents::sources::declarations_for(
-                &overlay,
-                dir,
-                &document.uses,
-                entelechy_language::Own::of(&document),
-            )
-            .map_err(|why| refused(path.clone(), why))?;
-            document.unqualify(&qualified);
-            document.resolve((&structs, &types, &functions));
-            for kernel in &document.kernels {
-                let id = entelechy_documents::sources::named_id(kernel).map_err(|diagnostic| {
-                    crate::Refusal {
-                        path: path.clone(),
-                        diagnostic,
-                    }
-                })?;
-                let module =
-                    entelechy_compiler::compile_kernel(kernel, Some(&id)).map_err(|error| {
-                        crate::Refusal {
-                            path: path.clone(),
-                            diagnostic: crate::Diagnostic::from(&error),
-                        }
-                    })?;
-                granted(&module).map_err(|diagnostic| crate::Refusal {
-                    path: path.clone(),
-                    diagnostic,
-                })?;
-            }
-        }
-        Ok(landed)
-    }
-
     /// Where each node with a published Kernel runs, and why when off the
     /// main backend.
     pub fn placements(&self) -> Vec<(String, entelechy_kernel::Placement)> {
-        let Some(graph) = self.scene.graph() else {
+        let Some(graph) = self.graph() else {
             return Vec::new();
         };
         graph
@@ -1182,36 +367,21 @@ impl Session {
             .collect()
     }
 
-    /// Finishes on the main backend, on every core at once, the Kernels
-    /// the graph's nodes use for the first time
-    /// ([`entelechy_kernel::Preparer::finish`]), so the frame after waits for
-    /// none of them in turn. A replacement was finished in preparing it
-    /// where the version it replaced ran there ([`Runtime::prepare_later`]),
-    /// and a Kernel no node uses is left for a run that needs it. Where
-    /// Kernels prepare in turns (a page), none is finished while others
-    /// still wait their turn: the device compiles what the turns asked of
-    /// it while the next turns prepare, and the turn the last one prepares
-    /// in waits for what is left, as the first frame would.
-    fn finish_used(&mut self) {
+    pub(super) fn finish_used(&mut self) {
         if self.runtime.prepares_in_turns() && self.runtime.prepare_queued() > 0 {
             return;
         }
-        let Some(shared) = self.scene.shared_graph() else {
+        let Some(shared) = self.backing.shared_graph().cloned() else {
             return;
         };
-        // What only the ordered backend will run needs nothing built on the
-        // device: a Kernel all of whose nodes run so is left unbuilt, and
-        // built when a run there first wants it.
         let few = self.evaluator.runs_few(
-            shared,
+            &shared,
             &self.runtime,
-            self.inputs.handles(),
-            self.scene.params(),
+            self.backing.handles(),
+            self.backing.params(),
             &self.last_context,
         );
-        let Some(graph) = self.scene.graph() else {
-            return;
-        };
+        let graph: &Graph = &shared;
         let mut wanted: BTreeMap<entelechy_ir::KernelId, bool> = BTreeMap::new();
         for node in &graph.nodes {
             *wanted.entry(node.kernel.clone()).or_default() |= !few.contains(&node.id);
@@ -1230,10 +400,24 @@ impl Session {
                 first.push(version);
             }
         }
-        // What only shows is finished on threads of its own, and runs on
-        // the ordered backend until it is; the rest the frame waits for.
         let shown = if self.shown_while_building && !self.runtime.prepares_in_turns() {
-            shown_kernels(graph, &self.scene.files().presented)
+            match &self.backing {
+                #[cfg(feature = "documents")]
+                Backing::Documents(docs) => shown_kernels(
+                    graph,
+                    docs.scene
+                        .files()
+                        .presented
+                        .iter()
+                        .map(|p| (p.output.as_str(), p.device.as_str())),
+                ),
+                Backing::Bundled(b) => shown_kernels(
+                    graph,
+                    b.presented
+                        .iter()
+                        .map(|(out, dev)| (out.as_str(), dev.as_str())),
+                ),
+            }
         } else {
             BTreeSet::new()
         };
@@ -1243,17 +427,15 @@ impl Session {
         let preparer = self.runtime.preparer();
         if !now_first.is_empty() {
             preparer.expect(now_first.iter().map(|version| version.id()));
-            entelechy_documents::spread::map(&now_first, |version| preparer.finish(version));
+            finish_each(&now_first, |version| preparer.finish(version));
         }
-        // Only what is handed to the threads is shown meanwhile: a Kernel
-        // nothing builds would otherwise stay off the device for good.
         let handed_now: Vec<_> = later.iter().map(|version| version.id().clone()).collect();
         if !later.is_empty() {
             preparer.expect(later.iter().map(|version| version.id()));
             let started = std::thread::Builder::new()
                 .name("entelechy-finish".into())
                 .spawn(move || {
-                    entelechy_documents::spread::map(&later, |version| preparer.finish(version));
+                    finish_each(&later, |version| preparer.finish(version));
                 });
             if started.is_ok() {
                 self.handed.extend(handed_now);
@@ -1265,121 +447,19 @@ impl Session {
     }
 
     /// Shows what only shows from the processor while the device's
-    /// compiler builds it, so a first frame waits for the compiler only
-    /// where state or a written file reads the Kernel; off, every frame
-    /// waits for every Kernel it runs. On, which backend shows such a
-    /// Kernel depends on how long its compiler takes, so what is shown in
-    /// the first frames may differ by a device's rounding: interfaces a
-    /// person watches turn it on, and tests and renders keep it off.
+    /// compiler builds it.
     pub fn show_while_building(&mut self, on: bool) {
         self.shown_while_building = on;
     }
 
-    /// Says what shapes the scene's Kernels as a device's compiler meets
-    /// them: each Kernel this sync published that is large
-    /// ([`Event::Large`]), and, once per change, the Kernels a document of
-    /// the scene publishes and no node uses ([`Event::Idle`]); a
-    /// package's are its verbs, used or not.
-    fn sync_shape(&mut self, events: &mut Vec<Event>) {
-        let large: Vec<Event> = events
-            .iter()
-            .filter_map(|event| match event {
-                Event::Published { path, id, .. } => {
-                    let version = self.runtime.kernel(id)?;
-                    let why = crate::large(version.module()?)?;
-                    Some(Event::Large {
-                        path: path.clone(),
-                        id: id.clone(),
-                        why,
-                    })
-                }
-                _ => None,
-            })
-            .collect();
-        events.extend(large);
-        let Some(graph) = self.scene.shared_graph().cloned() else {
-            return;
-        };
-        let revision = self.runtime.revision();
-        if self
-            .shaped
-            .as_ref()
-            .is_some_and(|(known, at)| Arc::ptr_eq(known, &graph) && *at == revision)
-        {
-            return;
-        }
-        let published = self.kernels.documents().into_iter().map(|path| {
-            let ids = self.kernels.ids_of(&path);
-            (path, ids)
-        });
-        let idle: BTreeMap<PathBuf, Vec<KernelId>> =
-            entelechy_documents::check::idle(self.scene.store().as_ref(), &graph, published)
-                .into_iter()
-                .collect();
-        for (path, ids) in &idle {
-            if self.idle.get(path) != Some(ids) {
-                events.push(Event::Idle {
-                    path: path.clone(),
-                    ids: ids.clone(),
-                });
-            }
-        }
-        self.idle = idle;
-        let unrun: BTreeMap<String, String> = graph
-            .nodes
-            .iter()
-            .filter_map(|node| {
-                let version = self.runtime.kernel(&node.kernel)?;
-                let module = version.module()?;
-                let why = entelechy_documents::check::defaulted_domain(
-                    node,
-                    &module.manifest,
-                    entelechy_documents::check::first_counted_against(module),
-                )?;
-                Some((node.id.to_string(), why))
-            })
-            .collect();
-        for (node, why) in &unrun {
-            if self.unrun.get(node) != Some(why) {
-                events.push(Event::Unrun {
-                    node: node.clone(),
-                    why: why.clone(),
-                });
-            }
-        }
-        self.unrun = unrun;
-        self.shaped = Some((graph, revision));
-    }
-
-    /// Reports nodes off the main backend, once per change.
-    fn sync_placements(&mut self, events: &mut Vec<Event>) {
-        let now = self.placements();
-        for (node, placement) in &now {
-            let before = self.placed.get(node);
-            if before == Some(&placement.routed) {
-                continue;
-            }
-            if let Some(why) = &placement.routed {
-                events.push(Event::Routed {
-                    node: node.clone(),
-                    backend: placement.backend,
-                    why: why.to_string(),
-                });
-            }
-        }
-        self.placed = now
-            .into_iter()
-            .map(|(node, placement)| (node, placement.routed))
-            .collect();
-    }
-
     /// Prepares replacements of Kernels and fused groups on a worker
-    /// thread, each publishing on the first sync after it is ready; and
-    /// makes a `checks` input's checks after its first off the frames,
-    /// each taken in by the first sync after it is done.
+    /// thread.
     pub fn set_background(&mut self, enabled: bool) {
         self.runtime.set_background(enabled);
-        self.inputs.set_background(enabled);
+        #[cfg(feature = "documents")]
+        if let Backing::Documents(docs) = &mut self.backing {
+            docs.inputs.set_background(enabled);
+        }
     }
 
     /// Whether replacements prepare on a worker thread.
@@ -1388,15 +468,16 @@ impl Session {
     }
 
     /// Prepares Kernels a few each sync instead of on workers, as where no
-    /// thread can start (a page): for a test to run that way elsewhere.
+    /// thread can start (a page).
     pub fn prepare_in_turns(&mut self) {
         self.runtime.prepare_in_turns();
-        self.inputs.set_background(true);
+        #[cfg(feature = "documents")]
+        if let Backing::Documents(docs) = &mut self.backing {
+            docs.inputs.set_background(true);
+        }
     }
 
-    /// One wait for a preparation to finish: where Kernels prepare in
-    /// turns (a page, where no thread sleeps), what waits is prepared now;
-    /// elsewhere a millisecond's sleep while the workers do.
+    /// One wait for a preparation to finish.
     pub fn wait_a_turn(&mut self) {
         if self.runtime.prepares_in_turns() {
             self.runtime.prepare_turn(usize::MAX);
@@ -1420,145 +501,34 @@ impl Session {
     }
 
     /// Whether the scene last read waits for its Kernels before it
-    /// replaces the running one, for the documents it uses, compiling off
-    /// the frames, before it is read again, or for a Kernel they changed,
-    /// still preparing, before it runs.
+    /// replaces the running one.
     pub fn scene_waiting(&self) -> bool {
-        self.scene.waiting() || self.kernels.preparing()
-    }
-
-    /// The events of the later sync on which a request's claimed scene
-    /// landed, taken once. Empty when it landed on the request's own sync.
-    pub fn take_landing(&mut self) -> Option<Vec<Event>> {
-        match std::mem::take(&mut self.claim) {
-            Claim::Landed(events) => Some(events),
-            other => {
-                self.claim = other;
-                None
-            }
+        match &self.backing {
+            #[cfg(feature = "documents")]
+            Backing::Documents(docs) => docs.scene.waiting() || docs.kernels.preparing(),
+            Backing::Bundled(b) => b.pending.is_some(),
         }
-    }
-
-    /// Starts [`Session::publish_source`] without waiting: compiles (or
-    /// refuses) now, prepares where replacements prepare
-    /// ([`Session::set_background`]). [`Session::publishing`] finishes it.
-    pub fn publish_later(
-        &mut self,
-        source: &str,
-        expect: Expect,
-    ) -> Result<Publishing, crate::Diagnostic> {
-        match self.scene.compile_source(source, &self.kernels) {
-            Ok(module) => Ok(Publishing {
-                ticket: self.runtime.prepare_later(module, source.to_owned()),
-                expect,
-                source: source.to_owned(),
-            }),
-            Err(error) => {
-                self.refused_source(source, &error);
-                Err(error)
-            }
-        }
-    }
-
-    /// Finishes [`Session::publish_later`] once prepared: published under
-    /// its expectation, or refused; `None` while preparing.
-    pub fn publishing(
-        &mut self,
-        publishing: &Publishing,
-    ) -> Option<Result<std::sync::Arc<entelechy_kernel::KernelVersion>, crate::Diagnostic>> {
-        let prepared = self.runtime.poll(publishing.ticket)?;
-        let published = prepared
-            .map_err(|e| crate::Diagnostic::new(e.to_string()))
-            .and_then(|candidate| {
-                self.runtime
-                    .publish(candidate, publishing.expect)
-                    .map_err(|e| crate::Diagnostic::new(e.to_string()))
-            });
-        match &published {
-            Ok(version) => self.history.published(
-                version.id(),
-                version.generation(),
-                &publishing.source,
-                self.origin.clone(),
-            ),
-            Err(error) => self.refused_source(&publishing.source, error),
-        }
-        Some(published)
-    }
-
-    /// Records a refused Kernel source, by its id when it parses.
-    fn refused_source(&mut self, source: &str, error: &crate::Diagnostic) {
-        let subject = entelechy_language::parse_document(source)
-            .ok()
-            .and_then(|document| document.kernels.first().and_then(|k| k.id.clone()))
-            .map_or_else(|| "a Kernel".to_owned(), |id| id.value);
-        self.history.refused(
-            subject,
-            error.to_string(),
-            Some(source),
-            self.origin.clone(),
-        );
-    }
-
-    /// Publishes a source holding exactly one Kernel, outside any
-    /// document. Documents own ids: one that later defines the id
-    /// republishes it.
-    pub fn publish_source(
-        &mut self,
-        source: &str,
-        expect: Expect,
-    ) -> Result<std::sync::Arc<entelechy_kernel::KernelVersion>, crate::Diagnostic> {
-        let publishing = self.publish_later(source, expect)?;
-        loop {
-            if let Some(published) = self.publishing(&publishing) {
-                return published;
-            }
-            self.wait_a_turn();
-        }
-    }
-
-    /// Prepares `source`, one Kernel, without publishing it. It sees its
-    /// own and `use`d declarations, then the scene's shared ones.
-    pub fn prepare_source(
-        &self,
-        source: &str,
-    ) -> Result<entelechy_kernel::Candidate, crate::Diagnostic> {
-        self.scene
-            .prepare_source(source, &self.kernels, &self.runtime)
-    }
-
-    /// Retires a published Kernel; returns whether one was registered.
-    pub fn retire_kernel(&mut self, id: &KernelId) -> bool {
-        let retired = self.kernels.retire_kernel(id, &mut self.runtime);
-        if retired {
-            self.history.retired(id, self.origin.clone());
-        }
-        retired
     }
 
     /// The Field a scene input holds now.
     pub fn external(&self, name: &str) -> Option<Handle> {
-        self.inputs.handles().get(name).copied()
+        self.backing.handles().get(name).copied()
     }
 
-    /// The node and port that produce what `node.port` names: itself, or
-    /// for a placed graph's output or a scene output, the node that gives
-    /// it ([`entelechy_graph::Graph::producer`]).
+    /// The node and port that produce what `node.port` names.
     pub fn producer(
         &self,
         node: &entelechy_graph::NodeId,
         port: &str,
     ) -> (entelechy_graph::NodeId, String) {
-        self.scene
-            .graph()
+        self.graph()
             .and_then(|graph| graph.producer(node, port))
             .unwrap_or_else(|| (node.clone(), port.to_owned()))
     }
 
     /// Makes again what `node.port` names when its outputs were let go
     /// cold ([`entelechy_graph::Evaluator::is_cold`]), under the last
-    /// frame's context, committing nothing; [`Session::cached`] then has
-    /// it.
+    /// frame's context, committing nothing.
     pub fn warm(
         &mut self,
         node: &entelechy_graph::NodeId,
@@ -1568,14 +538,14 @@ impl Session {
         if !self.evaluator.is_cold(&node) {
             return Ok(());
         }
-        let graph = self.scene.graph().ok_or_else(no_scene)?;
+        let graph = self.backing.graph().ok_or_else(no_scene)?;
         let context = self.last_context;
         self.evaluator.warm_for_reading(
             graph,
             &mut self.runtime,
-            self.inputs.handles(),
+            self.backing.handles(),
             &context,
-            self.scene.params(),
+            self.backing.params(),
             &node,
         )
     }
@@ -1592,14 +562,17 @@ impl Session {
     }
 
     /// The scene's inputs, by name, and the Fields they are now.
-    pub(crate) fn input_handles(&self) -> &std::collections::BTreeMap<String, Handle> {
-        self.inputs.handles()
+    pub(crate) fn input_handles(&self) -> &BTreeMap<String, Handle> {
+        self.backing.handles()
     }
 
-    /// The Fields fields nodes hold of the files in, by node and path
-    /// ([`entelechy_documents::inputs::Inputs::chunk_handles`]).
+    /// The Fields fields nodes hold of the files in, by node and path.
     pub(crate) fn chunk_handles(&self) -> Vec<(String, Handle)> {
-        self.inputs.chunk_handles().collect()
+        match &self.backing {
+            #[cfg(feature = "documents")]
+            Backing::Documents(docs) => docs.inputs.chunk_handles().collect(),
+            Backing::Bundled(_) => Vec::new(),
+        }
     }
 
     /// Every Field the evaluator holds ([`entelechy_graph::Evaluator::holdings`]).
@@ -1620,33 +593,10 @@ impl Session {
         self.evaluator.fused_into(&node).cloned()
     }
 
-    /// The declarations `kernel` shares with its document's other Kernels,
-    /// as that document writes them (its `struct`s, `type`s and `fn`s),
-    /// and the document; none for a Kernel no document publishes.
-    pub fn shared_with(&self, kernel: &KernelId) -> Option<(PathBuf, String)> {
-        use entelechy_language::StatementKind;
-        let path = self.kernels.owner(kernel)?.to_path_buf();
-        let text = self.store().read_text(&path).ok()?;
-        let outline = entelechy_language::outline(&text).ok()?;
-        let shared: Vec<&str> = outline
-            .statements
-            .iter()
-            .filter(|s| {
-                matches!(
-                    s.kind,
-                    StatementKind::Struct | StatementKind::Type | StatementKind::Fn
-                )
-            })
-            .filter_map(|s| text.get(s.range.clone()))
-            .collect();
-        Some((path, shared.join("\n\n")))
-    }
-
     /// The state ports (`node.port`) whose initial source is a node running
-    /// `kernel`: they keep their committed state when it changes, and start
-    /// from it again only when reset.
+    /// `kernel`.
     pub fn started_by(&self, kernel: &KernelId) -> Vec<String> {
-        let Some(graph) = self.scene.graph() else {
+        let Some(graph) = self.graph() else {
             return Vec::new();
         };
         let runs = |node: &entelechy_graph::NodeId| {
@@ -1671,19 +621,6 @@ impl Session {
         out
     }
 
-    /// Why `node`'s `port` has no value to read: not a node, placed as
-    /// several, folded into its reader, or not run since it was placed.
-    pub fn why_no_value(&self, node: &entelechy_graph::NodeId, port: &str) -> String {
-        let (node, port) = self.producer(node, port);
-        observe::why_no_value(
-            self.scene.graph(),
-            &self.evaluator,
-            self.failing.as_deref(),
-            &node,
-            &port,
-        )
-    }
-
     /// Waits for every `async` node's run and takes it in; see
     /// [`entelechy_graph::Evaluator::settle`].
     pub fn settle(&mut self) -> Result<Vec<entelechy_graph::NodeId>, EvaluateError> {
@@ -1695,19 +632,14 @@ impl Session {
         self.evaluator.has_running()
     }
 
-    /// Waits for the device to finish the last evaluation's work before
-    /// the next is submitted: one frame is in flight at most, so a caller
-    /// evaluating faster than the device (an agent, a replay) holds one
-    /// frame's device memory, not every frame it has queued.
-    fn one_frame_in_flight(&self) {
+    pub(super) fn one_frame_in_flight(&self) {
         if self.runtime.has_device() {
             self.runtime.settle_device();
         }
     }
 
     /// Whether later evaluations overlap the device's work on the frame
-    /// before; see [`entelechy_graph::Evaluator::set_overlap`]. Turning it off
-    /// confirms the frame in flight.
+    /// before; see [`entelechy_graph::Evaluator::set_overlap`].
     pub fn set_overlap(&mut self, on: bool) -> Result<(), EvaluateError> {
         let set = self.evaluator.set_overlap(on, &mut self.runtime);
         self.tally();
@@ -1720,8 +652,7 @@ impl Session {
     }
 
     /// Whether frames are clocked on the device as they run; see
-    /// [`entelechy_kernel::Runtime::set_clocked`]. A clocked frame waits for
-    /// nothing more than an unclocked one.
+    /// [`entelechy_kernel::Runtime::set_clocked`].
     pub fn set_clocked(&mut self, on: bool) {
         self.runtime.set_clocked(on);
         if !on {
@@ -1729,21 +660,17 @@ impl Session {
         }
     }
 
-    /// The device's busy time for the latest clocked frame it has done; see
-    /// [`entelechy_kernel::Runtime::frame_device_time`].
+    /// The device's busy time for the latest clocked frame it has done.
     pub fn frame_device_time(&self) -> Option<std::time::Duration> {
         self.runtime.frame_device_time()
     }
 
-    /// The latest clocked frame the device has done, node by node: what
-    /// each node's runs kept it busy, by its own clock. Nothing waits; a
-    /// frame is told some frames after it ran.
+    /// The latest clocked frame the device has done, node by node.
     pub fn device_times(&self) -> Option<crate::DeviceTimes> {
         self.node_clock.times(&self.runtime.clocked_frame()?)
     }
 
-    /// How long callers have been blocked on the device's work in all;
-    /// see [`entelechy_kernel::Runtime::device_waited`].
+    /// How long callers have been blocked on the device's work in all.
     pub fn device_waited(&self) -> std::time::Duration {
         self.runtime.device_waited()
     }
@@ -1753,41 +680,46 @@ impl Session {
     pub fn confirm(&mut self) -> Result<(), EvaluateError> {
         let confirmed = self.evaluator.confirm(&mut self.runtime);
         self.tally();
+        #[cfg(feature = "documents")]
         self.write_confirmed();
         confirmed
     }
 
-    /// Takes the frames the evaluator took back off the world's count.
     fn tally(&mut self) {
-        self.history.taken_back(self.evaluator.take_taken_back());
+        let taken = self.evaluator.take_taken_back();
+        #[cfg(feature = "documents")]
+        if let Backing::Documents(docs) = &mut self.backing {
+            docs.history.taken_back(taken);
+        }
+        #[cfg(not(feature = "documents"))]
+        let _ = taken;
     }
 
-    /// Evaluates the current graph under `context`. Unchanged nodes are
-    /// reused; state commits only when the whole evaluation succeeds.
-    /// Overlapping, the frame before is confirmed here, and the outputs
-    /// written to files are written as it left them.
+    /// Evaluates the current graph under `context`.
     pub fn evaluate(&mut self, context: &Context) -> Result<Report, EvaluateError> {
+        #[cfg(feature = "documents")]
         self.place_by_rows();
-        // Overlapping bounds the frames in flight itself.
         if !self.evaluator.overlaps() {
             self.one_frame_in_flight();
         }
-        self.inputs.select_frames(
-            self.scene.store().as_ref(),
-            self.runtime.host_mut(),
-            context.time,
-        );
+        #[cfg(feature = "documents")]
+        if let Backing::Documents(docs) = &mut self.backing {
+            let store = Arc::clone(docs.scene.store());
+            docs.inputs
+                .select_frames(store.as_ref(), self.runtime.host_mut(), context.time);
+        }
         self.hold_progress();
         self.repin();
         self.last_context = *context;
+        #[cfg(feature = "documents")]
         self.await_written();
-        let graph = self.scene.shared_graph().ok_or_else(no_scene)?;
+        let graph = self.backing.shared_graph().cloned().ok_or_else(no_scene)?;
         let evaluated = self.evaluator.evaluate(
-            graph,
+            &graph,
             &mut self.runtime,
-            self.inputs.handles(),
+            self.backing.handles(),
             context,
-            self.scene.params(),
+            self.backing.params(),
         );
         let report = match evaluated {
             Ok(report) => report,
@@ -1799,148 +731,61 @@ impl Session {
             }
         };
         self.failing = None;
-        self.history.ran();
+        #[cfg(feature = "documents")]
+        if let Backing::Documents(docs) = &mut self.backing {
+            docs.history.ran();
+        }
         self.feed_fonts();
-        self.feed_file_nodes();
-        self.feed_field_nodes();
+        #[cfg(feature = "documents")]
+        {
+            self.feed_file_nodes();
+            self.feed_field_nodes();
+        }
         self.let_go_of_input_copies();
-        // The frame's runs are all given: a clocked frame ends here, its
-        // nodes' runs kept until the device tells it.
         if let Some(frame) = self.runtime.end_frame() {
             self.node_clock.ended(frame, report.clocked.clone());
         }
         self.written_after(&report);
+        #[cfg(feature = "documents")]
         self.follow_rows();
         Ok(report)
     }
 
-    /// Lowers the scene again where the last frame's rows placed a node
-    /// another number of times: before the frame that runs it, whoever
-    /// drives the frames. What the lowering says is said by the next
-    /// sync.
-    fn place_by_rows(&mut self) {
-        if std::mem::take(&mut self.resized) {
-            let said = self.sync_apart(false);
-            self.later.extend(said);
-        }
-    }
-
-    /// Reads each row a node's `times` is sized by, as this frame left
-    /// it, and has the scene place the node that many times from the next
-    /// sync on. A row not yet made places none; one that cannot be read
-    /// as a count is said as a refusal and leaves the node as it is
-    /// placed.
-    fn follow_rows(&mut self) {
-        for (row, held) in self.scene.times_rows() {
-            let source = entelechy_graph::NodeId(row.source.0.as_str().into());
-            let read = match self.cached(&source, &row.source.1) {
-                None => Ok(0),
-                Some(handle) => self.row_count(handle, row.row),
-            };
-            match read {
-                Ok(count) if count == held => {}
-                Ok(count) => {
-                    self.scene.set_count(&row.node, count);
-                    self.resized = true;
-                }
-                Err(why) => {
-                    let said = format!(
-                        "`{}`'s `times = value({}.{}, {})`: {why}",
-                        row.node, row.source.0, row.source.1, row.row
-                    );
-                    let event = Event::SceneRejected(crate::Diagnostic::new(said));
-                    if !self.later.contains(&event) {
-                        self.later.push(event);
-                    }
-                }
+    pub(super) fn written_after(&mut self, report: &Report) {
+        match &mut self.backing {
+            #[cfg(feature = "documents")]
+            Backing::Documents(docs) => {
+                docs.writes
+                    .ask(&docs.scene.files().writes, &report.outputs, &self.runtime);
+                let to_clipboard: Vec<String> = docs
+                    .scene
+                    .files()
+                    .presented
+                    .iter()
+                    .filter(|p| p.device == crate::devices::CLIPBOARD)
+                    .map(|p| p.output.clone())
+                    .collect();
+                self.write_confirmed();
+                self.board.after(
+                    to_clipboard.iter().map(String::as_str),
+                    report,
+                    &mut self.runtime,
+                );
+            }
+            Backing::Bundled(b) => {
+                let to_clipboard: Vec<String> = b
+                    .presented
+                    .iter()
+                    .filter(|(_, dev)| dev == crate::devices::CLIPBOARD)
+                    .map(|(out, _)| out.clone())
+                    .collect();
+                self.board.after(
+                    to_clipboard.iter().map(String::as_str),
+                    report,
+                    &mut self.runtime,
+                );
             }
         }
-    }
-
-    /// The count row `row` of `handle` holds: an `Int` of 0 or more.
-    fn row_count(&mut self, handle: Handle, row: u32) -> Result<u32, String> {
-        let count = self
-            .runtime
-            .host()
-            .domain(handle)
-            .map_err(|error| error.to_string())?
-            .count();
-        if row as usize >= count {
-            return Err(format!("it has {count} element(s)"));
-        }
-        let whole = self
-            .runtime
-            .host()
-            .schema(handle)
-            .map_err(|error| error.to_string())?
-            .scalars()
-            .first()
-            .is_some_and(|scalar| *scalar == entelechy_kernel::Scalar::Int);
-        if !whole {
-            return Err("a count is an `Int`".into());
-        }
-        self.runtime
-            .materialize(handle)
-            .map_err(|error| error.to_string())?;
-        let word = self
-            .runtime
-            .host()
-            .element(handle, row)
-            .map_err(|error| error.to_string())?[0];
-        u32::try_from(word as i32).map_err(|_| format!("it holds {}, less than 0", word as i32))
-    }
-
-    /// Writes what the frame last confirmed changed of the outputs
-    /// written to files, and what the frame behind `report` changed of
-    /// the clipboard's.
-    fn written_after(&mut self, report: &Report) {
-        self.writes
-            .ask(&self.scene.files().writes, &report.outputs, &self.runtime);
-        self.write_confirmed();
-        self.board
-            .after(&self.scene.files().presented, report, &mut self.runtime);
-    }
-
-    /// Has the evaluator hand over the outputs written to files once
-    /// their frame is confirmed.
-    fn await_written(&mut self) {
-        let writes = &self.scene.files().writes;
-        self.evaluator
-            .await_outputs(writes.iter().map(|write| write.output.as_str()));
-    }
-
-    /// Writes what the frame last confirmed changed of the outputs written
-    /// to files. Overlapping, that is the frame before: a write never waits
-    /// for the frame in flight.
-    fn write_confirmed(&mut self) {
-        // A data table names its columns by the numbers of the output's
-        // element.
-        let named: Vec<(String, Result<Vec<String>, String>)> = self
-            .scene
-            .files()
-            .writes
-            .iter()
-            .filter(|write| {
-                entelechy_formats::table::is_table(&entelechy_formats::extension(&write.path))
-            })
-            .map(|write| {
-                let output = entelechy_graph::NodeId(write.output.clone().into());
-                (write.output.clone(), self.element_names(&output, "result"))
-            })
-            .collect();
-        let names = |output: &str| {
-            named.iter().find(|(name, _)| name == output).map_or_else(
-                || Err(format!("no output `{output}`")),
-                |(_, names)| names.clone(),
-            )
-        };
-        self.writes.after(
-            self.scene.store().as_ref(),
-            &self.scene.files().writes,
-            self.evaluator.confirmed(),
-            &mut self.runtime,
-            &names,
-        );
     }
 
     /// A failed evaluation as it is said: a node that ran others fused
@@ -1961,142 +806,79 @@ impl Session {
         )
     }
 
-    /// A Kernel not published, told why its document refused it.
-    fn with_refusal(&self, error: EvaluateError) -> EvaluateError {
-        match error {
-            EvaluateError::UnknownKernel {
+    pub(super) fn with_refusal(&self, error: EvaluateError) -> EvaluateError {
+        #[cfg(feature = "documents")]
+        if let Backing::Documents(docs) = &self.backing
+            && let EvaluateError::UnknownKernel {
                 node,
                 kernel,
                 near,
                 refused: None,
-            } => {
-                let refused = self.kernels.refused(&kernel).map(str::to_owned);
-                EvaluateError::UnknownKernel {
-                    node,
-                    kernel,
-                    near,
-                    refused,
-                }
-            }
-            other => other,
+            } = error
+        {
+            let refused = docs.kernels.refused(&kernel).map(str::to_owned);
+            return EvaluateError::UnknownKernel {
+                node,
+                kernel,
+                near,
+                refused,
+            };
         }
+        error
     }
 
-    /// Evaluates only what `demand` needs; see
-    /// [`entelechy_graph::Evaluator::evaluate_for`].
-    pub fn evaluate_for(
-        &mut self,
-        context: &Context,
-        demand: &std::collections::BTreeSet<entelechy_graph::NodeId>,
-    ) -> Result<Report, EvaluateError> {
-        self.place_by_rows();
-        self.one_frame_in_flight();
-        self.inputs.select_frames(
-            self.scene.store().as_ref(),
-            self.runtime.host_mut(),
-            context.time,
-        );
-        self.hold_progress();
-        self.repin();
-        // The font nodes' characters and the files nodes' paths are read
-        // after every frame, whatever it asks for, and what the scene
-        // writes is written.
-        let mut demand = demand.clone();
-        demand.extend(self.fed_sources());
-        demand.extend(self.written_sources());
-        let demand = &demand;
-        self.last_context = *context;
-        self.await_written();
-        let graph = self.scene.graph().ok_or_else(no_scene)?;
-        let report = self
-            .evaluator
-            .evaluate_for(
-                graph,
-                &mut self.runtime,
-                self.inputs.handles(),
-                context,
-                self.scene.params(),
-                demand,
-            )
-            .map_err(|error| self.with_refusal(error));
-        self.failing = report.as_ref().err().map(|error| self.told(error));
-        let report = report?;
-        self.history.ran();
-        self.feed_fonts();
-        self.feed_file_nodes();
-        self.feed_field_nodes();
-        self.written_after(&report);
-        self.follow_rows();
-        Ok(report)
-    }
-
-    /// Holds the Kernels watched preparing in the scene's `= progress`
-    /// inputs: read each evaluation, as the clock is.
-    fn hold_progress(&mut self) {
-        let progresses = self
-            .scene
-            .files()
-            .fed_by(entelechy_documents::devices::PROGRESS);
-        let mut events = Vec::new();
-        self.watched.sync(
-            &progresses,
-            &self.runtime.progress(),
-            &mut self.inputs,
-            self.runtime.host_mut(),
-            &mut events,
-        );
-        self.later.extend(events);
-    }
-
-    /// Replaces the committed state of `node.port` with `words`; see
-    /// [`entelechy_graph::Evaluator::write`].
-    pub fn write(
-        &mut self,
-        node: &entelechy_graph::NodeId,
-        port: &str,
-        words: Vec<u32>,
-    ) -> Result<(), EvaluateError> {
-        self.repin();
-        let graph = self.scene.graph().ok_or_else(no_scene)?;
-        self.evaluator
-            .write(graph, &mut self.runtime, node, port, words)?;
-        self.history.changed(
-            crate::Change::Written {
-                node: node.to_string(),
-                port: port.to_owned(),
-            },
-            self.origin.clone(),
-        );
-        Ok(())
+    pub(super) fn hold_progress(&mut self) {
+        let own = self.runtime.progress();
+        match &mut self.backing {
+            #[cfg(feature = "documents")]
+            Backing::Documents(docs) => {
+                let progresses = docs.scene.files().fed_by(crate::devices::PROGRESS);
+                let already = progresses.iter().all(|name| docs.inputs.holds(name));
+                let inputs = &mut docs.inputs;
+                let said = self.watched.sync(
+                    &progresses,
+                    already,
+                    &own,
+                    self.runtime.host_mut(),
+                    |host, name, h| inputs.hold(host, name, h),
+                );
+                docs.later
+                    .extend(said.into_iter().map(|why| Event::Rejected {
+                        path: PathBuf::from(crate::devices::PROGRESS),
+                        error: crate::Diagnostic::new(why),
+                    }));
+            }
+            Backing::Bundled(b) => {
+                let progresses: Vec<String> = b
+                    .feeds
+                    .iter()
+                    .filter(|(_, dev)| dev == crate::devices::PROGRESS)
+                    .map(|(inp, _)| inp.clone())
+                    .collect();
+                let already = progresses.iter().all(|name| b.handles.contains_key(name));
+                let handles = &mut b.handles;
+                let said = self.watched.sync(
+                    &progresses,
+                    already,
+                    &own,
+                    self.runtime.host_mut(),
+                    |host, name, h| bundled::hold_in(handles, host, name, h),
+                );
+                b.said
+                    .extend(said.into_iter().map(|why| format!("progress: {why}")));
+            }
+        }
     }
 
     /// Forgets committed state; `<~` bindings restart from their initial
     /// sources on the next evaluation.
     pub fn reset_state(&mut self) {
         self.evaluator.reset_state(&mut self.runtime);
-        self.history
-            .changed(crate::Change::Reset, self.origin.clone());
-    }
-
-    /// Forgets the committed state of the state port `node.port` alone;
-    /// its `<~` readers restart on the next evaluation.
-    pub fn reset_port(
-        &mut self,
-        node: &entelechy_graph::NodeId,
-        port: &str,
-    ) -> Result<(), EvaluateError> {
-        self.repin();
-        let graph = self.scene.graph().ok_or_else(no_scene)?;
-        self.evaluator
-            .reset_port(graph, &mut self.runtime, node, port)?;
-        self.history.changed(
-            crate::Change::ResetPort {
-                node: node.to_string(),
-                port: port.to_owned(),
-            },
-            self.origin.clone(),
-        );
-        Ok(())
+        #[cfg(feature = "documents")]
+        if let Backing::Documents(docs) = &mut self.backing {
+            docs.history
+                .changed(crate::Change::Reset, docs.origin.clone());
+        }
     }
 
     /// Sets the window a headless session reports when an evaluation names
@@ -2110,8 +892,7 @@ impl Session {
         self.window
     }
 
-    /// The context the last frame was evaluated under: in a window, its
-    /// size, scene time and input as that frame saw them.
+    /// The context the last frame was evaluated under.
     pub fn last_context(&self) -> Context {
         self.last_context
     }
@@ -2122,9 +903,7 @@ impl Session {
         self.runtime.backend().set_measured(on);
     }
 
-    /// The fixed cost of measuring one node; see
-    /// [`entelechy_kernel::Backend::measurement_floor`]. Known after a
-    /// measured run.
+    /// The fixed cost of measuring one node.
     pub fn measurement_floor(&self) -> std::time::Duration {
         self.runtime().measurement_floor()
     }
@@ -2144,9 +923,7 @@ impl Session {
         self.evaluator.fusion()
     }
 
-    /// Keeps what `node` names materialized so it can be read: a node, or
-    /// a placed graph by the nodes that give its outputs. The name holds
-    /// across a scene read again.
+    /// Keeps what `node` names materialized so it can be read.
     pub fn pin(&mut self, node: entelechy_graph::NodeId) {
         if !self.pins.contains(&node) {
             self.pins.push(node);
@@ -2154,12 +931,10 @@ impl Session {
         self.repin();
     }
 
-    /// What would execute right now, in order, with fusion applied: under
-    /// the last frame's context, or, before any frame named a window, the
-    /// window the session reports ([`Session::set_window`]).
+    /// What would execute right now, in order, with fusion applied.
     pub fn plan(&mut self) -> Result<Vec<entelechy_graph::PlanEntry>, EvaluateError> {
         self.repin();
-        let graph = self.scene.shared_graph().ok_or_else(no_scene)?;
+        let graph = self.backing.shared_graph().cloned().ok_or_else(no_scene)?;
         let mut context = self.last_context;
         if context.window == [0.0, 0.0]
             && let Some((size, scale)) = self.window
@@ -2168,10 +943,10 @@ impl Session {
             context.scale = scale;
         }
         self.evaluator.plan_summary(
-            graph,
+            &graph,
             &mut self.runtime,
-            self.inputs.handles(),
-            self.scene.params(),
+            self.backing.handles(),
+            self.backing.params(),
             &context,
         )
     }
@@ -2184,10 +959,8 @@ impl Session {
         }
     }
 
-    /// The nodes `name` pins in the running graph: itself, or a placed
-    /// graph's output nodes; a name placed `times = N` its last time's.
-    fn pinned_by(&self, name: &entelechy_graph::NodeId) -> Vec<entelechy_graph::NodeId> {
-        let graph = self.scene.graph();
+    pub(super) fn pinned_by(&self, name: &entelechy_graph::NodeId) -> Vec<entelechy_graph::NodeId> {
+        let graph = self.graph();
         let last = graph
             .and_then(|graph| {
                 graph
@@ -2210,418 +983,70 @@ impl Session {
         }
     }
 
-    /// Pins what every pinned name names in the running graph.
-    fn repin(&mut self) {
+    pub(super) fn repin(&mut self) {
         for name in self.pins.clone() {
             for node in self.pinned_by(&name) {
                 self.evaluator.pin(node);
             }
         }
-        // What a font node reads its characters from, a files node its
-        // paths, and what the scene writes stays materialized.
-        for node in self.fed_sources().into_iter().chain(self.written_sources()) {
+        for node in self.fed_sources() {
             self.evaluator.pin(node);
         }
-        // What a node's `times` reads its row from is read after every
-        // frame too.
-        for (row, _) in self.scene.times_rows() {
-            let source = entelechy_graph::NodeId(row.source.0.as_str().into());
-            for node in self.pinned_by(&source) {
+        #[cfg(feature = "documents")]
+        {
+            for node in self.written_sources() {
                 self.evaluator.pin(node);
             }
+            if let Backing::Documents(docs) = &self.backing {
+                let rows = docs.scene.times_rows();
+                for (row, _) in rows {
+                    let source = entelechy_graph::NodeId(row.source.0.as_str().into());
+                    for node in self.pinned_by(&source) {
+                        self.evaluator.pin(node);
+                    }
+                }
+            }
         }
     }
 
-    /// The nodes that produce the font nodes' characters and the files and
-    /// fields nodes' paths: read after every frame, whatever it asks for.
-    fn fed_sources(&self) -> Vec<entelechy_graph::NodeId> {
-        let files = self.scene.files();
-        files
-            .fonts
-            .iter()
-            .map(|font| &font.codes)
-            .chain(files.file_nodes.iter().map(|node| &node.paths))
-            .chain(files.field_nodes.iter().map(|node| &node.paths))
-            .filter_map(|source| match source {
-                entelechy_graph::Source::Node { node, port } => Some(self.producer(node, port).0),
-                entelechy_graph::Source::External(_) => None,
-            })
-            .collect()
-    }
-
-    /// The nodes that produce the outputs the scene writes, to files or to
-    /// the clipboard: what the Host reads after every frame.
-    fn written_sources(&self) -> Vec<entelechy_graph::NodeId> {
-        let Some(graph) = self.scene.graph() else {
-            return Vec::new();
-        };
-        self.scene
-            .files()
-            .writes
-            .iter()
-            .filter_map(|write| {
-                match graph
-                    .outputs
+    pub(super) fn fed_sources(&self) -> Vec<entelechy_graph::NodeId> {
+        match &self.backing {
+            #[cfg(feature = "documents")]
+            Backing::Documents(docs) => {
+                let files = docs.scene.files();
+                files
+                    .fonts
                     .iter()
-                    .find(|(name, _)| name == &write.output)?
-                {
-                    (_, entelechy_graph::Source::Node { node, port }) => {
+                    .map(|font| &font.codes)
+                    .chain(files.file_nodes.iter().map(|node| &node.paths))
+                    .chain(files.field_nodes.iter().map(|node| &node.paths))
+                    .filter_map(|source| match source {
+                        entelechy_graph::Source::Node { node, port } => {
+                            Some(self.producer(node, port).0)
+                        }
+                        entelechy_graph::Source::External(_) => None,
+                    })
+                    .collect()
+            }
+            Backing::Bundled(b) => b
+                .fonts
+                .iter()
+                .filter_map(|font| match &font.atlas.codes {
+                    entelechy_graph::Source::Node { node, port } => {
                         Some(self.producer(node, port).0)
                     }
-                    (_, entelechy_graph::Source::External(_)) => None,
-                }
-            })
-            .collect()
-    }
-
-    /// Gives each fields node the paths its `paths` held when last
-    /// evaluated, reading the Field only when it is another than it last
-    /// read; the files they name are asked for, each taken in by the sync
-    /// after it is in.
-    fn feed_field_nodes(&mut self) {
-        let nodes = self.scene.files().field_nodes.clone();
-        if nodes.is_empty() {
-            return;
-        }
-        let store = Arc::clone(self.scene.store());
-        let reads = Arc::clone(&self.reads);
-        let readable =
-            |path: &Path| entelechy_documents::reads::lock(&reads).check(store.as_ref(), path);
-        for node in &nodes {
-            let handle = match &node.paths {
-                entelechy_graph::Source::Node { node, port } => self.cached(node, port),
-                entelechy_graph::Source::External(name) => self.inputs.handles().get(name).copied(),
-            };
-            let Some(handle) = handle else {
-                continue;
-            };
-            if self.inputs.field_node_saw(node, handle) {
-                continue;
-            }
-            let paths = self
-                .runtime
-                .materialize(handle)
-                .map_err(|e| e.to_string())
-                .and_then(|()| self.runtime.host().data(handle).map_err(|e| e.to_string()))
-                .and_then(|data| {
-                    if data.schema().scalars() == [entelechy_kernel::Scalar::Int] {
-                        entelechy_documents::inputs::paths_spelled(data.storage())
-                    } else {
-                        Err(
-                            "its `paths` are a `Rows<Int>` of each path's bytes, ended by a 0"
-                                .to_owned(),
-                        )
-                    }
-                });
-            self.inputs.give_field_paths(
-                store.as_ref(),
-                &readable,
-                node,
-                handle,
-                paths,
-                &mut self.runtime,
-            );
+                    entelechy_graph::Source::External(_) => None,
+                })
+                .collect(),
         }
     }
 
-    /// Gives each files node the paths its `paths` held when last
-    /// evaluated, reading the Field only when it is another than it last
-    /// read; the files they name are read for the next evaluation.
-    fn feed_file_nodes(&mut self) {
-        let nodes = self.scene.files().file_nodes.clone();
-        if nodes.is_empty() {
-            return;
+    pub(super) fn feed_fonts(&mut self) {
+        match &self.backing {
+            #[cfg(feature = "documents")]
+            Backing::Documents(_) => self.feed_document_fonts(),
+            Backing::Bundled(_) => self.feed_bundled_fonts(),
         }
-        let store = Arc::clone(self.scene.store());
-        let reads = Arc::clone(&self.reads);
-        let readable =
-            |path: &Path| entelechy_documents::reads::lock(&reads).check(store.as_ref(), path);
-        for node in &nodes {
-            let handle = match &node.paths {
-                entelechy_graph::Source::Node { node, port } => self.cached(node, port),
-                entelechy_graph::Source::External(name) => self.inputs.handles().get(name).copied(),
-            };
-            let Some(handle) = handle else {
-                continue;
-            };
-            if self.inputs.file_node_saw(node, handle) {
-                continue;
-            }
-            let paths = self
-                .runtime
-                .materialize(handle)
-                .map_err(|e| e.to_string())
-                .and_then(|()| self.runtime.host().data(handle).map_err(|e| e.to_string()))
-                .and_then(|data| {
-                    if data.schema().scalars() == [entelechy_kernel::Scalar::Int] {
-                        entelechy_documents::inputs::paths_spelled(data.storage())
-                    } else {
-                        Err(
-                            "its `paths` are a `Rows<Int>` of each path's bytes, ended by a 0"
-                                .to_owned(),
-                        )
-                    }
-                });
-            self.inputs.give_paths(
-                store.as_ref(),
-                &readable,
-                node,
-                handle,
-                paths,
-                self.runtime.host_mut(),
-            );
-        }
-    }
-
-    /// Gives each font node the characters its `codes` held when last
-    /// evaluated, reading the Field only when it is another than it last
-    /// read; the node's glyphs follow for the next evaluation.
-    fn feed_fonts(&mut self) {
-        let fonts = self.scene.files().fonts.clone();
-        for font in &fonts {
-            let handle = match &font.codes {
-                entelechy_graph::Source::Node { node, port } => self.cached(node, port),
-                entelechy_graph::Source::External(name) => self.inputs.handles().get(name).copied(),
-            };
-            let Some(handle) = handle else {
-                continue;
-            };
-            if self.inputs.font_saw(font, handle) {
-                continue;
-            }
-            let codes = self
-                .runtime
-                .materialize(handle)
-                .map_err(|e| e.to_string())
-                .and_then(|()| self.runtime.host().data(handle).map_err(|e| e.to_string()))
-                .and_then(|data| {
-                    if data.schema().scalars() == [entelechy_kernel::Scalar::Int] {
-                        Ok(data.storage().iter().map(|&w| w as i32).collect())
-                    } else {
-                        Err("its `codes` are a `Rows<Int>` of characters".to_owned())
-                    }
-                });
-            self.inputs
-                .give_codes(font, handle, codes, self.runtime.host_mut());
-        }
-    }
-
-    // What follows observes: each hands [`observe`] the parts it reads.
-
-    /// Writes an evaluated, pinned node's output as a file: `.field` for
-    /// any Field, `.png`/`.ppm` for pixels (a `Grid<Float>` as gray),
-    /// `.pgm` for a `Grid<Float>`, `.wav` at 48 kHz for rows of one or two
-    /// floats, `.mid` for rows of notes, `.csv`/`.json` for rows as the
-    /// data table a scene's input reads, a column for each number of the
-    /// element the node's Kernel declares. Only where
-    /// [`Session::allowed_write`] allows, whoever asks.
-    pub fn save(
-        &mut self,
-        node: &entelechy_graph::NodeId,
-        port: &str,
-        path: &Path,
-    ) -> Result<(), String> {
-        let path = self.allowed_write(path)?;
-        self.confirm().map_err(|error| error.to_string())?;
-        // A value a failed frame kept from being made: said with why.
-        let (producer, out) = self.producer(node, port);
-        if self.evaluator.cached(&producer, &out).is_none() {
-            return Err(self.why_no_value(node, port));
-        }
-        observe::save(
-            self.scene.store().as_ref(),
-            self.scene.graph(),
-            &self.evaluator,
-            &mut self.runtime,
-            node,
-            port,
-            &path,
-        )
-    }
-
-    /// How many elements a node's output holds.
-    pub fn element_count(
-        &self,
-        node: &entelechy_graph::NodeId,
-        port: &str,
-    ) -> Result<usize, String> {
-        let (node, port) = self.producer(node, port);
-        observe::element_count(&self.evaluator, &self.runtime, &node, &port)
-    }
-
-    /// Runs one element of `node`'s Kernel on the interpreter and returns
-    /// every binding: element `at` of a map, step `at[0]` of a scan. What
-    /// the node reads is evaluated first under `context` with its sources
-    /// pinned, the node itself not run, so a node that fails is traced up
-    /// to its failure. The trace commits nothing and removes the pins it
-    /// added.
-    pub fn trace(
-        &mut self,
-        node: &entelechy_graph::NodeId,
-        at: [u32; 3],
-        context: &Context,
-    ) -> Result<Traced, String> {
-        let (target, version) = observe::trace_target(self.scene.graph(), &self.runtime, node)?;
-        // Pin the node's sources for this evaluation so they have Fields.
-        let pinned: Vec<entelechy_graph::NodeId> = observe::trace_sources(&target)
-            .into_iter()
-            .filter(|source| !self.evaluator.pins().contains(source))
-            .collect();
-        for source in &pinned {
-            self.evaluator.pin(source.clone());
-        }
-        // A trial: the node's sources are computed from the state last
-        // committed, and nothing is committed, written or recorded.
-        self.inputs.select_frames(
-            self.scene.store().as_ref(),
-            self.runtime.host_mut(),
-            context.time,
-        );
-        self.hold_progress();
-        self.repin();
-        let readers = std::collections::BTreeSet::from([target.id.clone()]);
-        let tried = match self.scene.shared_graph() {
-            Some(graph) => self.evaluator.evaluate_trial_reading(
-                graph,
-                &mut self.runtime,
-                self.inputs.handles(),
-                context,
-                self.scene.params(),
-                &readers,
-            ),
-            None => Err(no_scene()),
-        };
-        // The version running, as its document wrote it, or as published
-        // apart.
-        let written = self
-            .kernels
-            .unoptimized(&target.kernel, version.source())
-            .or_else(|| {
-                let kernel = self.scene.resolve_source(version.source()).ok()?;
-                entelechy_documents::kernels::Written::compiled(&kernel, &target.kernel, None)
-            });
-        let traced = tried.map_err(|error| error.to_string()).and_then(|_| {
-            let graph = self.scene.graph().ok_or("no scene is loaded")?;
-            observe::trace_element(
-                graph,
-                &self.evaluator,
-                &mut self.runtime,
-                self.inputs.handles(),
-                self.scene.params(),
-                written.as_ref().map(|written| written.module()),
-                (&target, &version),
-                context,
-                at,
-            )
-        });
-        for source in pinned {
-            self.evaluator.unpin(&source);
-        }
-        traced.map(|(trace, module)| Traced {
-            place: trace
-                .fault
-                .as_ref()
-                .zip(written.as_ref())
-                .and_then(|(fault, written)| {
-                    written.place_of(fault.function.as_deref(), fault.value?)
-                }),
-            trace,
-            module,
-            kernel: target.kernel.clone(),
-        })
-    }
-
-    /// Where in its source an evaluation's failure at one element is
-    /// written, found by tracing that element again; `None` for any other
-    /// failure, or when the trace does not fail there (a group of fused
-    /// nodes failing in one it absorbed) or no document owns the Kernel.
-    pub fn failure_place(
-        &mut self,
-        error: &EvaluateError,
-        context: &Context,
-    ) -> Option<SourcePlace> {
-        let EvaluateError::Execution { node, error } = error else {
-            return None;
-        };
-        let (x, y) = match error {
-            entelechy_kernel::ExecutionError::Arithmetic { x, y, .. }
-            | entelechy_kernel::ExecutionError::Exhausted { x, y, .. } => (*x, *y),
-            _ => return None,
-        };
-        // A volume's row counts its layers through: past the first layer
-        // the element is outside `[x, y, 0]` and nothing is placed. A node
-        // that ran others fused into it failed in any of them: each is
-        // traced, the first in the group first (traced alone, the node's
-        // own trace fails in them before it runs).
-        let fused = self.evaluator.fused_parts(node);
-        fused
-            .iter()
-            .chain(std::iter::once(node))
-            .find_map(|traced| self.trace(traced, [x, y, 0], context).ok()?.place)
-    }
-
-    /// One element field of a node's output: its type and words. Named
-    /// `node.port[index].field.field` ([`crate::observe::parse_target`]).
-    pub fn element_field(
-        &mut self,
-        node: &entelechy_graph::NodeId,
-        port: &str,
-        index: u32,
-        path: &[String],
-    ) -> Result<(entelechy_ir::Type, Vec<u32>), String> {
-        let (node, port) = self.producer(node, port);
-        observe::element_field(
-            self.scene.graph(),
-            &self.evaluator,
-            &mut self.runtime,
-            (&node, &port),
-            index,
-            path,
-        )
-    }
-
-    /// The name of each number in an element of what `node.port` names,
-    /// in the order a read gives them: `hp`, `pos.x`; one number alone
-    /// is `""`.
-    pub fn element_names(
-        &self,
-        node: &entelechy_graph::NodeId,
-        port: &str,
-    ) -> Result<Vec<String>, String> {
-        let (node, port) = self.producer(node, port);
-        observe::element_names(self.scene.graph(), &self.runtime, (&node, &port))
-    }
-
-    /// The fields of the struct `path` names in `node.port`'s element, in
-    /// order; none for a value that is not a struct.
-    pub fn element_fields(
-        &mut self,
-        node: &entelechy_graph::NodeId,
-        port: &str,
-        path: &[String],
-    ) -> Result<Vec<String>, String> {
-        let (node, port) = self.producer(node, port);
-        observe::element_fields(self.scene.graph(), &self.runtime, (&node, &port), path)
-    }
-
-    /// Writes a Field to a file in the format its extension names, as
-    /// [`Session::save`] does, but for a data table, whose columns only a
-    /// node's Kernel names. Only where [`Session::allowed_write`] allows,
-    /// whoever asks.
-    pub fn export(&mut self, handle: Handle, path: &Path) -> Result<(), SessionError> {
-        let path = self.allowed_write(path).map_err(SessionError::Observe)?;
-        observe::write(
-            self.scene.store().as_ref(),
-            &mut self.runtime,
-            handle,
-            &path,
-            None,
-        )
-        .map_err(|why| match why {
-            observe::Written::Io(path, e) => SessionError::Io(path, e),
-            observe::Written::Observe(why) => SessionError::Observe(why),
-            other => SessionError::Unwritable(path.clone(), other.to_string()),
-        })
     }
 
     /// A Field's words taken later, not waiting for the work submitted
@@ -2644,12 +1069,11 @@ impl Session {
     /// The output of `report` every interface shows: the first picture
     /// ([`entelechy_kernel::Schema::is_picture`]) the scene gives no
     /// device.
-    pub fn picture_of(&self, report: &entelechy_graph::Report) -> Option<Handle> {
-        let presented = &self.scene.files().presented;
+    pub fn picture_of(&self, report: &Report) -> Option<Handle> {
         report
             .outputs
             .iter()
-            .filter(|(name, _)| !presented.iter().any(|present| present.output == *name))
+            .filter(|(name, _)| !self.backing.is_presented(name))
             .map(|(_, handle)| *handle)
             .find(|handle| self.is_picture(*handle))
     }
@@ -2675,11 +1099,14 @@ impl Session {
                 .iter()
                 .find(|(output, _)| output == name)
                 .ok_or_else(|| {
-                    let known = graph.outputs.iter().map(|(output, _)| output.as_str());
-                    format!(
-                        "no output named `{name}`{}",
-                        entelechy_language::did_you_mean(name, known)
-                    )
+                    #[cfg(feature = "documents")]
+                    let hint = entelechy_language::did_you_mean(
+                        name,
+                        graph.outputs.iter().map(|(output, _)| output.as_str()),
+                    );
+                    #[cfg(not(feature = "documents"))]
+                    let hint = "";
+                    format!("no output named `{name}`{hint}")
                 })?,
             None => graph.primary_output().ok_or("the graph has no output")?,
         };
@@ -2713,41 +1140,30 @@ impl Session {
         Some((device, width, height))
     }
 
-    /// The Field of `report` the scene gives device `device`
-    /// ([`entelechy_documents::devices`]), when it gives one and the
-    /// Field is of the structure the device takes.
-    pub fn presented(&self, report: &entelechy_graph::Report, device: &str) -> Option<Handle> {
-        let output = self
-            .scene
-            .files()
-            .presented
-            .iter()
-            .find(|present| present.device == device)?;
+    /// The Field of `report` the scene gives device `device`, when it
+    /// gives one and the Field is of the structure the device takes.
+    pub fn presented(&self, report: &Report, device: &str) -> Option<Handle> {
+        let output = self.backing.presented_output(device)?;
         let handle = report
             .outputs
             .iter()
-            .find(|(name, _)| *name == output.output)
+            .find(|(name, _)| name == output)
             .map(|(_, handle)| *handle)?;
         let host = self.runtime.host();
         let (schema, domain) = (host.schema(handle).ok()?, host.domain(handle).ok()?);
-        entelechy_documents::devices::named(device)
-            .ok()?
-            .takes
-            .as_ref()?
-            .fits(domain.shape(), schema)
-            .then_some(handle)
+        crate::devices::fits_output(device, domain.shape(), schema).then_some(handle)
     }
 
     /// The output of `report` every interface shows as its pointer: the
     /// picture the scene gives `to pointer`.
-    pub fn pointer_of(&self, report: &entelechy_graph::Report) -> Option<Handle> {
-        self.presented(report, entelechy_documents::devices::POINTER)
+    pub fn pointer_of(&self, report: &Report) -> Option<Handle> {
+        self.presented(report, crate::devices::POINTER)
     }
 
     /// The output of `report` that says where the pointer points within its
     /// picture: the rows the scene gives `to pointer_tip`.
-    pub fn hotspot_of(&self, report: &entelechy_graph::Report) -> Option<Handle> {
-        self.presented(report, entelechy_documents::devices::POINTER_TIP)
+    pub fn hotspot_of(&self, report: &Report) -> Option<Handle> {
+        self.presented(report, crate::devices::POINTER_TIP)
             .filter(|handle| {
                 self.runtime
                     .host()
@@ -2758,8 +1174,8 @@ impl Session {
 
     /// The output of `report` every interface plays, and its channels: the
     /// rows the scene gives `to sound`.
-    pub fn sound_of(&self, report: &entelechy_graph::Report) -> Option<(Handle, usize)> {
-        let handle = self.presented(report, entelechy_documents::devices::SOUND)?;
+    pub fn sound_of(&self, report: &Report) -> Option<(Handle, usize)> {
+        let handle = self.presented(report, crate::devices::SOUND)?;
         let channels = self.runtime.host().schema(handle).ok()?.value_words();
         Some((handle, channels))
     }
@@ -2770,161 +1186,23 @@ impl Session {
             .image(handle)
             .map_err(|e| SessionError::Observe(e.to_string()))
     }
+}
 
-    /// Reads one pixel of a cached image, materializing it if needed.
-    pub fn read_pixel(
-        &mut self,
-        image: Handle,
-        x: u32,
-        y: u32,
-    ) -> Result<entelechy_kernel::Pixel, SessionError> {
-        observe::read_pixel(&mut self.runtime, image, x, y)
+fn finish_each<T: Sync>(items: &[T], f: impl Fn(&T) + Sync) {
+    #[cfg(feature = "documents")]
+    {
+        entelechy_documents::spread::map(items, f);
+    }
+    #[cfg(not(feature = "documents"))]
+    for item in items {
+        f(item);
     }
 }
 
-/// The documents the scene at `root`, its text `text`, uses or places,
-/// and what those use and place in turn, each by its one name; none when
-/// a document does not parse or a use does not resolve.
-fn reached_documents(
-    store: &dyn Store,
-    root: &Path,
-    text: &str,
-) -> Option<std::collections::BTreeSet<PathBuf>> {
-    let mut reached = std::collections::BTreeSet::new();
-    let mut graphs = vec![(root.to_path_buf(), text.to_owned())];
-    let one = |path: &Path| store.canonical(path).unwrap_or_else(|_| store.whole(path));
-    while let Some((path, text)) = graphs.pop() {
-        if !reached.insert(one(&path)) {
-            continue;
-        }
-        let document = entelechy_language::parse_document(&text).ok()?;
-        let base = path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf();
-        let used =
-            entelechy_documents::sources::used_documents(store, &base, &document.uses).ok()?;
-        reached.extend(used.iter().map(|used| one(used)));
-        for node in &document.nodes {
-            if let entelechy_language::NodeKind::SubGraph(placed) = &node.kind {
-                let at = entelechy_documents::sources::file_at(store, &base.join(&placed.value));
-                if let Ok(text) = store.read_text(&at) {
-                    graphs.push((at, text));
-                }
-            }
-        }
-    }
-    Some(reached)
-}
-
-/// A problem line of a check (`path:line:column: message`, or `path:
-/// message`) as a refusal of the document it names: a place a graph names
-/// by its name (`scene:39:6`, as a node says where it is written) is the
-/// graph document of that name among those written, else the scene; the
-/// scene too when the line names none.
-/// `fix` over the change refused: the change's own text of the
-/// document, the item added, when the change wrote it.
-fn mended_in(store: &dyn Store, fix: &crate::Fix, landed: &[(PathBuf, String)]) -> crate::Fix {
-    let at = store
-        .canonical(&fix.document)
-        .unwrap_or_else(|_| fix.document.clone());
-    let text = landed
-        .iter()
-        .find(|(path, _)| *path == at)
-        .and_then(|(_, text)| {
-            let edit = entelechy_scene::edit::Edit {
-                target: entelechy_scene::edit::Target::Statement {
-                    kind: entelechy_scene::edit::StatementKind::Use,
-                    name: fix.using.clone(),
-                },
-                text: Some(fix.item()),
-            };
-            entelechy_scene::edit::edit(text, &[edit]).ok()
-        });
-    crate::Fix {
-        text,
-        ..fix.clone()
-    }
-}
-
-fn placed(
-    store: &dyn Store,
-    line: &str,
-    root: &Path,
-    written: &[(PathBuf, String)],
-) -> crate::Refusal {
-    let document = |named: &str| {
-        let path = store.whole(Path::new(named));
-        if store.kind(&path) == Some(entelechy_documents::store::Kind::File) {
-            return store.canonical(&path).unwrap_or(path);
-        }
-        written
-            .iter()
-            .map(|(path, _)| path)
-            .find(|path| {
-                path.extension().is_some_and(|e| e == "esn")
-                    && path.file_stem().is_some_and(|stem| stem == named)
-            })
-            .cloned()
-            .unwrap_or_else(|| root.to_path_buf())
-    };
-    let bytes = line.as_bytes();
-    let mut at = None;
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b':' {
-            let rest = &line[i + 1..];
-            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-            if !digits.is_empty() && rest[digits.len()..].starts_with(':') {
-                let after = &rest[digits.len() + 1..];
-                let column: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
-                if !column.is_empty() && after[column.len()..].starts_with(':') {
-                    at = Some((
-                        i,
-                        digits.parse().unwrap_or(1),
-                        column.parse().unwrap_or(1),
-                        after[column.len() + 1..].trim().to_owned(),
-                    ));
-                    break;
-                }
-            }
-            if rest.starts_with(' ') && at.is_none() && i > 0 {
-                let path = store.whole(Path::new(&line[..i]));
-                if store.kind(&path).is_some() {
-                    return crate::Refusal {
-                        path: store.canonical(&path).unwrap_or(path),
-                        diagnostic: crate::Diagnostic::new(rest.trim()),
-                    };
-                }
-            }
-        }
-        i += 1;
-    }
-    match at {
-        Some((end, line_no, column, message)) => crate::Refusal {
-            path: document(&line[..end]),
-            diagnostic: crate::Diagnostic {
-                message,
-                at: Some((line_no, column)),
-                fix: None,
-            },
-        },
-        None => crate::Refusal {
-            path: root.to_path_buf(),
-            diagnostic: crate::Diagnostic::new(line),
-        },
-    }
-}
-
-/// The Kernels every node of which only shows ([`Graph::shown_only`]):
-/// what reaches only the outputs interfaces present, the picture (the
-/// first output) and what the scene gives a device that shows every frame
-/// ([`entelechy_documents::devices::Device::every_frame`]): the sound, the
-/// pointer.
-fn shown_kernels(
-    graph: &entelechy_graph::Graph,
-    devices: &[entelechy_scene::Present],
-) -> BTreeSet<entelechy_kernel::KernelId> {
+fn shown_kernels<'a>(
+    graph: &Graph,
+    devices: impl Iterator<Item = (&'a str, &'a str)>,
+) -> BTreeSet<KernelId> {
     let mut presented: BTreeSet<String> = graph
         .outputs
         .iter()
@@ -2933,14 +1211,11 @@ fn shown_kernels(
         .collect();
     presented.extend(
         devices
-            .iter()
-            .filter(|present| {
-                entelechy_documents::devices::named(&present.device).is_ok_and(|d| d.every_frame)
-            })
-            .map(|present| present.output.clone()),
+            .filter(|(_, device)| crate::devices::every_frame(device))
+            .map(|(output, _)| output.to_owned()),
     );
     let shown = graph.shown_only(&presented);
-    let mut kernels: BTreeMap<&entelechy_kernel::KernelId, bool> = BTreeMap::new();
+    let mut kernels: BTreeMap<&KernelId, bool> = BTreeMap::new();
     for node in &graph.nodes {
         *kernels.entry(&node.kernel).or_insert(true) &= shown.contains(&node.id);
     }

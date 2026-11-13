@@ -5,9 +5,11 @@
 use entelechy_graph::Held;
 use entelechy_kernel::{Census, FieldBytes, Handle};
 
-use entelechy_documents::inputs::COPY_LEAST;
-
 use crate::Session;
+
+/// The fewest bytes of an input's Host copy that are let go once the
+/// input is on a device.
+pub(crate) const COPY_LEAST: u64 = 1 << 20;
 
 /// A session's memory, at one moment ([`Session::memory_map`]).
 #[derive(Clone, Debug, Default)]
