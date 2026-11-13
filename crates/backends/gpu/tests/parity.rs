@@ -3157,3 +3157,33 @@ fn pow_and_choosing_builtins_match_on_negative_zero_and_nan_inputs() {
         "{cpu:?} vs {gpu_pixels:?}"
     );
 }
+
+#[test]
+fn emitting_integer_sum_scatter_counts_its_high_words_when_packing_inputs() {
+    let ports: String = (0..11)
+        .map(|k| format!("input f{k}: Rows<Int>; "))
+        .collect();
+    let sum: String = (0..11)
+        .map(|k| format!("at(f{k}, 0)"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let source = format!(
+        "kernel test.emit_pack@1 {{
+            requires {{ field.read; field.write; }}
+            input base: Rows<Int>;
+            {ports}
+            output result: Rows<Int>;
+            struct Pair {{ at: Int; value: Int; }}
+            scatter over f0 into base with sum {{
+                emit(Pair {{ at: 0, value: {sum} }});
+                return Pair {{ at: -1, value: 0 }};
+            }}
+        }}"
+    );
+    let module = compile(&source).unwrap();
+    // 12 inputs + 1 output + 1 failure + 2 emitting buffers (low + high) = 16 storage.
+    assert_eq!(entelechy_gpu::wgsl::bindings(&module), (2, 16));
+    let packed = entelechy_gpu::wgsl::packed_inputs(&module, 12, 10);
+    // Packing 7 read-only inputs replaces 7 bindings with 1 pack, leaving 10 storage.
+    assert_eq!(packed.len(), 7);
+}

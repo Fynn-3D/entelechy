@@ -198,7 +198,8 @@ pub const PACKED_BINDING: u32 = 91;
 
 /// `(uniforms, storage)` buffers the module's widest pass binds unpacked:
 /// context and parameters, every input, every written output, the
-/// failure record where arithmetic can fail, an emitting scatter's target.
+/// failure record where arithmetic can fail, an emitting scatter's target
+/// and its high words where it sums integers whole.
 pub fn bindings(module: &Module) -> (usize, usize) {
     let inputs = module.manifest.inputs.len();
     let failure = usize::from(can_fail(module));
@@ -207,8 +208,9 @@ pub fn bindings(module: &Module) -> (usize, usize) {
     if module.manifest.mode == Mode::Reduce {
         return (3, inputs + 2 + failure);
     }
-    let storage =
-        inputs + written_outputs(module) + failure + usize::from(!emitted_pairs(module).is_empty());
+    let emitting =
+        usize::from(!emitted_pairs(module).is_empty()) * (1 + usize::from(highs_beside(module)));
+    let storage = inputs + written_outputs(module) + failure + emitting;
     (2, storage)
 }
 
