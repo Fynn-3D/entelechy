@@ -112,7 +112,7 @@ impl Check for FailureCheck {
 /// Why a pipeline was not built: the shader the backend emitted was
 /// refused (its own fault, said with the source), or the device's own
 /// compiler failed on a shader that was valid.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum Unbuilt {
     Ours(String),
     Device(String),

@@ -1243,6 +1243,7 @@ impl Evaluator {
             .map(|(at, node)| (&node.id, at))
             .collect();
         let mut domains = BTreeMap::new();
+        let mut off_device = BTreeSet::new();
         for &at in order.iter() {
             let node = &graph.nodes[at];
             let Some(version) = runtime.kernel(&node.kernel) else {
@@ -1254,6 +1255,10 @@ impl Evaluator {
             if let Some(extent) = planned.extent {
                 domains.insert(node.id.clone(), extent);
             }
+            if runtime.placement(&version).routed.is_some() {
+                off_device.insert(node.id.clone());
+                continue;
+            }
             // A reduction, a prefix and a scatter run over more than their
             // output says: only a map's and a scan's runs are counted here.
             let counted = matches!(
@@ -1261,7 +1266,7 @@ impl Evaluator {
                 entelechy_ir::Mode::Map | entelechy_ir::Mode::Scan
             );
             let reads_device = node.inputs.values().any(|binding| match binding {
-                Binding::Now(Source::Node { node, .. }) => !few.contains(node),
+                Binding::Now(Source::Node { node, .. }) => !off_device.contains(node),
                 _ => false,
             });
             if counted
@@ -1270,6 +1275,7 @@ impl Evaluator {
                     .runs
                     .is_some_and(|runs| runs.count() as u64 <= entelechy_kernel::FEW_ELEMENTS)
             {
+                off_device.insert(node.id.clone());
                 few.insert(node.id.clone());
             }
         }

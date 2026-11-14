@@ -8,11 +8,9 @@
 mod encode;
 mod translate;
 
-use std::any::Any;
 use std::collections::HashMap;
 
 use entelechy_ir::{Mode, Validated};
-use entelechy_rules::Prepared;
 
 use encode::{Module, Val};
 use translate::{Fx, Kind, Shared, signature};
@@ -52,12 +50,6 @@ impl Drop for Compiled {
     fn drop(&mut self) {
         // The runtime drops prepared code after its last execution.
         unsafe { unload(self.slots.as_ptr(), self.slots.len() as u32) };
-    }
-}
-
-impl Prepared for Compiled {
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

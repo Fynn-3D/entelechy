@@ -1,11 +1,11 @@
 #![warn(missing_docs)]
 //! JIT backend.
 //!
-//! Compiles a [`Validated`] module's functions with Cranelift when the
-//! Kernel is prepared and runs them on as many threads as pay off. The
-//! contract is the CPU interpreter's, bit for bit: word layout, integer
-//! checks, reads through the scope's gate, and libm. Native operations
-//! run on the wrapped CPU backend.
+//! Compiles a [`Validated`] module's functions with Cranelift on first
+//! need (or when [`Backend::finish`] asks) and runs them on as many threads
+//! as pay off. The contract is the CPU interpreter's, bit for bit: word
+//! layout, integer checks, reads through the scope's gate, and libm. Native
+//! operations run on the wrapped CPU backend.
 //!
 //! When Entelechy is itself WebAssembly, the code is WebAssembly (`wasm`),
 //! loaded into Entelechy's function table; a table index stands for a
@@ -19,10 +19,10 @@ mod layout;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 
-#[cfg(not(target_arch = "wasm32"))]
 use std::any::Any;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 #[cfg(not(target_arch = "wasm32"))]
 use cranelift_codegen::isa::TargetIsa;
@@ -128,10 +128,18 @@ type Init = unsafe extern "C" fn(*mut Ctx, *mut u32);
 /// the merged words go.
 type Merge = unsafe extern "C" fn(*mut Ctx, *const u32, *const u32, *mut u32);
 
-/// The JIT backend: a target ISA to compile for.
+/// Shared compiled code keyed by nameless structural IR so repeated fused
+/// groups and identical Kernels compile once while any version holds them.
+type SharedSlot = OnceLock<Result<Arc<Compiled>, String>>;
+type CodeEntry = (entelechy_ir::Module, Vec<u32>, Weak<SharedSlot>);
+type CodeMemo = Mutex<HashMap<u64, Vec<CodeEntry>>>;
+
+/// The JIT backend: a target ISA to compile for, and a weak table of live
+/// compiled code shared across structurally identical modules.
 pub struct JitBackend {
     #[cfg(not(target_arch = "wasm32"))]
     isa: Arc<dyn TargetIsa>,
+    memo: Arc<CodeMemo>,
 }
 
 impl std::fmt::Debug for JitBackend {
@@ -145,7 +153,9 @@ impl JitBackend {
     /// Opens the backend where the host loads WebAssembly.
     pub fn new() -> Result<Self, String> {
         if cfg!(feature = "wasm-host") {
-            Ok(Self {})
+            Ok(Self {
+                memo: Arc::default(),
+            })
         } else {
             Err("the JIT makes code the host loads, and this build has no such host".into())
         }
@@ -177,7 +187,10 @@ impl JitBackend {
             .map_err(|error| error.to_string())?
             .finish(settings::Flags::new(flags))
             .map_err(|error| error.to_string())?;
-        Ok(Self { isa })
+        Ok(Self {
+            isa,
+            memo: Arc::default(),
+        })
     }
 
     /// The target the code is compiled for, for diagnostics.
@@ -216,8 +229,232 @@ impl Drop for Compiled {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+use wasm::Compiled;
+
+/// Checks that every narrow port keeps its scalars in one encoding.
+fn check_ports(module: &Validated) -> Result<(), String> {
+    for port in module
+        .manifest
+        .inputs
+        .iter()
+        .chain(&module.manifest.outputs)
+    {
+        if port.ty.schema.uniform_encoding().is_none() && !port.ty.schema.is_wide() {
+            return Err(format!(
+                "`{}` keeps its scalars in more than one encoding ({}); a port keeps them one way",
+                port.name, port.ty.schema
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Compiles `module` to native code and verifies its measured stack frames.
 #[cfg(not(target_arch = "wasm32"))]
-impl Prepared for Compiled {
+fn compile_checked(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Compiled, String> {
+    let code = codegen::compile(module, isa)?;
+    let refused = frame::refusal(module, code.frames.as_ref());
+    let compiled = Compiled {
+        module: Some(code.module),
+        entry: code.entry,
+        init: code.init,
+        merge: code.merge,
+    };
+    // Refused, the code compiled is let go with `compiled`.
+    match refused {
+        Some(reason) => Err(reason),
+        None => Ok(compiled),
+    }
+}
+
+/// Strips diagnostic names and defaults that machine-code generation never
+/// reads, so structurally identical modules compare equal.
+fn nameless(module: &entelechy_ir::Module) -> entelechy_ir::Module {
+    fn strip_fn(function: &entelechy_ir::Function) -> entelechy_ir::Function {
+        entelechy_ir::Function {
+            name: String::new(),
+            args: function.args.clone(),
+            body: function.body.clone(),
+            results: function.results.clone(),
+            bindings: Vec::new(),
+        }
+    }
+    entelechy_ir::Module {
+        manifest: entelechy_ir::Manifest {
+            id: entelechy_ir::KernelId::new("k.k", 1).expect("canonical id"),
+            mode: module.manifest.mode,
+            requires: entelechy_abi::Capabilities::default(),
+            inputs: module
+                .manifest
+                .inputs
+                .iter()
+                .map(|port| entelechy_ir::Port {
+                    name: String::new(),
+                    ty: port.ty.clone(),
+                })
+                .collect(),
+            params: module
+                .manifest
+                .params
+                .iter()
+                .map(|param| entelechy_ir::Param {
+                    name: String::new(),
+                    ty: param.ty,
+                    default: entelechy_abi::Value::Int(0),
+                })
+                .collect(),
+            outputs: module
+                .manifest
+                .outputs
+                .iter()
+                .map(|port| entelechy_ir::Port {
+                    name: String::new(),
+                    ty: port.ty.clone(),
+                })
+                .collect(),
+            memories: Vec::new(),
+            budget: module.manifest.budget,
+        },
+        structs: module
+            .structs
+            .iter()
+            .map(|def| entelechy_ir::StructDef {
+                name: String::new(),
+                fields: def
+                    .fields
+                    .iter()
+                    .map(|field| entelechy_ir::Field {
+                        name: String::new(),
+                        ty: field.ty,
+                    })
+                    .collect(),
+                element: def.element,
+            })
+            .collect(),
+        functions: module.functions.iter().map(strip_fn).collect(),
+        entry: strip_fn(&module.entry),
+        merge: module.merge.as_ref().map(strip_fn),
+        init: module.init.as_ref().map(strip_fn),
+    }
+}
+
+/// Raw bit words of every constant in `module` (keeping `-0.0` distinct from
+/// `+0.0`) and a structural hash for bucket lookup.
+fn structural_key(module: &entelechy_ir::Module) -> (u64, entelechy_ir::Module, Vec<u32>) {
+    fn collect_consts(body: &[entelechy_ir::Instruction], out: &mut Vec<u32>) {
+        for inst in body {
+            if let entelechy_ir::Op::Const(value) = &inst.op {
+                value.push_words(out);
+            }
+            for block in inst.op.blocks() {
+                collect_consts(&block.body, out);
+            }
+        }
+    }
+    let key = nameless(module);
+    let mut consts = Vec::new();
+    for func in key
+        .functions
+        .iter()
+        .chain(std::iter::once(&key.entry))
+        .chain(key.merge.as_ref())
+        .chain(key.init.as_ref())
+    {
+        collect_consts(&func.body, &mut consts);
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::mem::discriminant(&key.manifest.mode).hash(&mut hasher);
+    key.manifest.budget.hash(&mut hasher);
+    key.manifest.inputs.len().hash(&mut hasher);
+    key.manifest.outputs.len().hash(&mut hasher);
+    key.manifest.params.len().hash(&mut hasher);
+    key.structs.len().hash(&mut hasher);
+    key.functions.len().hash(&mut hasher);
+    key.entry.body.len().hash(&mut hasher);
+    for inst in &key.entry.body {
+        std::mem::discriminant(&inst.op).hash(&mut hasher);
+    }
+    consts.hash(&mut hasher);
+    (hasher.finish(), key, consts)
+}
+
+/// A prepared module, compiled on first run or when [`Backend::finish`]
+/// asks, and kept from then on.
+struct Lazy {
+    #[cfg(not(target_arch = "wasm32"))]
+    isa: Arc<dyn TargetIsa>,
+    memo: Arc<CodeMemo>,
+    module: Mutex<Option<Validated>>,
+    compiled: OnceLock<Arc<SharedSlot>>,
+}
+
+impl Lazy {
+    fn is_built(&self) -> bool {
+        self.compiled.get().is_some_and(|slot| slot.get().is_some())
+    }
+
+    fn built(&self) -> Result<&Compiled, ExecutionError> {
+        let slot = self.compiled.get_or_init(|| {
+            let Some(module) = self
+                .module
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            else {
+                let failed = Arc::new(OnceLock::new());
+                let _ = failed.set(Err("kernel was left unbuilt by a failed build".to_owned()));
+                return failed;
+            };
+            let (hash, key, consts) = structural_key(&module);
+            let slot = {
+                let mut map = self
+                    .memo
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let bucket = map.entry(hash).or_default();
+                bucket.retain(|(_, _, weak)| weak.strong_count() > 0);
+                if let Some(found) = bucket.iter().find_map(|(seen_key, seen_consts, weak)| {
+                    (seen_key == &key && seen_consts == &consts)
+                        .then(|| weak.upgrade())
+                        .flatten()
+                }) {
+                    found
+                } else {
+                    let fresh = Arc::new(OnceLock::new());
+                    bucket.push((key, consts, Arc::downgrade(&fresh)));
+                    if map.len() > 256 {
+                        map.retain(|_, entries| {
+                            entries.retain(|(_, _, weak)| weak.strong_count() > 0);
+                            !entries.is_empty()
+                        });
+                    }
+                    fresh
+                }
+            };
+            let _ = slot.get_or_init(|| {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    compile_checked(&module, self.isa.clone()).map(Arc::new)
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    wasm::compile(&module).map(Arc::new)
+                }
+            });
+            slot
+        });
+        match slot.get() {
+            Some(Ok(compiled)) => Ok(compiled.as_ref()),
+            Some(Err(error)) => Err(ExecutionError::Device(error.clone())),
+            None => Err(ExecutionError::Device(
+                "kernel was left unbuilt by a failed build".into(),
+            )),
+        }
+    }
+}
+
+impl Prepared for Lazy {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -239,45 +476,88 @@ impl Backend for JitBackend {
     /// decide.
     #[cfg(not(target_arch = "wasm32"))]
     fn declines(&self, module: &Validated) -> Option<String> {
+        if matches!(module.manifest.mode, Mode::Group { .. }) {
+            let Ok(laned) = entelechy_ir::lanes(module) else {
+                return None;
+            };
+            if frame::bound(&laned) <= frame::MAX_FRAME_BYTES {
+                return None;
+            }
+            return compile_checked(&laned, self.isa.clone()).err();
+        }
         if frame::bound(module) <= frame::MAX_FRAME_BYTES {
             return None;
         }
-        self.prepare(module).err()
+        compile_checked(module, self.isa.clone()).err()
     }
 
     #[cfg(target_arch = "wasm32")]
     fn declines(&self, module: &Validated) -> Option<String> {
+        if matches!(module.manifest.mode, Mode::Group { .. }) {
+            let Ok(laned) = entelechy_ir::lanes(module) else {
+                return None;
+            };
+            return frame::refusal(&laned, None);
+        }
         frame::refusal(module, None)
     }
 
-    /// The module compiled, and taken when its frames as compiled fit
-    /// (the estimate when the compiler reports none).
+    /// Validates `module`'s lanes and frame bound; machine code is compiled
+    /// when [`Backend::finish`] or the first run needs it, unless the
+    /// estimated frame bound requires measuring the compiled frames up front.
     #[cfg(not(target_arch = "wasm32"))]
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
         // A group's entry runs its lanes ([`entelechy_ir::lanes`]).
-        let module = &entelechy_ir::lanes(module).map_err(|error| error.to_string())?;
-        let code = codegen::compile(module, self.isa.clone())?;
-        let refused = frame::refusal(module, code.frames.as_ref());
-        let compiled = Compiled {
-            module: Some(code.module),
-            entry: code.entry,
-            init: code.init,
-            merge: code.merge,
-        };
-        // Refused, the code compiled is let go with `compiled`.
-        match refused {
-            Some(reason) => Err(reason),
-            None => Ok(Box::new(compiled)),
+        let laned = entelechy_ir::lanes(module).map_err(|error| error.to_string())?;
+        check_ports(&laned)?;
+        if frame::bound(&laned) > frame::MAX_FRAME_BYTES {
+            let compiled = compile_checked(&laned, self.isa.clone())?;
+            let slot = Arc::new(OnceLock::new());
+            let _ = slot.set(Ok(Arc::new(compiled)));
+            let cell = OnceLock::new();
+            let _ = cell.set(slot);
+            return Ok(Box::new(Lazy {
+                isa: self.isa.clone(),
+                memo: Arc::clone(&self.memo),
+                module: Mutex::new(None),
+                compiled: cell,
+            }));
         }
+        Ok(Box::new(Lazy {
+            isa: self.isa.clone(),
+            memo: Arc::clone(&self.memo),
+            module: Mutex::new(Some(laned)),
+            compiled: OnceLock::new(),
+        }))
     }
 
     #[cfg(target_arch = "wasm32")]
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
-        let module = &entelechy_ir::lanes(module).map_err(|error| error.to_string())?;
-        if let Some(reason) = frame::refusal(module, None) {
+        let laned = entelechy_ir::lanes(module).map_err(|error| error.to_string())?;
+        check_ports(&laned)?;
+        if let Some(reason) = frame::refusal(&laned, None) {
             return Err(reason);
         }
-        Ok(Box::new(wasm::compile(module)?))
+        Ok(Box::new(Lazy {
+            memo: Arc::clone(&self.memo),
+            module: Mutex::new(Some(laned)),
+            compiled: OnceLock::new(),
+        }))
+    }
+
+    /// Compiles `prepared`'s code, if it is not yet compiled.
+    fn finish(&self, prepared: &dyn Prepared) {
+        if let Some(lazy) = prepared.as_any().downcast_ref::<Lazy>() {
+            let _ = lazy.built();
+        }
+    }
+
+    /// Whether `prepared`'s code is compiled, or failed to be.
+    fn finished(&self, prepared: &dyn Prepared) -> bool {
+        prepared
+            .as_any()
+            .downcast_ref::<Lazy>()
+            .is_none_or(Lazy::is_built)
     }
 
     fn execute(
@@ -287,13 +567,12 @@ impl Backend for JitBackend {
         invocation: &Invocation,
         scope: &mut Scope<'_>,
     ) -> Result<Vec<Handle>, ExecutionError> {
-        #[cfg(target_arch = "wasm32")]
-        use wasm::Compiled;
-        let Some(compiled) = prepared.as_any().downcast_ref::<Compiled>() else {
+        let Some(lazy) = prepared.as_any().downcast_ref::<Lazy>() else {
             return Err(ExecutionError::Device(
                 "kernel was prepared by a different backend".into(),
             ));
         };
+        let compiled = lazy.built()?;
         check_invocation(module, invocation, scope)?;
         match module.manifest.mode {
             Mode::Group { size } => run(compiled.entry, module, invocation, scope, Some(size)),
@@ -1826,4 +2105,73 @@ pub(crate) mod offsets {
     pub const VIEW_WIDTH: i32 = std::mem::offset_of!(View, width) as i32;
     pub const VIEW_HEIGHT: i32 = std::mem::offset_of!(View, height) as i32;
     pub const VIEW_DEPTH: i32 = std::mem::offset_of!(View, depth) as i32;
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    fn valid(source: &str) -> Validated {
+        entelechy_compiler::compile(source).expect("valid kernel")
+    }
+
+    #[test]
+    fn structurally_identical_modules_share_compiled_code_until_dropped() {
+        let jit = JitBackend::new().expect("jit");
+        let a = valid(
+            "kernel alpha.one@1 {
+                requires { field.read; field.write; }
+                input src_a: Rows<Float>;
+                param gain_a: Float = 1.0;
+                output out_a: Rows<Float>;
+                struct PairA { lo: Float; hi: Float; }
+                fn mix_a(p: PairA, k: Float) -> Float { return p.lo * k + p.hi; }
+                compute {
+                    let v = sample(src_a);
+                    return mix_a(PairA { lo: v, hi: 2.5 }, gain_a);
+                }
+            }",
+        );
+        let b = valid(
+            "kernel beta.two@7 {
+                requires { field.read; field.write; }
+                input src_b: Rows<Float>;
+                param gain_b: Float = 99.0;
+                output out_b: Rows<Float>;
+                struct PairB { first: Float; second: Float; }
+                fn blend_b(q: PairB, scale: Float) -> Float { return q.first * scale + q.second; }
+                compute {
+                    let x = sample(src_b);
+                    return blend_b(PairB { first: x, second: 2.5 }, gain_b);
+                }
+            }",
+        );
+
+        let prep_a = jit.prepare(&a).expect("prepare a");
+        let prep_b = jit.prepare(&b).expect("prepare b");
+        jit.finish(prep_a.as_ref());
+        jit.finish(prep_b.as_ref());
+
+        let slot_a = prep_a
+            .as_any()
+            .downcast_ref::<Lazy>()
+            .and_then(|lazy| lazy.compiled.get())
+            .expect("built a")
+            .clone();
+        let slot_b = prep_b
+            .as_any()
+            .downcast_ref::<Lazy>()
+            .and_then(|lazy| lazy.compiled.get())
+            .expect("built b")
+            .clone();
+        assert!(Arc::ptr_eq(&slot_a, &slot_b));
+
+        let weak = Arc::downgrade(&slot_a);
+        drop(slot_a);
+        drop(slot_b);
+        drop(prep_a);
+        assert_eq!(weak.strong_count(), 1);
+        drop(prep_b);
+        assert_eq!(weak.strong_count(), 0);
+    }
 }

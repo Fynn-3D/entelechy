@@ -21,11 +21,11 @@ thread_local! {
 }
 
 /// What a pipeline is made of, as [`ASKED`] keeps it.
-fn made_of(label: &str, source: &str) -> u64 {
+fn made_of(source: &str, entries: &[wgpu::BindGroupLayoutEntry]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    label.hash(&mut hasher);
     source.hash(&mut hasher);
+    entries.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -39,15 +39,17 @@ pub(crate) fn ask_ahead(
     source: &str,
     entries: &[wgpu::BindGroupLayoutEntry],
 ) {
+    let key = made_of(source, entries);
+    if ASKED.with(|asked_ahead| asked_ahead.borrow().contains_key(&key)) {
+        return;
+    }
     let Some(device) = device.as_webgpu() else {
         return;
     };
     let device: &JsValue = device.as_ref();
     if let Ok(asked) = ask(device, label, source, entries) {
         ASKED.with(|asked_ahead| {
-            asked_ahead
-                .borrow_mut()
-                .insert(made_of(label, source), asked)
+            asked_ahead.borrow_mut().insert(key, asked);
         });
     }
 }
@@ -75,7 +77,8 @@ pub(crate) fn compile_beside(
         ));
     }
     let started = entelechy_rules::clock::now();
-    let ahead = ASKED.with(|asked_ahead| asked_ahead.borrow_mut().remove(&made_of(label, source)));
+    let ahead =
+        ASKED.with(|asked_ahead| asked_ahead.borrow_mut().remove(&made_of(source, entries)));
     let asked = match ahead {
         Some(asked) => asked,
         None => match ask(device, label, source, entries) {

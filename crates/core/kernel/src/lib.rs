@@ -553,22 +553,44 @@ pub struct Preparer {
 }
 
 impl Preparer {
-    /// Finishes `version` on the main backend ([`Backend::finish`]), where
-    /// it was prepared there, so its first run there waits for nothing;
-    /// where that backend could not build it after all, its runs go to the
-    /// ordered backend from now on. A panic in the backend leaves it for
-    /// that run to report.
+    /// Finishes `version` on the backend that prepared it
+    /// ([`Backend::finish`]), so its first run there waits for nothing; where
+    /// the main backend could not build it after all, its runs go to the
+    /// ordered backend from now on and finish there. A panic in the backend
+    /// leaves it for that run to report.
     pub fn finish(&self, version: &KernelVersion) {
-        if let Body::Kernel { prepared, .. } = &version.body
-            && version.routed().is_none()
-        {
+        let Body::Kernel {
+            prepared,
+            routed,
+            left,
+            ..
+        } = &version.body
+        else {
+            return;
+        };
+        if routed.is_some() {
+            if let Some(ordered) = self.ordered.as_deref() {
+                self.progress.step(version.id(), true, || {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        ordered.finish(prepared.as_ref())
+                    }));
+                });
+            }
+            return;
+        }
+        if left.get().is_none() {
             self.progress.step(version.id(), true, || {
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     self.backend.finish(prepared.as_ref())
                 }));
             });
-            if self.ordered.is_some() {
-                version.leaves(self.backend.as_ref());
+            if let Some(ordered) = self.ordered.as_deref()
+                && version.leaves(self.backend.as_ref())
+                && let Some(on_ordered) = version.on_ordered(ordered)
+            {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    ordered.finish(on_ordered)
+                }));
             }
         }
     }
@@ -588,12 +610,22 @@ impl Preparer {
         running: &KernelVersion,
     ) -> Result<Candidate, PrepareError> {
         granted_by(&self.grants, &module)?;
+        let mut ahead = running.ahead();
+        if let Body::Kernel {
+            prepared,
+            routed: Some(_),
+            ..
+        } = &running.body
+            && let Some(ordered) = self.ordered.as_deref()
+        {
+            ahead.ordered |= ordered.finished(prepared.as_ref());
+        }
         prepare_finished(
             self.backend.as_ref(),
             self.ordered.as_deref(),
             module,
             source.to_owned(),
-            running.ahead(),
+            ahead,
             &self.progress,
         )
     }
@@ -683,6 +715,15 @@ pub(crate) fn prepare_finished(
 ) -> Result<Candidate, PrepareError> {
     let mut candidate = prepare_on(main, ordered, module, source, progress)?;
     if candidate.routed.is_some() {
+        if ahead.ordered
+            && let Some(ordered) = ordered
+        {
+            progress.step(&candidate.module.manifest.id, true, || {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    ordered.finish(candidate.prepared.as_ref())
+                }));
+            });
+        }
         return Ok(candidate);
     }
     if ahead.main {
@@ -692,11 +733,22 @@ pub(crate) fn prepare_finished(
             }));
         });
         if ordered.is_some() && main.declines(&candidate.run).is_some() {
-            return prepare_on(main, ordered, candidate.module, candidate.source, progress);
+            let rerouted = prepare_on(main, ordered, candidate.module, candidate.source, progress)?;
+            if let Some(ordered) = ordered {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    ordered.finish(rerouted.prepared.as_ref())
+                }));
+            }
+            return Ok(rerouted);
         }
     }
     if let Some(ordered) = ordered.filter(|_| ahead.ordered) {
-        candidate.ordered_ahead = Some(prepared_quietly(ordered, &candidate.run));
+        let on_ordered = prepared_quietly(ordered, &candidate.run);
+        if let Some(prepared) = on_ordered.as_deref() {
+            let _ =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ordered.finish(prepared)));
+        }
+        candidate.ordered_ahead = Some(on_ordered);
     }
     Ok(candidate)
 }
@@ -922,7 +974,19 @@ impl Runtime {
         let ahead = self
             .kernels
             .get(&module.manifest.id)
-            .map(|running| running.ahead())
+            .map(|running| {
+                let mut ahead = running.ahead();
+                if let Body::Kernel {
+                    prepared,
+                    routed: Some(_),
+                    ..
+                } = &running.body
+                    && let Some(ordered) = self.ordered.as_deref()
+                {
+                    ahead.ordered |= ordered.finished(prepared.as_ref());
+                }
+                ahead
+            })
             .unwrap_or_default();
         self.prepare_later_ahead(module, source, ahead)
     }
@@ -931,7 +995,7 @@ impl Runtime {
     /// `beside`'s place (a fused group in its consumer's): made ready on
     /// the main backend where `beside` ran there or was built there, so
     /// its first run waits for no compiler; on the ordered one where
-    /// `beside` ran there.
+    /// `beside` ran there or was built there.
     pub fn prepare_later_beside(
         &mut self,
         module: Validated,
@@ -939,13 +1003,24 @@ impl Runtime {
         beside: &KernelVersion,
     ) -> Ticket {
         let mut ahead = beside.ahead();
-        if let Body::Kernel {
-            prepared,
-            routed: None,
-            ..
-        } = &beside.body
-        {
-            ahead.main |= self.backend.has_device() && self.backend.finished(prepared.as_ref());
+        match &beside.body {
+            Body::Kernel {
+                prepared,
+                routed: None,
+                ..
+            } => {
+                ahead.main |= self.backend.finished(prepared.as_ref());
+            }
+            Body::Kernel {
+                prepared,
+                routed: Some(_),
+                ..
+            } => {
+                if let Some(ordered) = self.ordered.as_deref() {
+                    ahead.ordered |= ordered.finished(prepared.as_ref());
+                }
+            }
+            Body::Native(_) => {}
         }
         self.prepare_later_ahead(module, source, ahead)
     }

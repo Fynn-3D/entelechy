@@ -1662,3 +1662,77 @@ fn multi_page_frames_probe_and_match_the_interpreter() {
     let (cpu, jit) = both(source, &[], vec![], Domain::Rows(8), Context::default());
     assert_eq!(cpu, jit);
 }
+
+#[test]
+fn a_prepared_module_compiles_on_finish_or_first_run() {
+    let source = "kernel test.lazy@1 {
+        requires { field.write; }
+        output out: Rows<Int>;
+        compute { return element() * 3 + 1; }
+    }";
+    let module = compile(source).unwrap();
+    let jit = JitBackend::new().unwrap();
+
+    let by_finish = jit.prepare(&module).unwrap();
+    assert!(!jit.finished(by_finish.as_ref()));
+    jit.finish(by_finish.as_ref());
+    assert!(jit.finished(by_finish.as_ref()));
+
+    let by_run = jit.prepare(&module).unwrap();
+    assert!(!jit.finished(by_run.as_ref()));
+    let mut host = Host::new(1 << 16);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(4),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let out = jit
+        .execute(by_run.as_ref(), &module, &invocation, &mut scope)
+        .unwrap()[0];
+    assert!(jit.finished(by_run.as_ref()));
+    assert_eq!(host.data(out).unwrap().storage(), [1, 4, 7, 10]);
+}
+
+#[test]
+fn signed_zero_constants_stay_distinct_across_shared_code_cache() {
+    let pos = compile(
+        "kernel test.pos_zero@1 {
+            requires { field.write; }
+            output out: Rows<Float>;
+            compute { return 0.0; }
+        }",
+    )
+    .unwrap();
+    let neg = compile(
+        "kernel test.neg_zero@1 {
+            requires { field.write; }
+            output out: Rows<Float>;
+            compute { return -0.0; }
+        }",
+    )
+    .unwrap();
+    let jit = JitBackend::new().unwrap();
+    let prep_pos = jit.prepare(&pos).unwrap();
+    let prep_neg = jit.prepare(&neg).unwrap();
+    jit.finish(prep_pos.as_ref());
+    jit.finish(prep_neg.as_ref());
+
+    let mut host = Host::new(1 << 16);
+    let invocation = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(1),
+        context: Context::default(),
+    };
+    let mut scope = Scope::new(&mut host, all());
+    let pos_out = jit
+        .execute(prep_pos.as_ref(), &pos, &invocation, &mut scope)
+        .unwrap()[0];
+    let neg_out = jit
+        .execute(prep_neg.as_ref(), &neg, &invocation, &mut scope)
+        .unwrap()[0];
+    assert_eq!(host.data(pos_out).unwrap().storage(), [0.0f32.to_bits()]);
+    assert_eq!(host.data(neg_out).unwrap().storage(), [(-0.0f32).to_bits()]);
+}

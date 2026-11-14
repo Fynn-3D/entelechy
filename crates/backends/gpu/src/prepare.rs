@@ -87,6 +87,113 @@ pub(crate) struct Halves<P = Pass> {
     pub(crate) entry: Option<P>,
 }
 
+/// A built compute pipeline kept alive while any [`Lazy`] holds it, so
+/// identical WGSL passes across fused sub-graphs or Kernels compile once.
+pub(crate) struct CachedPass {
+    _source: Arc<str>,
+    built: OnceLock<Result<Pass, Unbuilt>>,
+}
+
+type PassKey = (Arc<str>, Box<[wgpu::BindGroupLayoutEntry]>);
+
+/// Weakly held validated WGSL sources, shared bind group layouts, and live
+/// built compute pipelines on one device.
+#[derive(Default)]
+pub(crate) struct PassCache {
+    validated: Mutex<std::collections::HashMap<u64, Vec<std::sync::Weak<str>>>>,
+    layouts:
+        Mutex<std::collections::HashMap<Box<[wgpu::BindGroupLayoutEntry]>, wgpu::BindGroupLayout>>,
+    passes: Mutex<std::collections::HashMap<PassKey, std::sync::Weak<CachedPass>>>,
+}
+
+impl PassCache {
+    fn source_hash(source: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        source.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn known_source(&self, pruned: &str) -> Option<Arc<str>> {
+        let hash = Self::source_hash(pruned);
+        let mut validated = self
+            .validated
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let bucket = validated.get_mut(&hash)?;
+        bucket.retain(|weak| weak.strong_count() > 0);
+        bucket
+            .iter()
+            .find_map(|weak| weak.upgrade().filter(|seen| seen.as_ref() == pruned))
+    }
+
+    fn remember_source(&self, pruned: String) -> Arc<str> {
+        let hash = Self::source_hash(&pruned);
+        let shared: Arc<str> = pruned.into();
+        let mut validated = self
+            .validated
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let bucket = validated.entry(hash).or_default();
+        bucket.retain(|weak| weak.strong_count() > 0);
+        if let Some(existing) = bucket.iter().find_map(|weak| {
+            weak.upgrade()
+                .filter(|seen| seen.as_ref() == shared.as_ref())
+        }) {
+            return existing;
+        }
+        bucket.push(Arc::downgrade(&shared));
+        if validated.len() > 256 {
+            validated.retain(|_, entries| {
+                entries.retain(|weak| weak.strong_count() > 0);
+                !entries.is_empty()
+            });
+        }
+        shared
+    }
+
+    fn layout(
+        &self,
+        device: &wgpu::Device,
+        label: &str,
+        entries: &[wgpu::BindGroupLayoutEntry],
+    ) -> wgpu::BindGroupLayout {
+        let mut layouts = self
+            .layouts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(existing) = layouts.get(entries) {
+            return existing.clone();
+        }
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some(label),
+            entries,
+        });
+        layouts.insert(entries.into(), layout.clone());
+        layout
+    }
+
+    fn slot(&self, source: &Arc<str>, entries: &[wgpu::BindGroupLayoutEntry]) -> Arc<CachedPass> {
+        let key: PassKey = (Arc::clone(source), entries.into());
+        let mut passes = self
+            .passes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(existing) = passes.get(&key).and_then(std::sync::Weak::upgrade) {
+            return existing;
+        }
+        let slot = Arc::new(CachedPass {
+            _source: Arc::clone(source),
+            built: OnceLock::new(),
+        });
+        passes.insert(key, Arc::downgrade(&slot));
+        if passes.len() > 256 {
+            passes.retain(|_, weak| weak.strong_count() > 0);
+        }
+        slot
+    }
+}
+
 /// A pass validated as the device takes it, its pipeline not yet built:
 /// its source and its bindings. The shader module the device made of the
 /// source to validate it is not kept: a module holds the device's whole
@@ -95,41 +202,57 @@ pub(crate) struct Halves<P = Pass> {
 /// made again for the pipeline, and let go once it is built.
 pub(crate) struct Shader {
     label: String,
-    source: String,
-    /// The bindings, which a page's browser compiles the pipeline with.
-    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-    entries: Vec<wgpu::BindGroupLayoutEntry>,
+    source: Arc<str>,
+    entries: Box<[wgpu::BindGroupLayoutEntry]>,
     layout: wgpu::BindGroupLayout,
 }
 
 impl Shader {
-    /// The pipeline, from the device's own compiler: the long part of
-    /// preparing, and the part a device's compiler can fail in.
-    fn built(self, device: &wgpu::Device, wait: Wait) -> Result<Pass, Unbuilt> {
-        // A page's browser compiles it first, beside the thread that
-        // answers the device; elsewhere the device does by itself.
-        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-        crate::page::compile_beside(device, wait, &self.label, &self.source, &self.entries);
-        let scopes = Scopes::push(device);
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(&self.label),
-            source: wgpu::ShaderSource::Wgsl(self.source.as_str().into()),
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some(&self.label),
-            bind_group_layouts: &[Some(&self.layout)],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(&self.label),
-            layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        scopes.pop(wait, &self.source)?;
-        Ok((pipeline, self.layout))
+    /// The pipeline, from the device's own compiler (or shared with a live
+    /// pass of the same WGSL and bindings): the long part of preparing, and
+    /// the part a device's compiler can fail in.
+    fn built(
+        self,
+        device: &wgpu::Device,
+        wait: Wait,
+        cache: &PassCache,
+        kept: &mut Vec<Arc<CachedPass>>,
+    ) -> Result<Pass, Unbuilt> {
+        let slot = cache.slot(&self.source, &self.entries);
+        let result = slot
+            .built
+            .get_or_init(|| {
+                // A page's browser compiles it first, beside the thread that
+                // answers the device; elsewhere the device does by itself.
+                #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+                crate::page::compile_beside(device, wait, &self.label, &self.source, &self.entries);
+                let scopes = Scopes::push(device);
+                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some(&self.label),
+                    source: wgpu::ShaderSource::Wgsl((&*self.source).into()),
+                });
+                let pipeline_layout =
+                    device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some(&self.label),
+                        bind_group_layouts: &[Some(&self.layout)],
+                        immediate_size: 0,
+                    });
+                let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(&self.label),
+                    layout: Some(&pipeline_layout),
+                    module: &shader,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
+                scopes.pop(wait, &self.source)?;
+                Ok((pipeline, self.layout))
+            })
+            .clone();
+        if result.is_ok() {
+            kept.push(slot);
+        }
+        result
     }
 }
 
@@ -219,6 +342,8 @@ impl<P> Scatter<P> {
 /// built, kept. A device's compiler that fails on it then is remembered
 /// ([`GpuBackend::declines`]), so a runtime with another backend runs it
 /// there.
+type BuiltPipeline = (Pipeline, Vec<Arc<CachedPass>>);
+
 pub(crate) struct Lazy {
     id: String,
     module: Validated,
@@ -226,9 +351,10 @@ pub(crate) struct Lazy {
     pub(crate) packed: Vec<usize>,
     device: wgpu::Device,
     wait: Wait,
+    passes: Arc<PassCache>,
     unbuilt: Arc<Mutex<Vec<(Validated, String)>>>,
     shaders: Mutex<Option<Pipeline<Shader>>>,
-    built: OnceLock<Result<Pipeline, String>>,
+    built: OnceLock<Result<BuiltPipeline, String>>,
 }
 
 impl Lazy {
@@ -251,8 +377,12 @@ impl Lazy {
                     .ok_or_else(|| format!("`{}` was left unbuilt by a failed build", self.id))?;
                 let device = &self.device;
                 let wait = self.wait;
-                match shaders.made(&mut |shader: Shader| shader.built(device, wait)) {
-                    Ok(pipeline) => Ok(pipeline),
+                let passes = &self.passes;
+                let mut kept = Vec::new();
+                match shaders
+                    .made(&mut |shader: Shader| shader.built(device, wait, passes, &mut kept))
+                {
+                    Ok(pipeline) => Ok((pipeline, kept)),
                     Err(Unbuilt::Ours(error)) => Err(error),
                     Err(Unbuilt::Device(error)) => {
                         // Its most particular line, the last, said shortly.
@@ -278,6 +408,7 @@ impl Lazy {
                 }
             })
             .as_ref()
+            .map(|(pipeline, _)| pipeline)
             .map_err(|error| ExecutionError::Device(error.clone()))
     }
 }
@@ -459,41 +590,41 @@ impl GpuBackend {
         entries: &[wgpu::BindGroupLayoutEntry],
     ) -> Result<Shader, Unbuilt> {
         // Only what the entry point reaches goes to the device.
-        let source = &wgsl::pruned(source);
-        // A page asks nothing back here: each answer is a round trip to a
-        // device process busy compiling, and what is made here is checked
-        // again where the pipeline is built from it.
-        let page = self.wait.parks_with_host();
-        let scopes = (!page).then(|| Scopes::push(&self.device));
-        // Validated as the device takes it, and let go ([`Shader`]). A page
-        // cannot let a module go but to its collector: there the source is
-        // validated as the pipeline is built.
-        if !page {
-            drop(
-                self.device
-                    .create_shader_module(wgpu::ShaderModuleDescriptor {
-                        label: Some(label),
-                        source: wgpu::ShaderSource::Wgsl(source.into()),
-                    }),
-            );
-        }
-        let layout = self
-            .device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some(label),
-                entries,
-            });
-        if let Some(scopes) = scopes {
-            scopes.pop(self.wait, source)?;
-        }
+        let pruned = wgsl::pruned(source);
+        let shared = match self.passes.known_source(&pruned) {
+            Some(known) => known,
+            None => {
+                // A page asks nothing back here: each answer is a round trip to a
+                // device process busy compiling, and what is made here is checked
+                // again where the pipeline is built from it.
+                let page = self.wait.parks_with_host();
+                let scopes = (!page).then(|| Scopes::push(&self.device));
+                // Validated as the device takes it, and let go ([`Shader`]). A page
+                // cannot let a module go but to its collector: there the source is
+                // validated as the pipeline is built.
+                if !page {
+                    drop(
+                        self.device
+                            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                                label: Some(label),
+                                source: wgpu::ShaderSource::Wgsl(pruned.as_str().into()),
+                            }),
+                    );
+                }
+                if let Some(scopes) = scopes {
+                    scopes.pop(self.wait, &pruned)?;
+                }
+                self.passes.remember_source(pruned)
+            }
+        };
+        let layout = self.passes.layout(&self.device, label, entries);
         // A page's browser starts compiling it now, beside the others.
         #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-        crate::page::ask_ahead(&self.device, label, source, entries);
+        crate::page::ask_ahead(&self.device, label, &shared, entries);
         Ok(Shader {
             label: label.to_owned(),
-            source: source.to_owned(),
-            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-            entries: entries.to_vec(),
+            source: shared,
+            entries: entries.into(),
             layout,
         })
     }
@@ -517,6 +648,7 @@ impl GpuBackend {
             packed: shaders.packed.clone(),
             device: self.device.clone(),
             wait: self.wait,
+            passes: Arc::clone(&self.passes),
             unbuilt: Arc::clone(&self.unbuilt),
             shaders: Mutex::new(Some(shaders)),
             built: OnceLock::new(),

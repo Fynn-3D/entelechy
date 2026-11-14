@@ -126,6 +126,9 @@ pub struct GpuBackend {
     last_nanos: std::sync::atomic::AtomicU64,
     /// Frames clocked as they run; see [`Backend::set_clocked`].
     frames: timing::Frames,
+    /// Validated WGSL sources, bind group layouts, and live compute
+    /// pipelines shared across passes of identical source and bindings.
+    passes: Arc<prepare::PassCache>,
     /// What the device said by itself: an error no scope caught, its loss.
     /// A readback that fails says it too, as the cause is most often there.
     heard: Arc<Mutex<Vec<String>>>,
@@ -308,6 +311,7 @@ impl GpuBackend {
             last_nanos: std::sync::atomic::AtomicU64::new(u64::MAX),
             clock: std::sync::atomic::AtomicU8::new(clock::UNTRIED),
             frames: timing::Frames::default(),
+            passes: Arc::default(),
             heard,
         })
     }
