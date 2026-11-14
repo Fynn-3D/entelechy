@@ -286,7 +286,7 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
 - A profile line subtracts `Backend::measurement_floor`
   ([runtime](crates/core/kernel/src/lib.rs), [bench](crates/interface/session/src/bench.rs)).
 - The GPU buffer pile serves the smallest buffer at most twice the size
-  ([`Spare::take`](crates/backends/gpu/src/lib.rs)).
+  ([`Spare::take`](crates/backends/gpu/src/pool.rs)).
 - Handle liveness and node lookup are kept counts, checked against the
   walk in debug ([ledger](crates/core/graph/src/evaluate/ledger.rs),
   [`Graph::index`](crates/core/graph/src/lib.rs)).

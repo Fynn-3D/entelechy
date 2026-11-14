@@ -472,3 +472,77 @@ fn a_branch_on_a_literal_is_the_block_it_takes() {
     assert!(a.is_ok(), "{a:?}");
     assert_eq!(a, b);
 }
+
+/// A chain of `if`s testing one `Int` against literals, disjunctions and
+/// short closed ranges collapses into one `match`, carrying a wide result
+/// through one join and keeping the first matching arm on overlap.
+#[test]
+fn an_integer_if_chain_collapses_into_one_match() {
+    let source = "kernel test.chain@1 {
+        requires { field.read; field.write; }
+        struct Wide { v: [Vec4; 8]; tag: Int; }
+        fn pack(base: Float, tag: Int) -> Wide {
+            return Wide {
+                v: [each 8 { vec4(base + float(index()), base * 2.0, -base, 1.0) }],
+                tag: tag,
+            };
+        }
+        input keys: Rows<Int>;
+        output result: Rows<Wide>;
+        compute {
+            let k = sample(keys);
+            if k == 1 { return pack(10.0, 1); }
+            if k == 2 || k == 7 {
+                let two = k == 2;
+                return pack(if two { 20.0 } else { 70.0 }, 27);
+            }
+            if k >= 10 && k <= 12 { return pack(float(k) * 3.0, 1012); }
+            if 14 < k && k < 18 { return pack(float(k) * 5.0, 1517); }
+            if k == 7 || k == 11 || k == 20 { return pack(200.0, 20); }
+            if k == -2147483647 - 1 { return pack(-1.0, -99); }
+            return pack(0.0, 0);
+        }
+    }";
+    let plain = compile_unoptimized(source).unwrap();
+    let optimized = compile(source).unwrap_or_else(|error| panic!("{error}"));
+    let matches = optimized
+        .entry
+        .body
+        .iter()
+        .filter(|inst| matches!(inst.op, Op::Match { .. }))
+        .count();
+    assert_eq!(
+        matches, 1,
+        "expected one top-level match: {}",
+        optimized.entry
+    );
+    assert!(
+        entelechy_ir::carried(&optimized).total < entelechy_ir::carried(&plain).total / 2,
+        "carried words did not drop: {} vs {}",
+        entelechy_ir::carried(&optimized).total,
+        entelechy_ir::carried(&plain).total,
+    );
+
+    let probes: Vec<i32> = (-2..=25)
+        .chain([i32::MIN, i32::MIN + 1, i32::MAX - 1, i32::MAX])
+        .collect();
+    let words: Vec<u32> = probes.iter().map(|&v| v as u32).collect();
+    let schema = entelechy_ir::Schema::new(vec![entelechy_ir::Scalar::Int]);
+    let domain = entelechy_abi::Domain::Rows(probes.len() as u32);
+    let run = |module: &entelechy_ir::Validated| -> Vec<u32> {
+        let mut host = Host::new(1 << 22);
+        let input = host
+            .adopt(entelechy_abi::FieldData::from_values(schema.clone(), domain, &words).unwrap())
+            .unwrap();
+        let invocation = Invocation {
+            inputs: vec![input],
+            params: vec![],
+            domain,
+            context: Default::default(),
+        };
+        let mut scope = Scope::new(&mut host, all());
+        let out = CpuBackend.execute(module, &invocation, &mut scope).unwrap()[0];
+        host.data(out).unwrap().storage().to_vec()
+    };
+    assert_eq!(run(&plain), run(&optimized));
+}

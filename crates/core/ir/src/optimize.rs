@@ -13,6 +13,8 @@
 //!   holding one, or a name a trace shows;
 //! - a call to a short function is written out in place;
 //! - loop-invariant work that cannot fail moves before the loop;
+//! - chains of `if`s testing one `Int` value against literals or short
+//!   closed ranges collapse into one `match`;
 //! - an `each` builder short enough is written out, its `Index` the
 //!   element's position; a longer one holding a loop counted at run time
 //!   runs as a loop carrying its array.
@@ -20,7 +22,7 @@
 //! Values are then renumbered in pre-order. Floats keep their order and
 //! a run reports the same failure.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::{
     BinaryOp, Block, Function, Instruction, Intrinsic, Module, Op, Step, StructDef, Type, UnaryOp,
@@ -1347,6 +1349,8 @@ impl Ctx<'_> {
             .iter()
             .map(|(id, name)| (pass.map(*id), name.clone()))
             .collect();
+        let bound: HashSet<u32> = bindings.iter().map(|(id, _)| id.0).collect();
+        let body = self.matched(body, &bound);
         // Dead values go; what a result, a binding or an effect needs stays.
         let mut used: HashMap<u32, ()> = HashMap::new();
         for id in results.iter().chain(bindings.iter().map(|(id, _)| id)) {
@@ -1366,7 +1370,7 @@ impl Ctx<'_> {
             results: results.iter().map(|id| renumber.map(*id)).collect(),
             bindings: bindings
                 .into_iter()
-                .map(|(id, name)| (renumber.map(id), name))
+                .filter_map(|(id, name)| renumber.ids.get(&id.0).map(|&new| (ValueId(new), name)))
                 .collect(),
         }
     }
@@ -1884,6 +1888,316 @@ impl Ctx<'_> {
             result: block.result,
         }
     }
+
+    /// Chains of `if`s testing one `Int` value against literals or short
+    /// closed ranges, collapsed into one `match` so wide results cross one
+    /// join instead of one per branch.
+    fn matched(&self, body: Vec<Instruction>, bound: &HashSet<u32>) -> Vec<Instruction> {
+        let mut defs: HashMap<u32, (Type, Option<Op>)> = HashMap::new();
+        self.matched_body(body, bound, &mut defs)
+    }
+
+    fn matched_body(
+        &self,
+        body: Vec<Instruction>,
+        bound: &HashSet<u32>,
+        defs: &mut HashMap<u32, (Type, Option<Op>)>,
+    ) -> Vec<Instruction> {
+        let mut out = Vec::with_capacity(body.len());
+        for instruction in body {
+            let Instruction { id, ty, op } = instruction;
+            let op = match op {
+                Op::If {
+                    condition,
+                    then,
+                    otherwise,
+                } => {
+                    let then = self.matched_block(then, bound, defs);
+                    let otherwise = self.matched_block(otherwise, bound, defs);
+                    self.collapse_if(condition, then, otherwise, bound, defs, &mut out)
+                }
+                Op::Match {
+                    scrutinee,
+                    arms,
+                    otherwise,
+                } => Op::Match {
+                    scrutinee,
+                    arms: arms
+                        .into_iter()
+                        .map(|(values, block)| (values, self.matched_block(block, bound, defs)))
+                        .collect(),
+                    otherwise: self.matched_block(otherwise, bound, defs),
+                },
+                Op::Loop {
+                    count,
+                    bound: limit,
+                    init,
+                    until,
+                    body,
+                } => Op::Loop {
+                    count,
+                    bound: limit,
+                    init,
+                    until: until.map(|block| self.matched_block(block, bound, defs)),
+                    body: self.matched_block(body, bound, defs),
+                },
+                Op::Each { count, body } => Op::Each {
+                    count,
+                    body: self.matched_block(body, bound, defs),
+                },
+                Op::Lanes { body } => Op::Lanes {
+                    body: self.matched_block(body, bound, defs),
+                },
+                other => other,
+            };
+            defs.insert(id.0, (ty, cond_op(ty, &op)));
+            out.push(Instruction { id, ty, op });
+        }
+        out
+    }
+
+    fn matched_block(
+        &self,
+        block: Block,
+        bound: &HashSet<u32>,
+        defs: &mut HashMap<u32, (Type, Option<Op>)>,
+    ) -> Block {
+        Block {
+            body: self.matched_body(block.body, bound, defs),
+            result: block.result,
+        }
+    }
+
+    fn collapse_if(
+        &self,
+        condition: ValueId,
+        then: Block,
+        otherwise: Block,
+        bound: &HashSet<u32>,
+        defs: &HashMap<u32, (Type, Option<Op>)>,
+        out: &mut Vec<Instruction>,
+    ) -> Op {
+        let Some((scrutinee, first_vals)) = match_set(condition, defs) else {
+            return Op::If {
+                condition,
+                then,
+                otherwise,
+            };
+        };
+        let Some((tail, prefix)) = otherwise.body.split_last() else {
+            return Op::If {
+                condition,
+                then,
+                otherwise,
+            };
+        };
+        if tail.id != otherwise.result
+            || bound.contains(&tail.id.0)
+            || prefix.len() > 256
+            || !prefix.iter().all(is_condition_prep)
+        {
+            return Op::If {
+                condition,
+                then,
+                otherwise,
+            };
+        }
+        let matches_next = match &tail.op {
+            Op::If {
+                condition: next, ..
+            } => match_set(*next, defs).is_some_and(|(s, _)| s == scrutinee),
+            Op::Match { scrutinee: s, .. } => *s == scrutinee,
+            _ => false,
+        };
+        if !matches_next {
+            return Op::If {
+                condition,
+                then,
+                otherwise,
+            };
+        }
+        let mut seen: BTreeSet<i32> = first_vals.iter().copied().collect();
+        let more_arms = match &tail.op {
+            Op::If {
+                condition: next, ..
+            } => {
+                let (_, vals) = match_set(*next, defs).expect("checked above");
+                usize::from(vals.into_iter().any(|v| seen.insert(v)))
+            }
+            Op::Match { arms, .. } => arms
+                .iter()
+                .filter(|(vals, _)| vals.iter().copied().any(|v| seen.insert(v)))
+                .count(),
+            _ => 0,
+        };
+        if 1 + more_arms < 2 {
+            return Op::If {
+                condition,
+                then,
+                otherwise,
+            };
+        }
+        let mut body = otherwise.body;
+        let tail = body.pop().expect("non-empty body");
+        out.extend(body);
+        let mut seen = BTreeSet::new();
+        let mut arms = Vec::with_capacity(1 + more_arms);
+        let mut push_arm = |values: Vec<i32>, block: Block| {
+            let unique: Vec<i32> = values.into_iter().filter(|v| seen.insert(*v)).collect();
+            if !unique.is_empty() {
+                arms.push((unique, block));
+            }
+        };
+        push_arm(first_vals, then);
+        let default = match tail.op {
+            Op::If {
+                condition: next,
+                then: next_then,
+                otherwise: next_otherwise,
+            } => {
+                let (_, next_vals) = match_set(next, defs).expect("checked above");
+                push_arm(next_vals, next_then);
+                next_otherwise
+            }
+            Op::Match {
+                arms: next_arms,
+                otherwise: next_otherwise,
+                ..
+            } => {
+                for (vals, block) in next_arms {
+                    push_arm(vals, block);
+                }
+                next_otherwise
+            }
+            _ => unreachable!(),
+        };
+        Op::Match {
+            scrutinee,
+            arms,
+            otherwise: default,
+        }
+    }
+}
+
+/// Scalar operations a later `if`-to-`match` check inspects.
+fn cond_op(ty: Type, op: &Op) -> Option<Op> {
+    match op {
+        Op::Const(Value::Int(_)) => Some(op.clone()),
+        Op::Binary(..) if ty == Type::Bool => Some(op.clone()),
+        _ => None,
+    }
+}
+
+/// Pure, infallible condition-building instructions that may move out of an
+/// `else` block before the enclosing `match`.
+fn is_condition_prep(instruction: &Instruction) -> bool {
+    match &instruction.op {
+        Op::Const(Value::Int(_) | Value::Bool(_)) | Op::Extract(..) | Op::Subscript(..) => true,
+        Op::Unary(UnaryOp::Not, _) => instruction.ty == Type::Bool,
+        Op::Binary(
+            BinaryOp::Equal
+            | BinaryOp::NotEqual
+            | BinaryOp::Less
+            | BinaryOp::LessEqual
+            | BinaryOp::Greater
+            | BinaryOp::GreaterEqual
+            | BinaryOp::And
+            | BinaryOp::Or,
+            _,
+            _,
+        ) => instruction.ty == Type::Bool,
+        _ => false,
+    }
+}
+
+/// `(scrutinee, values)` when `condition` tests one `Int` value against a
+/// non-empty set of `i32` selectors above `i32::MIN`.
+fn match_set(
+    condition: ValueId,
+    defs: &HashMap<u32, (Type, Option<Op>)>,
+) -> Option<(ValueId, Vec<i32>)> {
+    let is_int = |id: ValueId| defs.get(&id.0).is_some_and(|(ty, _)| *ty == Type::Int);
+    let int_const = |id: ValueId| match defs.get(&id.0) {
+        Some((_, Some(Op::Const(Value::Int(c))))) => Some(*c),
+        _ => None,
+    };
+    let (_, Some(Op::Binary(op, a, b))) = defs.get(&condition.0)? else {
+        return None;
+    };
+    match op {
+        BinaryOp::Equal => match (is_int(*a), int_const(*a), is_int(*b), int_const(*b)) {
+            (true, None, _, Some(c)) if c != i32::MIN => Some((*a, vec![c])),
+            (_, Some(c), true, None) if c != i32::MIN => Some((*b, vec![c])),
+            _ => None,
+        },
+        BinaryOp::Or => {
+            let (s1, mut v1) = match_set(*a, defs)?;
+            let (s2, v2) = match_set(*b, defs)?;
+            if s1 != s2 || v1.len() + v2.len() > 64 {
+                return None;
+            }
+            v1.extend(v2);
+            Some((s1, v1))
+        }
+        BinaryOp::And => {
+            let (s1, lower1, bound1) = int_bound(*a, defs)?;
+            let (s2, lower2, bound2) = int_bound(*b, defs)?;
+            if s1 != s2 || lower1 == lower2 {
+                return None;
+            }
+            let (lo, hi) = if lower1 {
+                (bound1, bound2)
+            } else {
+                (bound2, bound1)
+            };
+            if lo == i32::MIN || lo > hi || i64::from(hi) - i64::from(lo) > 16 {
+                return None;
+            }
+            Some((s1, (lo..=hi).collect()))
+        }
+        _ => None,
+    }
+}
+
+/// `(scrutinee, is_lower, inclusive_bound)` for a one-sided `Int` comparison
+/// against a literal.
+fn int_bound(
+    condition: ValueId,
+    defs: &HashMap<u32, (Type, Option<Op>)>,
+) -> Option<(ValueId, bool, i32)> {
+    let is_int = |id: ValueId| defs.get(&id.0).is_some_and(|(ty, _)| *ty == Type::Int);
+    let int_const = |id: ValueId| match defs.get(&id.0) {
+        Some((_, Some(Op::Const(Value::Int(c))))) => Some(*c),
+        _ => None,
+    };
+    let (_, Some(Op::Binary(op, a, b))) = defs.get(&condition.0)? else {
+        return None;
+    };
+    if is_int(*a)
+        && int_const(*a).is_none()
+        && let Some(c) = int_const(*b)
+    {
+        return match op {
+            BinaryOp::GreaterEqual => Some((*a, true, c)),
+            BinaryOp::Greater => c.checked_add(1).map(|lo| (*a, true, lo)),
+            BinaryOp::LessEqual => Some((*a, false, c)),
+            BinaryOp::Less => c.checked_sub(1).map(|hi| (*a, false, hi)),
+            _ => None,
+        };
+    }
+    if is_int(*b)
+        && int_const(*b).is_none()
+        && let Some(c) = int_const(*a)
+    {
+        return match op {
+            BinaryOp::LessEqual => Some((*b, true, c)),
+            BinaryOp::Less => c.checked_add(1).map(|lo| (*b, true, lo)),
+            BinaryOp::GreaterEqual => Some((*b, false, c)),
+            BinaryOp::Greater => c.checked_sub(1).map(|hi| (*b, false, hi)),
+            _ => None,
+        };
+    }
+    None
 }
 
 /// Every value id a body defines, nested blocks counted.
