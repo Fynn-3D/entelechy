@@ -174,7 +174,7 @@ pub(super) struct Ledger {
     cached_handles: QuickMap<Handle, usize>,
     /// State as of the last successful evaluation, by producing node and
     /// port; a handle may also be a cached output.
-    committed: BTreeMap<(NodeId, String), Handle>,
+    committed: QuickMap<(NodeId, String), Handle>,
     /// How many committed ports hold each handle.
     committed_handles: QuickMap<Handle, usize>,
     /// Moved by every change to the cache, its cold outputs or the
@@ -225,9 +225,15 @@ impl Ledger {
         self.committed.get(key).copied()
     }
 
-    /// Every committed port and its state.
-    pub(super) fn committed_ports(&self) -> impl Iterator<Item = (&(NodeId, String), Handle)> {
-        self.committed.iter().map(|(key, handle)| (key, *handle))
+    /// Every committed port and its state, in port order.
+    pub(super) fn committed_ports(&self) -> std::vec::IntoIter<(&(NodeId, String), Handle)> {
+        let mut ports: Vec<(&(NodeId, String), Handle)> = self
+            .committed
+            .iter()
+            .map(|(key, handle)| (key, *handle))
+            .collect();
+        ports.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+        ports.into_iter()
     }
 
     /// What every change to the ledger moves.
@@ -250,7 +256,7 @@ impl Ledger {
         self.cold.clear();
         (
             std::mem::take(&mut self.cache).into_iter().collect(),
-            std::mem::take(&mut self.committed),
+            std::mem::take(&mut self.committed).into_iter().collect(),
         )
     }
 

@@ -42,6 +42,7 @@ use crate::{
 };
 
 mod bind;
+mod compiled;
 mod error;
 mod frames;
 mod ledger;
@@ -51,6 +52,7 @@ mod state;
 
 use bind::Bind;
 pub use bind::{Bound, binding_fault, borrowed_domain, type_fault};
+use compiled::{CompiledPlan, CompiledSource, GroupBind};
 pub use error::EvaluateError;
 use ledger::Room;
 use plan::{graph_param, suggest};
@@ -548,6 +550,8 @@ struct Layout {
     /// ([`CHILL_STREAK`]). What is never let go, and what an `async` node
     /// reads, is not among them.
     chill_after: Vec<Vec<NodeId>>,
+    /// Pre-compiled slot bindings for every group and graph output.
+    compiled: CompiledPlan,
 }
 
 impl Layout {
@@ -670,6 +674,7 @@ impl Layout {
             .filter_map(|(group, absorbed)| Some((runs_at.get(group)?, absorbed)))
             .flat_map(|(at, absorbed)| absorbed.iter().map(|node| (node.clone(), *at)))
             .collect();
+        let compiled = CompiledPlan::new(graph, groups, &runs_at);
         Self {
             runs_at,
             last_read,
@@ -686,6 +691,7 @@ impl Layout {
             readers_at,
             moving,
             chill_after,
+            compiled,
         }
     }
 
@@ -780,9 +786,10 @@ impl Evaluator {
 struct Scene<'a> {
     graph: &'a Graph,
     groups: &'a [Group],
-    externals: &'a BTreeMap<String, Handle>,
+    external_handles: Vec<Option<Handle>>,
     context: &'a Context,
     params: &'a BTreeMap<String, Value>,
+    overridden_params: Vec<Option<&'a Value>>,
 }
 
 /// The names of what a group's Kernel outputs.
@@ -900,6 +907,8 @@ pub struct Evaluator {
     state_ports: Option<Vec<((NodeId, String), String)>>,
     /// The ports holding state in the graph in `shape`, in binding order.
     state_keys: Option<Vec<(NodeId, String)>>,
+    /// Indices of nodes in the graph in `shape` that declare `awake` conditions.
+    awake_nodes: Option<Vec<usize>>,
     /// The state reads of the last plan reconciled.
     state_reads: Option<(Arc<Vec<Group>>, Arc<state::StateReads>)>,
     /// What a frame of the graph in `shape` reads, and the pins and the
@@ -1427,8 +1436,8 @@ impl Evaluator {
         params: &BTreeMap<String, Value>,
     ) -> Result<Invocation, EvaluateError> {
         match self.bind(graph, node, version, runtime, externals, context, params)? {
-            Bind::Ready(invocation, _) => Ok(invocation),
-            Bind::Keyed(_, cold) | Bind::Unkeyed(cold) => Err(EvaluateError::UnknownOutput {
+            Bind::Ready(invocation) => Ok(invocation),
+            Bind::Cold(cold) => Err(EvaluateError::UnknownOutput {
                 node: cold[0].clone(),
                 port: "result".to_owned(),
                 near: None,
@@ -1535,34 +1544,52 @@ impl Evaluator {
     /// never run runs). A row is read where it is; one on a device is
     /// brought to the Host, a wait.
     fn asleep(
-        &self,
+        &mut self,
         graph: &Graph,
         runtime: &mut Runtime,
         externals: &BTreeMap<String, Handle>,
     ) -> Result<BTreeSet<NodeId>, EvaluateError> {
-        let mut asleep = BTreeSet::new();
-        // A row read once a frame, however many nodes read it.
-        let mut rows: Vec<(&Awake, bool)> = Vec::new();
-        for node in &graph.nodes {
-            if node.awake.is_empty() || self.ledger.entry(&node.id).is_none() {
-                continue;
-            }
-            for awake in &node.awake {
-                let zero = match rows.iter().find(|(read, _)| *read == awake) {
-                    Some((_, zero)) => *zero,
-                    None => {
-                        let zero = self.row_is_zero(node, awake, runtime, externals)?;
-                        rows.push((awake, zero));
-                        zero
+        let indices = self.awake_nodes.get_or_insert_with(|| {
+            graph
+                .nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(at, node)| (!node.awake.is_empty()).then_some(at))
+                .collect()
+        });
+        if indices.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        // Take temporarily so `self.row_is_zero` can borrow `&self`.
+        let indices = self.awake_nodes.take().expect("initialized");
+        let result = (|| -> Result<BTreeSet<NodeId>, EvaluateError> {
+            let mut asleep = BTreeSet::new();
+            // A row read once a frame, however many nodes read it.
+            let mut rows: Vec<(&Awake, bool)> = Vec::new();
+            for &at in &indices {
+                let node = &graph.nodes[at];
+                if self.ledger.entry(&node.id).is_none() {
+                    continue;
+                }
+                for awake in &node.awake {
+                    let zero = match rows.iter().find(|(read, _)| *read == awake) {
+                        Some((_, zero)) => *zero,
+                        None => {
+                            let zero = self.row_is_zero(node, awake, runtime, externals)?;
+                            rows.push((awake, zero));
+                            zero
+                        }
+                    };
+                    if zero {
+                        asleep.insert(node.id.clone());
+                        break;
                     }
-                };
-                if zero {
-                    asleep.insert(node.id.clone());
-                    break;
                 }
             }
-        }
-        Ok(asleep)
+            Ok(asleep)
+        })();
+        self.awake_nodes = Some(indices);
+        result
     }
 
     /// Whether `awake`'s row, as the last frame left it, is 0; nothing yet
@@ -1728,9 +1755,9 @@ impl Evaluator {
                     && last.params == *params
                     && last.externals == *externals
             });
-            let mut steady = match last {
-                Some(last) if lean => last.steady,
-                _ => vec![false; groups.len()],
+            let (mut steady, kept_quiet) = match last {
+                Some(last) if lean => (last.steady, Some((last.params, last.externals))),
+                _ => (vec![false; groups.len()], None),
             };
             // A group binds when it moves, was not left as its key was
             // found, or reads a group whose outputs changed on this frame.
@@ -1741,14 +1768,26 @@ impl Evaluator {
             } else {
                 vec![true; groups.len()]
             };
+            let external_handles: Vec<Option<Handle>> = layout
+                .compiled
+                .external_names
+                .iter()
+                .map(|name| externals.get(name).copied())
+                .collect();
+            let overridden_params: Vec<Option<&Value>> = if params.is_empty() {
+                vec![None; graph.params.len()]
+            } else {
+                graph.params.iter().map(|p| params.get(&p.name)).collect()
+            };
             let mut frame = Frame::new(layout, asked);
             let mut bound_groups = 0usize;
             let scene = Scene {
                 graph,
                 groups: &groups,
-                externals,
+                external_handles,
                 context,
                 params,
+                overridden_params,
             };
             // What every-frame outputs a frame lets go as their last reader
             // has run ([`Layout::chill_after`]): a frame that commits only.
@@ -1780,42 +1819,26 @@ impl Evaluator {
                     continue;
                 }
                 // Asleep: its readers take what it last gave.
-                if asleep.contains(&node.id) {
+                if !asleep.is_empty() && asleep.contains(&node.id) {
                     continue;
                 }
                 frame.waiting_for(Some(&node.id), runtime.device_waited());
                 let before = self.output_epoch(&node.id);
                 bound_groups += 1;
-                let mut bound = self.bind(
-                    graph,
-                    node,
-                    &group.version,
-                    runtime,
-                    externals,
-                    context,
-                    params,
-                )?;
+                let mut bound = self.bind_group(at, &frame.layout, &scene, runtime)?;
                 // A domain read from outputs let go cold waits for them.
-                while let Bind::Unkeyed(cold) = &bound {
+                while let GroupBind::Unkeyed(cold) = &bound {
                     // What is made again may take a new epoch: the rest of
                     // the frame binds every group.
                     lean = false;
                     for producer in cold.clone() {
                         self.warm(&producer, at, &scene, &mut frame, runtime)?;
                     }
-                    bound = self.bind(
-                        graph,
-                        node,
-                        &group.version,
-                        runtime,
-                        externals,
-                        context,
-                        params,
-                    )?;
+                    bound = self.bind_group(at, &frame.layout, &scene, runtime)?;
                 }
                 let key = match &bound {
-                    Bind::Ready(_, key) | Bind::Keyed(key, _) => key,
-                    Bind::Unkeyed(_) => unreachable!("waited for above"),
+                    GroupBind::Ready { key, .. } | GroupBind::Keyed(key, _) => key,
+                    GroupBind::Unkeyed(_) => unreachable!("waited for above"),
                 };
                 if self
                     .ledger
@@ -1851,7 +1874,15 @@ impl Evaluator {
                 };
                 // What it reads let go cold is made again before it runs.
                 let (invocation, key) = match bound {
-                    Bind::Ready(invocation, key) => (invocation, key),
+                    GroupBind::Ready { handles, key } => (
+                        Invocation {
+                            inputs: handles,
+                            params: key.params.clone(),
+                            domain: key.domain,
+                            context: *context,
+                        },
+                        key,
+                    ),
                     _ => {
                         lean = false;
                         self.ready(at, at, &scene, &mut frame, runtime)?
@@ -1941,21 +1972,36 @@ impl Evaluator {
                 self.wait_for_checks(checks, runtime)?;
                 return Ok(None);
             }
-            let mut outputs = Vec::with_capacity(graph.outputs.len());
-            for (name, source) in &graph.outputs {
+            let mut outputs = Vec::with_capacity(layout.compiled.outputs.len());
+            for (name, source) in &layout.compiled.outputs {
                 let handle = match source {
-                    Source::External(external) => {
-                        *externals
-                            .get(external)
-                            .ok_or_else(|| EvaluateError::MissingExternal {
-                                node: NodeId(format!("output {name}").into()),
-                                name: external.clone(),
-                            })?
-                    }
-                    Source::Node { node, port } => {
-                        self.cached(node, port).ok_or_else(|| {
+                    CompiledSource::External {
+                        slot,
+                        name: external,
+                    } => scene.external_handles[*slot].ok_or_else(|| {
+                        EvaluateError::MissingExternal {
+                            node: NodeId(format!("output {name}").into()),
+                            name: external.clone(),
+                        }
+                    })?,
+                    CompiledSource::Node {
+                        producer,
+                        port,
+                        known,
+                    } => {
+                        let found = self.ledger.entry(producer).and_then(|cached| match known {
+                            Some((names, slot, _)) if Arc::ptr_eq(&cached.output_names, names) => {
+                                Some(cached.outputs[*slot])
+                            }
+                            _ => cached
+                                .output_names
+                                .iter()
+                                .position(|n| n == port)
+                                .map(|idx| cached.outputs[idx]),
+                        });
+                        found.ok_or_else(|| {
                             // Its real outputs, for the suggestion.
-                            let near = self.ledger.entry(node).and_then(|cached| {
+                            let near = self.ledger.entry(producer).and_then(|cached| {
                                 entelechy_abi::names::nearest(
                                     port,
                                     cached.output_names.iter().map(String::as_str),
@@ -1963,7 +2009,7 @@ impl Evaluator {
                                 .map(str::to_owned)
                             });
                             EvaluateError::UnknownOutput {
-                                node: node.clone(),
+                                node: producer.clone(),
                                 port: port.clone(),
                                 near,
                             }
@@ -1999,11 +2045,13 @@ impl Evaluator {
                 committed
             };
             if leans {
+                let (saved_params, saved_externals) =
+                    kept_quiet.unwrap_or_else(|| (params.clone(), externals.clone()));
                 self.quiet = Some(Quiet {
                     layout: Arc::clone(&layout),
                     ledger: self.ledger.version(),
-                    params: params.clone(),
-                    externals: externals.clone(),
+                    params: saved_params,
+                    externals: saved_externals,
                     steady,
                 });
             }
@@ -2054,17 +2102,19 @@ impl Evaluator {
         // Each round makes at least one producer again; a producer let go
         // again at once, for want of room, ends it.
         for _ in 0..=group.node.inputs.len() {
-            match self.bind(
-                scene.graph,
-                &group.node,
-                &group.version,
-                runtime,
-                scene.externals,
-                scene.context,
-                scene.params,
-            )? {
-                Bind::Ready(invocation, key) => return Ok((invocation, key)),
-                Bind::Keyed(_, cold) | Bind::Unkeyed(cold) => {
+            match self.bind_group(at, &frame.layout, scene, runtime)? {
+                GroupBind::Ready { handles, key } => {
+                    return Ok((
+                        Invocation {
+                            inputs: handles,
+                            params: key.params.clone(),
+                            domain: key.domain,
+                            context: *scene.context,
+                        },
+                        key,
+                    ));
+                }
+                GroupBind::Keyed(_, cold) | GroupBind::Unkeyed(cold) => {
                     for producer in cold {
                         self.warm(&producer, turn, scene, frame, runtime)?;
                     }
@@ -2354,6 +2404,9 @@ impl Evaluator {
     /// Takes every landed run into the cache; a failed run fails the
     /// evaluation.
     fn land(&mut self, runtime: &mut Runtime) -> Result<Vec<NodeId>, EvaluateError> {
+        if self.running.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut landed = Vec::new();
         let ids: Vec<NodeId> = self.running.keys().cloned().collect();
         for id in ids {

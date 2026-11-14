@@ -58,18 +58,68 @@ pub const FEW_LONG_WORK: u64 = 100_000;
 /// it forgets them all ([`Runtime::begin_evaluation`]).
 const MAX_SPARED: usize = 1 << 14;
 
+/// Shared Kernel identity for placement keys: copies share the allocation,
+/// and equal copies match by pointer before comparing text.
+#[derive(Clone, Eq)]
+struct VersionTag(Arc<KernelId>);
+
+impl PartialEq for VersionTag {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) || *self.0 == *other.0
+    }
+}
+
+impl std::hash::Hash for VersionTag {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+/// Flattened parameter words of an invocation: kept inline up to eight words
+/// so common runs allocate nothing on the heap.
+#[derive(Clone, PartialEq, Eq)]
+enum ParamWords {
+    Inline { len: u8, words: [u32; 8] },
+    Heap(Arc<[u32]>),
+}
+
+impl ParamWords {
+    fn as_slice(&self) -> &[u32] {
+        match self {
+            Self::Inline { len, words } => &words[..usize::from(*len)],
+            Self::Heap(words) => words,
+        }
+    }
+}
+
+impl std::hash::Hash for ParamWords {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_slice().hash(state);
+    }
+}
+
 /// A run as placement knows it from one evaluation to the next: its
 /// Kernel, version, extent and its parameters' words, so two nodes of
 /// one Kernel that differ by a parameter are two runs.
-type RunKey = (KernelId, Generation, Domain, Vec<u32>);
+type RunKey = (VersionTag, Generation, Domain, ParamWords);
 
-fn run_key(version: &KernelVersion, invocation: &Invocation) -> RunKey {
-    let mut params = Vec::new();
+fn run_key(version: &KernelVersion, invocation: &Invocation, scratch: &mut Vec<u32>) -> RunKey {
+    scratch.clear();
     for param in &invocation.params {
-        param.push_words(&mut params);
+        param.push_words(scratch);
     }
+    let params = if scratch.len() <= 8 {
+        let mut words = [0u32; 8];
+        words[..scratch.len()].copy_from_slice(scratch);
+        ParamWords::Inline {
+            len: scratch.len() as u8,
+            words,
+        }
+    } else {
+        ParamWords::Heap(Arc::from(scratch.as_slice()))
+    };
     (
-        version.id().clone(),
+        VersionTag(Arc::clone(&version.id)),
         version.generation(),
         invocation.domain,
         params,
@@ -110,6 +160,7 @@ impl Typical {
 }
 
 pub mod clock;
+mod hash;
 mod later;
 mod prepare;
 pub mod progress;
@@ -160,7 +211,7 @@ enum Body {
 
 /// An immutable published Kernel version.
 pub struct KernelVersion {
-    id: KernelId,
+    id: Arc<KernelId>,
     generation: Generation,
     manifest: Manifest,
     source: String,
@@ -319,7 +370,7 @@ impl Candidate {
     /// The version made of it, as `id` at `generation`.
     fn into_version(self, id: KernelId, generation: Generation) -> KernelVersion {
         KernelVersion {
-            id,
+            id: Arc::new(id),
             generation,
             manifest: self.module.manifest.clone(),
             source: self.source,
@@ -734,17 +785,21 @@ pub struct Runtime {
     /// reads one stays on the main backend, as bringing it back would wait
     /// for the device's work before it. A Field made before, state or an
     /// input, comes back once while the device has little else to do.
-    fresh: std::collections::HashSet<Handle>,
+    fresh: hash::QuickSet<Handle>,
     /// The run that made each Field of this evaluation, wherever it ran,
     /// and whether a run of this evaluation read it.
-    made: std::collections::HashMap<Handle, (RunKey, bool)>,
+    made: hash::QuickMap<Handle, (RunKey, bool)>,
+    /// Reusable scratch map drained from `made` at evaluation boundaries.
+    made_scratch: hash::QuickMap<RunKey, bool>,
+    /// Reusable scratch words for building placement keys.
+    param_scratch: Vec<u32>,
     /// What the readers of each run in this evaluation would spare it,
     /// summed ([`Runtime::sized_off`]).
-    sparing: std::collections::HashMap<RunKey, u64>,
+    sparing: hash::QuickMap<RunKey, u64>,
     /// What its readers spared each run the last evaluation that made it
     /// and ran any of them: beside `small`, the operations it may take and
     /// go to the ordered backend.
-    spared: std::collections::HashMap<RunKey, u64>,
+    spared: hash::QuickMap<RunKey, u64>,
     /// Where the last execution ran, and why when off the main backend.
     last_placement: Option<Placement>,
     /// The Kernels whose runs go to the ordered backend while the main one
@@ -778,10 +833,12 @@ impl Runtime {
             runs: later::Runs::new(),
             grants: Capability::ALL.into_iter().collect(),
             small: DEFAULT_SMALL,
-            fresh: std::collections::HashSet::new(),
-            made: std::collections::HashMap::new(),
-            sparing: std::collections::HashMap::new(),
-            spared: std::collections::HashMap::new(),
+            fresh: hash::QuickSet::default(),
+            made: hash::QuickMap::default(),
+            made_scratch: hash::QuickMap::default(),
+            param_scratch: Vec::new(),
+            sparing: hash::QuickMap::default(),
+            spared: hash::QuickMap::default(),
             last_placement: None,
             shown_while_building: BTreeSet::new(),
         };
@@ -791,7 +848,7 @@ impl Runtime {
             runtime.kernels.insert(
                 op.id(),
                 Arc::new(KernelVersion {
-                    id: op.id(),
+                    id: Arc::new(op.id()),
                     generation: Generation(0),
                     manifest: op.manifest(),
                     source: op.source().to_owned(),
@@ -1371,11 +1428,11 @@ impl Runtime {
         // stopped sparing it, and taking it for unspared would send it to
         // the main backend for one evaluation and its readers after it,
         // then back, turn and turn about.
-        let mut made: std::collections::HashMap<RunKey, bool> = std::collections::HashMap::new();
+        self.made_scratch.clear();
         for (_, (key, read)) in self.made.drain() {
-            *made.entry(key).or_default() |= read;
+            *self.made_scratch.entry(key).or_default() |= read;
         }
-        for (key, read) in made {
+        for (key, read) in self.made_scratch.drain() {
             match self.sparing.remove(&key) {
                 Some(spare) => {
                     self.spared.insert(key, spare);
@@ -1433,7 +1490,7 @@ impl Runtime {
     /// small enough on its own; [`Runtime::spare`] counts it once it runs.
     fn sized_off(
         &self,
-        version: &KernelVersion,
+        key: &RunKey,
         run: &Validated,
         typical: &Typical,
         invocation: &Invocation,
@@ -1485,11 +1542,7 @@ impl Runtime {
         // left of that it spares the runs it reads in turn: a chain of
         // small runs goes to the ordered backend whole, not its tail alone
         // with the head left on the device for the tail to wait on.
-        let spared = self
-            .spared
-            .get(&run_key(version, invocation))
-            .copied()
-            .unwrap_or(0);
+        let spared = self.spared.get(key).copied().unwrap_or(0);
         let budget = self.small.saturating_add(spared);
         let alone = elements.max(carried) <= FEW_ELEMENTS || work <= budget;
         let spare = alone.then(|| budget.saturating_sub(work));
@@ -1510,7 +1563,7 @@ impl Runtime {
     /// A reader that spares nothing is noted too: the run it reads was
     /// read in this evaluation, and is spared what its readers of this
     /// evaluation spare it, not what others did before.
-    fn spare(&mut self, version: &KernelVersion, invocation: &Invocation, spare: Option<u64>) {
+    fn spare(&mut self, own: &RunKey, invocation: &Invocation, spare: Option<u64>) {
         let Some(spare) = spare else {
             for input in &invocation.inputs {
                 if let Some((_, read)) = self.made.get_mut(input) {
@@ -1519,10 +1572,9 @@ impl Runtime {
             }
             return;
         };
-        let own = run_key(version, invocation);
         for input in &invocation.inputs {
             if let Some((key, read)) = self.made.get_mut(input)
-                && *key != own
+                && key != own
             {
                 *read = true;
                 let sum = self.sparing.entry(key.clone()).or_default();
@@ -1532,11 +1584,15 @@ impl Runtime {
     }
 
     /// Remembers which run made `outputs`, for its readers to spare it.
-    fn made_by(&mut self, version: &KernelVersion, invocation: &Invocation, outputs: &[Handle]) {
-        let key = run_key(version, invocation);
-        for output in outputs {
-            self.made.insert(*output, (key.clone(), false));
+    fn made_by(&mut self, key: RunKey, outputs: &[Handle]) {
+        let mut iter = outputs.iter().copied();
+        let Some(first) = iter.next() else {
+            return;
+        };
+        for output in iter {
+            self.made.insert(output, (key.clone(), false));
         }
+        self.made.insert(first, (key, false));
     }
 
     /// The checks executions answered since the last call, in run order.
@@ -1708,42 +1764,44 @@ impl Runtime {
         } = &version.body
             && version.routed().is_none()
             && self.building(version, prepared.as_ref()).is_none()
-            && let (None, spare) = self.sized_off(version, run, typical, invocation)
         {
-            self.spare(version, invocation, spare);
-            let granted = self.scope_grants(version);
-            let backend = Arc::clone(&self.backend);
-            let before = backend.uploaded();
-            let answered = {
-                let mut scope = Scope::new(&mut self.host, granted);
-                backend.execute_repeated(
-                    prepared.as_ref(),
-                    run,
-                    invocation,
-                    &mut scope,
-                    repeat,
-                    chain,
-                )
-            };
-            self.telemetry.carried(backend.as_ref(), before);
-            // The main backend could not build it as the runs needed it: they
-            // are made one by one where it now goes.
-            let left = matches!(answered, Some(Err(_)))
-                && self.ordered.is_some()
-                && version.leaves(backend.as_ref());
-            if let Some(outputs) = answered.filter(|_| !left) {
-                self.telemetry.measured(backend.as_ref());
-                if outputs.is_ok() {
-                    ran_main.store(true, std::sync::atomic::Ordering::Relaxed);
+            let key = run_key(version, invocation, &mut self.param_scratch);
+            if let (None, spare) = self.sized_off(&key, run, typical, invocation) {
+                self.spare(&key, invocation, spare);
+                let granted = self.scope_grants(version);
+                let backend = Arc::clone(&self.backend);
+                let before = backend.uploaded();
+                let answered = {
+                    let mut scope = Scope::new(&mut self.host, granted);
+                    backend.execute_repeated(
+                        prepared.as_ref(),
+                        run,
+                        invocation,
+                        &mut scope,
+                        repeat,
+                        chain,
+                    )
+                };
+                self.telemetry.carried(backend.as_ref(), before);
+                // The main backend could not build it as the runs needed it: they
+                // are made one by one where it now goes.
+                let left = matches!(answered, Some(Err(_)))
+                    && self.ordered.is_some()
+                    && version.leaves(backend.as_ref());
+                if let Some(outputs) = answered.filter(|_| !left) {
+                    self.telemetry.measured(backend.as_ref());
+                    if outputs.is_ok() {
+                        ran_main.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    self.last_placement = Some(Placement {
+                        backend: backend.name(),
+                        routed: None,
+                    });
+                    let outputs = held_to(version.manifest(), &mut self.host, outputs)?;
+                    self.fresh.extend(outputs.iter().copied());
+                    self.made_by(key, &outputs);
+                    return Ok(outputs);
                 }
-                self.last_placement = Some(Placement {
-                    backend: backend.name(),
-                    routed: None,
-                });
-                let outputs = held_to(version.manifest(), &mut self.host, outputs)?;
-                self.fresh.extend(outputs.iter().copied());
-                self.made_by(version, invocation, &outputs);
-                return Ok(outputs);
             }
         }
         let (input, output) = chain;
@@ -1789,6 +1847,7 @@ impl Runtime {
                 ran_main,
                 ..
             } => {
+                let key = run_key(version, invocation, &mut self.param_scratch);
                 // The ordered backend, when the main one left the Kernel to
                 // it or the run is small enough; the main one otherwise.
                 let sized = match version.routed() {
@@ -1796,8 +1855,8 @@ impl Runtime {
                     None => match self.building(version, prepared.as_ref()) {
                         Some(why) => Some(why),
                         None => {
-                            let (why, spare) = self.sized_off(version, run, typical, invocation);
-                            self.spare(version, invocation, spare);
+                            let (why, spare) = self.sized_off(&key, run, typical, invocation);
+                            self.spare(&key, invocation, spare);
                             why
                         }
                     },
@@ -1880,7 +1939,7 @@ impl Runtime {
                 if main {
                     self.fresh.extend(outputs.iter().copied());
                 }
-                self.made_by(version, invocation, &outputs);
+                self.made_by(key, &outputs);
                 Ok(outputs)
             }
             Body::Native(op) => {

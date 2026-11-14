@@ -182,7 +182,10 @@ pub fn type_fault(
 }
 
 /// A port the node names that its Kernel does not declare.
-fn undeclared(node: &Node, manifest: &entelechy_kernel::Manifest) -> Result<(), EvaluateError> {
+pub(super) fn undeclared(
+    node: &Node,
+    manifest: &entelechy_kernel::Manifest,
+) -> Result<(), EvaluateError> {
     for port in node.inputs.keys().chain(node.params.keys()) {
         let declared = manifest.inputs.iter().any(|input| &input.name == port)
             || manifest.params.iter().any(|param| &param.name == port);
@@ -242,7 +245,7 @@ fn param_value(
 
 /// Whether each port a node's domain counts or sizes is an input of its
 /// Kernel.
-fn measured(
+pub(super) fn measured(
     node: &Node,
     manifest: &entelechy_kernel::Manifest,
     expr: &DomainExpr,
@@ -299,15 +302,12 @@ pub(super) enum Held {
     Cold(NodeId, Domain, entelechy_abi::Schema),
 }
 
-/// A node's binding: its invocation and key; or its key alone, with the
-/// producers let go cold it reads, to be made again before it runs; or,
-/// when its domain reads the value of outputs let go cold, those
-/// producers alone. The ready binding is the common one, kept unboxed.
+/// A node's unfused binding: its invocation, or the producers let go cold it
+/// reads.
 #[allow(clippy::large_enum_variant)]
 pub(super) enum Bind {
-    Ready(Invocation, CacheKey),
-    Keyed(CacheKey, Vec<NodeId>),
-    Unkeyed(Vec<NodeId>),
+    Ready(Invocation),
+    Cold(Vec<NodeId>),
 }
 
 impl Evaluator {
@@ -326,7 +326,6 @@ impl Evaluator {
         let structs = version.module().map_or(&[][..], |module| &module.structs);
         undeclared(node, manifest)?;
         let mut inputs = Vec::with_capacity(manifest.inputs.len());
-        let mut input_keys = Vec::with_capacity(manifest.inputs.len());
         for input in &manifest.inputs {
             let binding =
                 node.inputs
@@ -335,8 +334,8 @@ impl Evaluator {
                         node: node.id.clone(),
                         port: input.name.clone(),
                     })?;
-            let (held, key) = match binding {
-                Binding::Now(source) => self.resolve(node, source, externals)?,
+            let held = match binding {
+                Binding::Now(source) => self.resolve(node, source, externals)?.0,
                 Binding::Previous {
                     source:
                         Source::Node {
@@ -346,11 +345,11 @@ impl Evaluator {
                     initial,
                     ..
                 } => match self.ledger.committed(&(producer.clone(), port.clone())) {
-                    Some(handle) => (Held::Field(handle), InputKey::State(handle)),
+                    Some(handle) => Held::Field(handle),
                     // A first value is held, never let go cold.
-                    None => match self.resolve(node, initial, externals)? {
-                        (Held::Field(handle), _) => (Held::Field(handle), InputKey::State(handle)),
-                        (Held::Cold(producer, ..), _) => return Ok(Bind::Unkeyed(vec![producer])),
+                    None => match self.resolve(node, initial, externals)?.0 {
+                        Held::Field(handle) => Held::Field(handle),
+                        Held::Cold(producer, ..) => return Ok(Bind::Cold(vec![producer])),
                     },
                 },
                 Binding::Previous { .. } => {
@@ -382,7 +381,6 @@ impl Evaluator {
                 });
             }
             inputs.push((held, bound_domain));
-            input_keys.push(key);
         }
         let cold: Vec<NodeId> = inputs
             .iter()
@@ -419,7 +417,7 @@ impl Evaluator {
                         })
                         .collect();
                     if !read_cold.is_empty() {
-                        return Ok(Bind::Unkeyed(read_cold));
+                        return Ok(Bind::Cold(read_cold));
                     }
                     let fields: Vec<Option<Handle>> = inputs
                         .iter()
@@ -456,24 +454,8 @@ impl Evaluator {
                 (None, None) => return Err(EvaluateError::NoDomain(node.id.clone())),
             }
         };
-        let reads_clock = manifest.requires.contains(Capability::TimeRead);
-        let reads_input = manifest.requires.contains(Capability::InputRead);
-        let key = CacheKey {
-            generation: version.generation(),
-            params: params.clone(),
-            inputs: input_keys,
-            domain,
-            // Everything `time.read` reads: the clock, the sound device's
-            // rate and what it holds.
-            time: reads_clock.then_some(
-                context.time.to_bits()
-                    ^ u64::from(context.rate.to_bits()).rotate_left(7)
-                    ^ u64::from(context.queued).rotate_left(39),
-            ),
-            input: reads_input.then_some(context.input_fingerprint()),
-        };
         if !cold.is_empty() {
-            return Ok(Bind::Keyed(key, cold));
+            return Ok(Bind::Cold(cold));
         }
         let inputs = inputs
             .into_iter()
@@ -482,15 +464,12 @@ impl Evaluator {
                 Held::Cold(..) => unreachable!("cold inputs are answered above"),
             })
             .collect();
-        Ok(Bind::Ready(
-            Invocation {
-                inputs,
-                params,
-                domain,
-                context: *context,
-            },
-            key,
-        ))
+        Ok(Bind::Ready(Invocation {
+            inputs,
+            params,
+            domain,
+            context: *context,
+        }))
     }
 
     /// Reads every number a node's `domain` asks a Field for, bringing

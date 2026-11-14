@@ -38,19 +38,20 @@ impl Evaluator {
             let name = &read.port;
             let migration = &read.migration;
             {
-                let manifest = group.version.manifest();
-                let Some(input) = manifest.inputs.iter().find(|input| &input.name == name) else {
+                let Some(slot) = read.input_slot else {
                     continue;
                 };
-                let key = read.key.clone();
-                let Some(current) = self.ledger.committed(&key) else {
+                let input = &group.version.manifest().inputs[slot];
+                let Some(current) = self.ledger.committed(&read.key) else {
                     continue;
                 };
                 let shape = runtime.host().domain(current)?.shape();
-                let schema = runtime.host().schema(current)?.clone();
-                if shape == input.ty.shape && schema == input.ty.schema {
+                let schema = runtime.host().schema(current)?;
+                if shape == input.ty.shape && *schema == input.ty.schema {
                     continue;
                 }
+                let schema = schema.clone();
+                let key = read.key.clone();
                 let mismatch = if shape != input.ty.shape {
                     format!("expects {} but the state is a {shape}", input.ty.shape)
                 } else {
@@ -268,15 +269,15 @@ impl Evaluator {
         // Every port's new state is found before any commits, so a
         // missing one fails the commit whole.
         let keys = self.state_keys.take().unwrap_or_else(|| state_keys(graph));
-        let mut staged = Vec::new();
+        let mut staged = Vec::with_capacity(keys.len());
         let mut missing = None;
-        for (node, port) in &keys {
+        for (at, (node, port)) in keys.iter().enumerate() {
             // A run off the frame keeps its state until it lands.
             if self.running.contains_key(node) {
                 continue;
             }
             match self.cached(node, port) {
-                Some(current) => staged.push(((node.clone(), port.clone()), current)),
+                Some(current) => staged.push((at, current)),
                 None => {
                     missing = Some(EvaluateError::UnknownOutput {
                         node: node.clone(),
@@ -287,17 +288,20 @@ impl Evaluator {
                 }
             }
         }
-        self.state_keys = Some(keys);
         if let Some(missing) = missing {
+            self.state_keys = Some(keys);
             return Err(missing);
         }
-        for (key, current) in staged {
-            let previous = self.ledger.commit_put(key.clone(), current);
-            if previous != Some(current) {
-                advanced.push(key.clone());
-                replaced.push((key, previous));
+        for (at, current) in staged {
+            if self.ledger.committed(&keys[at]) == Some(current) {
+                continue;
             }
+            let key = keys[at].clone();
+            let previous = self.ledger.commit_put(key.clone(), current);
+            advanced.push(key.clone());
+            replaced.push((key, previous));
         }
+        self.state_keys = Some(keys);
         Ok((advanced, replaced))
     }
 
@@ -527,6 +531,7 @@ pub(super) struct StateReads {
 pub(super) struct StateRead {
     group: usize,
     port: String,
+    input_slot: Option<usize>,
     key: (NodeId, String),
     migration: Option<KernelId>,
 }
@@ -542,6 +547,7 @@ impl Evaluator {
         let mut reads = Vec::new();
         let mut named = BTreeMap::new();
         for (at, group) in groups.iter().enumerate() {
+            let manifest = group.version.manifest();
             for (port, binding) in &group.node.inputs {
                 if let Binding::Previous {
                     source: Source::Node { node, port: from },
@@ -556,6 +562,7 @@ impl Evaluator {
                     reads.push(StateRead {
                         group: at,
                         port: port.clone(),
+                        input_slot: manifest.inputs.iter().position(|input| &input.name == port),
                         key,
                         migration: migration.clone(),
                     });

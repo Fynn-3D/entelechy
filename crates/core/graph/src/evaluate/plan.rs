@@ -36,6 +36,7 @@ impl Evaluator {
         self.planned_from = None;
         self.state_ports = None;
         self.state_keys = None;
+        self.awake_nodes = None;
         self.frame_needed = None;
         self.pruned = false;
         let order = Arc::new(graph.order()?);
@@ -57,33 +58,45 @@ impl Evaluator {
         context: &Context,
     ) -> Result<Arc<Vec<Group>>, EvaluateError> {
         // What a plan is made from besides the graph, each small: the last
-        // plan stands while all of it is the same.
-        let inputs = PlanInputs {
-            kernels: runtime.revision(),
-            externals: externals.clone(),
-            overrides: overrides.clone(),
-            window: context.window,
-            scale: context.scale,
-            states: self.state_extents(graph, runtime),
-            pinned: self.pinned.clone(),
-            fusion: self.fusion,
-        };
+        // plan stands while all of it is the same, checked in place before
+        // anything is copied.
+        self.ensure_state_ports(graph);
         if let Some((last, executing)) = &self.planned_from
-            && *last == inputs
+            && last.kernels == runtime.revision()
+            && last.window == context.window
+            && last.scale == context.scale
+            && last.fusion == self.fusion
+            && last.pinned == self.pinned
+            && last.overrides == *overrides
+            && last.externals == *externals
+            && self.state_extents_match(&last.states, runtime)
         {
             return Ok(Arc::clone(executing));
         }
+        let states = self.state_extents(graph, runtime);
         let made = self.plan_anew(graph, order, runtime, externals, overrides, context)?;
         // A fused version still preparing joins a later plan: until none
         // is, each frame plans again.
-        self.planned_from = self.pending.is_empty().then(|| (inputs, Arc::clone(&made)));
+        self.planned_from = self.pending.is_empty().then(|| {
+            (
+                PlanInputs {
+                    kernels: runtime.revision(),
+                    externals: externals.clone(),
+                    overrides: overrides.clone(),
+                    window: context.window,
+                    scale: context.scale,
+                    states,
+                    pinned: self.pinned.clone(),
+                    fusion: self.fusion,
+                },
+                Arc::clone(&made),
+            )
+        });
         Ok(made)
     }
 
-    /// The extent each port holding state has now, in order of node and
-    /// port: a plan reads it for what reads the state.
-    fn state_extents(&mut self, graph: &Graph, runtime: &Runtime) -> Vec<Option<Domain>> {
-        let ports = self.state_ports.get_or_insert_with(|| {
+    fn ensure_state_ports(&mut self, graph: &Graph) {
+        self.state_ports.get_or_insert_with(|| {
             let mut ports = Vec::new();
             for node in &graph.nodes {
                 for (port, binding) in &node.inputs {
@@ -100,7 +113,29 @@ impl Evaluator {
             ports.dedup();
             ports
         });
-        ports
+    }
+
+    fn state_extents_match(&self, expected: &[Option<Domain>], runtime: &Runtime) -> bool {
+        let Some(ports) = &self.state_ports else {
+            return false;
+        };
+        ports.len() == expected.len()
+            && ports.iter().zip(expected).all(|((key, _), wanted)| {
+                let current = self
+                    .ledger
+                    .committed(key)
+                    .and_then(|handle| runtime.host().domain(handle).ok());
+                current == *wanted
+            })
+    }
+
+    /// The extent each port holding state has now, in order of node and
+    /// port: a plan reads it for what reads the state.
+    fn state_extents(&mut self, graph: &Graph, runtime: &Runtime) -> Vec<Option<Domain>> {
+        self.ensure_state_ports(graph);
+        self.state_ports
+            .as_ref()
+            .expect("initialized")
             .iter()
             .map(|(key, _)| {
                 self.ledger

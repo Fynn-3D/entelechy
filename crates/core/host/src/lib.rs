@@ -88,11 +88,12 @@ impl Scalar {
 /// after element. Every scalar sits at a multiple of its own size, so
 /// none crosses a 32-bit word.
 /// Shared: a copy is the same layout, at no cost.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub struct Schema(std::sync::Arc<Laid>);
 
+impl Eq for Schema {}
+
 /// What a [`Schema`] holds.
-#[derive(PartialEq, Eq, Hash)]
 struct Laid {
     scalars: Vec<Scalar>,
     encodings: Vec<Encoding>,
@@ -100,6 +101,25 @@ struct Laid {
     offsets: Vec<usize>,
     /// Bytes an element takes.
     bytes: usize,
+    /// Fingerprint of the layout, so distinct layouts part without walking
+    /// their scalars.
+    hash: u64,
+}
+
+impl PartialEq for Schema {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+            || (self.0.hash == other.0.hash
+                && self.0.bytes == other.0.bytes
+                && self.0.scalars == other.0.scalars
+                && self.0.encodings == other.0.encodings)
+    }
+}
+
+impl std::hash::Hash for Schema {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u64(self.0.hash);
+    }
 }
 
 impl fmt::Debug for Schema {
@@ -166,11 +186,33 @@ impl Schema {
                 "an element of {bytes} bytes would leave the next one's scalars off their size"
             ));
         }
+        let hash = {
+            use std::hash::{Hash, Hasher};
+            struct Fold(u64);
+            impl Hasher for Fold {
+                fn write(&mut self, bytes: &[u8]) {
+                    for &b in bytes {
+                        self.0 = (self.0.rotate_left(5) ^ u64::from(b))
+                            .wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+                    }
+                }
+                fn finish(&self) -> u64 {
+                    let h = self.0;
+                    (h ^ (h >> 29)).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95) ^ (h >> 32)
+                }
+            }
+            let mut h = Fold(0);
+            bytes.hash(&mut h);
+            scalars.hash(&mut h);
+            encodings.hash(&mut h);
+            h.finish()
+        };
         Ok(Self(std::sync::Arc::new(Laid {
             scalars,
             encodings,
             offsets,
             bytes,
+            hash,
         })))
     }
 
