@@ -8,8 +8,18 @@
 <h3 align="center">Software that becomes, while it runs.</h3>
 
 <p align="center">
-A runtime where programs are grown, not shipped: AI writes the laws, composes the structure,
-and changes both while the world keeps running.
+A runtime where worlds, tools and machines are written as pure typed laws, composed as live graphs,<br>
+verified as replays, evolved while running, and carried anywhere.
+</p>
+
+<p align="center">
+  <a href="#how-a-program-becomes">How it works</a> ·
+  <a href="#ai-is-the-creator">Creation protocol</a> ·
+  <a href="#start">Start</a> ·
+  <a href="packages/README.md">Packages</a> ·
+  <a href="examples/README.md">Examples</a> ·
+  <a href="docs/REFERENCE.md">Reference</a> ·
+  <a href="CORE-ARCHITECTURE.md">Architecture</a>
 </p>
 
 > **Host is the world.**
@@ -26,19 +36,17 @@ and changes both while the world keeps running.
     <td width="33%"><a href="examples/nebula/README.md"><img src="docs/media/gallery-nebula.jpg" alt="A nebula"></a><br><sub><b>A nebula from noise,</b> finished as film: glow, depth of field, grain.</sub></td>
   </tr>
   <tr>
-    <td width="33%"><a href="examples/physics/README.md"><img src="docs/media/gallery-physics.jpg" alt="Boxes and balls"></a><br><sub><b>Boxes and balls</b> that fall, stack, slide and bounce, stepped by the physics package.</sub></td>
+    <td width="33%"><a href="examples/physics/README.md"><img src="docs/media/gallery-physics.jpg" alt="Boxes and balls"></a><br><sub><b>Boxes and balls</b> that fall, stack, slide and bounce, stepped by the <code>physics</code> package.</sub></td>
     <td width="33%"><a href="examples/cube-puzzle/README.md"><img src="docs/media/gallery-cube-puzzle.jpg" alt="A cube puzzle"></a><br><sub><b>A network learns</b> how far a cube puzzle is scrambled, trained by gradient descent.</sub></td>
+    <td width="33%"><a href="examples/voxel/README.md"><img src="docs/media/gallery-voxel.jpg" alt="A voxel editor"></a><br><sub><b>A voxel editor</b> over a <code>Volume&lt;Int&gt;</code>, ray-walked with undo, an axis compass and a toolbar.</sub></td>
   </tr>
 </table>
 
-Every pixel above is computed by Kernels written in `.ent` and composed by `.esn` scenes, and every one
-of these programs is tested by replays, none with a line of Rust. The Host knows no gamepad, no light, no
-cube. It knows memory, devices and time.
+Every pixel, waveform, collision, gradient step and widget above — [the logo at the top of this page included](examples/logo/README.md) — is computed by `.ent` Kernels, composed by `.esn` scenes, and verified by `.replay` scripts, none with a line of application Rust. The Host knows no gamepad, no light, no cube, no editor. It knows memory, devices, files and time.
 
 ## How a program becomes
 
-**A law.** A Kernel is a small typed function, `Y = K(X, P, C)`. It reaches the machine only through the
-capabilities it declares and is granted.
+**A law (`.ent`).** A Kernel is a small typed function, `Y = K(X, P, C)`. It reaches the machine only through the capabilities it declares and is granted.
 
 ```text
 // kernels/grayscale.ent
@@ -58,8 +66,7 @@ kernel image.grayscale@1 {
 }
 ```
 
-**A structure.** A scene composes Kernels by stable id and wires their typed ports. Kernel owns
-computation; Graph owns relationships.
+**A structure (`.esn`).** A scene composes Kernels by versioned `KernelID`, wires their typed ports, carries state across frames explicitly through `<~`, and places subgraphs as nodes. Kernel owns computation; Graph owns relationships.
 
 ```text
 // scene.esn
@@ -72,19 +79,32 @@ node blocks: image.pixelate@1  { source <- gray.result; size = 8; }
 output result <- blocks.result;
 ```
 
-**A change, while it runs.** Edit either file and the new version is compiled, validated and prepared
-beside the running one, then swapped in whole at the next frame. A change that is wrong is refused at
-`file:line:column`, and the world keeps running as it was.
+**A proof (`.replay`).** A replay feeds inputs, steps frames, and checks pixels or typed Field elements across backends, with no native rebuild.
 
-Images, sound, geometry, rigs and game state are one resource, a typed Field. Every Kernel lowers to one
-backend-neutral IR, run by a reference interpreter, a JIT (native code through Cranelift, or
-WebAssembly) and the GPU (WGSL through wgpu). The interpreter is the reference; the JIT matches it bit
-for bit.
+```text
+# tests/grayscale.replay
+scene ../scene.esn
+frame 0.0
+expect 0 0 = 0.036 0.036 0.036 0.002
+expect 64 64 = 0.504 0.504 0.504 0.002
+expect 127 127 = 0.913 0.913 0.913 0.002
+```
+
+**A change, while it runs.** Edit either source and the replacement is compiled, validated and prepared beside the living graph, then swapped in whole at the frame boundary. A change that fails validation is refused at `file:line:column`, and the running world stays alive. In [`genesis`](examples/genesis/README.md), a running scene writes a new `.ent` law through an explicit `to files` output, reads compiler diagnostics back through `= checks`, and hot-swaps its own law of growth on the next frame.
+
+## One resource, three backends
+
+Images, sound blocks, meshes, skeletons, neural weights, UI layouts and virtual-machine memory share one representation: a **typed Field** (`Rows<T>`, `Grid<T>`, `Volume<T>`, `Image`), computed through element maps, named multi-outputs, `merge` reductions, `scan` over memory, atomic `scatter` and off-frame `async` work ([`modes`](examples/modes/README.md), [Typed Fields](docs/TYPED-FIELD-ARCHITECTURE.md)).
+
+Every Kernel lowers to one backend-neutral IR and runs across three backends:
+
+- **`cpu`** — the dependency-free reference interpreter.
+- **`jit`** — native machine code through Cranelift, or WebAssembly in a browser and under WASI, matching `cpu` bit for bit.
+- **`gpu`** — compute shaders in WGSL through `wgpu`, keeping Fields resident on the device across nodes and frames.
 
 ## AI is the creator
 
-An agent creates through one open protocol: JSON lines over stdin and stdout, a socket, a WebSocket, or
-a C function. Any model, any language, any CLI; the same authority rules for all.
+An agent creates through one open protocol: JSON lines over stdin and stdout, a socket, a WebSocket, or a C function. Any model, any language, any CLI; the same authority and validation rules for all.
 
 ```sh
 entelechy serve examples/life/scene.esn
@@ -99,59 +119,63 @@ entelechy serve examples/life/scene.esn
 
 The safe path is the powerful path:
 
-- **Authority is granted.** A Kernel runs with the capabilities the person running the session grants;
-  files are read and written only in directories they allow.
-- **Every change is validated first.** A Kernel or a scene is compiled and checked before it replaces
-  anything; publication is atomic and checked against the generation the agent last saw.
-- **State commits only when truth is valid.** A frame's state and file writes commit only when the whole
-  evaluation succeeds.
-- **The world is observable.** Any port can be read, any element traced through its Kernel, any node
-  timed; a run is a replay, and a replay is a test.
+- **Authority is granted.** A Kernel runs only with the capabilities the person running the session grants; files are read and written only in directories they allow.
+- **Every change is validated first.** A Kernel or a scene is compiled and checked before it replaces anything; publication is atomic and checked against the generation the agent last saw.
+- **State commits only when truth is valid.** A frame's state and file writes commit only when the whole evaluation succeeds.
+- **The world is observable.** Any port can be read, any element traced through its Kernel, any node timed; a run is a replay, and a replay is a test.
 
-`entelechy help` prints the syntax and API of every layer ([the same text](docs/REFERENCE.md)); the
-operations, fields and answers are in [the protocol](docs/PROTOCOL.md). Bridges speak the same protocol
-from [Blender](bridges/blender/README.md), [Godot](bridges/godot/README.md),
-[a web page](bridges/web/README.md) and [C](bridges/c/README.md).
+`entelechy help` prints the syntax and API of every layer directly from the tables the runtime executes ([the same text](docs/REFERENCE.md)); the wire operations and answers are in [the protocol](docs/PROTOCOL.md). Bridges speak the same contract from [Blender](bridges/blender/README.md), [Godot](bridges/godot/README.md), [a web page](bridges/web/README.md) and [C](bridges/c/README.md).
 
 ## Start
 
 From the source (Rust 1.93 or later), `cargo build --release` puts the programs in `target/release/`.
 
 ```sh
-entelechy new hello                                  # a scene that runs: Kernel, scene, test
-entelechy player hello/scene.esn                     # open it in a window; edit the Kernel live
-entelechy run examples/grayscale/scene.esn --out gray.png
-entelechy help                                       # the syntax and API of every layer
+entelechy new hello                                          # scaffold Kernel, scene and replay test
+entelechy player hello/scene.esn                             # open live; edit hello.ent while it runs
+entelechy replay hello/tests/hello.replay                    # verify frame by frame across backends
+entelechy run examples/grayscale/scene.esn --out gray.png    # evaluate once and write an output
+entelechy export examples/voxel/scene.esn --out voxel.html   # pack runtime + scene into one HTML page
+entelechy help                                               # inspect the syntax and API of every layer
 ```
+
+`entelechy export <scene.esn> --out <page>.html` compiles a scene's validated IR, lowered Graph, baked Fields and subsetted font contours together with Entelechy's WebAssembly/WebGPU page runtime into a single self-contained HTML file that opens straight from disk and fetches nothing. `entelechy import` and `entelechy export` also round-trip glTF/GLB meshes and skinned rigs, audio, MIDI, SVG vectors and OpenType/WOFF fonts into and out of typed Fields ([Usage](docs/USAGE.md)).
+
+## Capabilities grow as packages
+
+The Host stays small and the language stays quiet; reusable domains live in [`packages/`](packages/README.md). Each `.entpkg` carries functions, versioned Kernels, subgraph presets and cross-backend replay proofs:
+
+| Layer | Packages |
+| --- | --- |
+| **Foundation** | [`random`](packages/random.entpkg/README.md) · [`geometry`](packages/geometry.entpkg/README.md) · [`parallel`](packages/parallel.entpkg/README.md) · [`signal`](packages/signal.entpkg/README.md) · [`navigation`](packages/navigation.entpkg/README.md) |
+| **Graphics** | [`image`](packages/image.entpkg/README.md) · [`raster`](packages/raster.entpkg/README.md) · [`voxel`](packages/voxel.entpkg/README.md) · [`vector`](packages/vector.entpkg/README.md) · [`mesh`](packages/mesh.entpkg/README.md) · [`terrain`](packages/terrain.entpkg/README.md) · [`texture`](packages/texture.entpkg/README.md) |
+| **Media** | [`audio`](packages/audio.entpkg/README.md) · [`music`](packages/music.entpkg/README.md) |
+| **Simulation** | [`physics`](packages/physics.entpkg/README.md) · [`animation`](packages/animation.entpkg/README.md) |
+| **Interaction** | [`text`](packages/text.entpkg/README.md) · [`ui`](packages/ui.entpkg/README.md) · [`controls`](packages/controls.entpkg/README.md) |
 
 ## What runs on it
 
-| | |
+| Domain | Programs in [`examples/`](examples/README.md) |
 | --- | --- |
-| **Rendering** | path tracing, ray marching, deferred shading, a rasterizer written as Kernels, ten million culled triangles, volumes, vectors, text |
-| **Simulation** | a million bodies, smoke by Navier-Stokes, neighbor search, rigid bodies, wave function collapse |
-| **Learning** | networks trained by gradient descent, one learning how far a cube puzzle is scrambled |
-| **Sound** | a synthesizer, plucked strings, a sampler, a spectrum, MIDI in and out |
-| **Rigs** | glTF and Blender rigs posed, blended, aimed and walked by the `animation` package |
-| **Games and machines** | Snake, falling blocks, a tactics game, a voxel editor, a CHIP-8 interpreter, an ARM Thumb core |
-
-Each is a scene, its Kernels and its replay tests: browse them in [`examples/`](examples/README.md).
+| **Rendering** | [path tracing](examples/path/README.md), [signed-distance PBR](examples/showcase/README.md), [software & native rasterization](examples/mesh/README.md), [ten million culled triangles](examples/culled/README.md), [marching surfaces](examples/surface/README.md), [nebula & film look](examples/nebula/README.md), [vector art](examples/vector/README.md), [constructed logo & blueprint](examples/logo/README.md) |
+| **Simulation** | [a million bodies & spatial hashing](examples/swarm/README.md), [Navier-Stokes smoke](examples/fluid/README.md), [rigid bodies](examples/physics/README.md), [wave function collapse](examples/collapse/README.md) |
+| **Self-evolving & learning** | [a world that rewrites its own `.ent` law](examples/genesis/README.md), [networks trained by gradient descent](examples/learn/README.md), [a cube puzzle & its learned heuristic](examples/cube-puzzle/README.md) |
+| **Sound** | [a synthesizer, FFT spectrum, plucked strings, drum sampler, MIDI & procedural score](examples/sound/README.md) |
+| **Rigs** | [glTF and Blender skeletons posed, blended, aimed and walked](examples/animation/README.md) |
+| **Games, editors & machines** | [voxel editor & lit crypt](examples/voxel/README.md), [turn-based tactics](examples/slg/README.md), [falling blocks & snake](examples/arcade/README.md), [settings & HUD](examples/ui/README.md), [CHIP-8 & ARM7TDMI Thumb cores](examples/machines/README.md) |
 
 ## How it is built
 
 ```text
-Host Core        memory, devices, time, budgets
+Host Core        memory, devices, files, time, budgets
 Capability ABI   declared capabilities, opaque handles
 Entelechy IR     typed computation, backend-neutral
 Kernel Runtime   prepare, validate, atomic swap
 Graph Runtime    composition by KernelID, typed ports
-Interfaces       CLI, Player, protocol, C ABI, bridges
+Interfaces       CLI, Player, protocol, single-page export, C ABI, bridges
 ```
 
-Rust, in layers held by tests: the core depends on the core alone, a backend on the core alone, and only
-the interface layer on everything. The core and front end take no external dependency; `unsafe` lives in
-two crates, the JIT and the C ABI. Verified on macOS (Apple silicon, Metal), under WASI, and in the
-browser on WebAssembly and WebGPU.
+Rust, in layers held by tests: `core` depends on `core` alone, `frontend` on `core`, a backend on `core` alone, and only the interface layer on everything. `core`, `frontend` and the reference interpreter take zero external dependencies; `unsafe` lives in two crates, `entelechy-jit` (calling the native code it emits) and `entelechy-ffi` (reading C pointers at the boundary). Verified on macOS (Apple silicon, Metal), under WASI, and in the browser on WebAssembly and WebGPU.
 
 ## Read further
 
@@ -159,10 +183,13 @@ browser on WebAssembly and WebGPU.
 | --- | --- |
 | The architecture and its boundaries | [CORE-ARCHITECTURE](CORE-ARCHITECTURE.md), [ARCHITECTURE-PLAN](ARCHITECTURE-PLAN.md) |
 | Why one resource | [Typed Fields](docs/TYPED-FIELD-ARCHITECTURE.md) |
-| Everything a Kernel, a scene and an agent may write, at once | [Reference](docs/REFERENCE.md) |
+| Reusable capability domains | [Packages](packages/README.md) |
+| Whole runnable programs | [Examples](examples/README.md) |
+| Everything a Kernel, a scene and an agent may write | [Reference](docs/REFERENCE.md) |
 | How a Kernel or a scene is written | [Documents](docs/DOCUMENTS.md) |
-| What an agent sends | [Protocol](docs/PROTOCOL.md) |
+| What an agent sends over the wire | [Protocol](docs/PROTOCOL.md) |
 | Which command does what | [Usage](docs/USAGE.md) |
+| How skeletons, weights and clips are stored | [Rigs](docs/RIGS.md) |
 | Why it is this way | [Decisions](docs/DECISIONS.md) |
 | Where the code and its evidence are | [Implementation](IMPLEMENTATION.md) |
 | The rules for working on Entelechy | [AGENTS](AGENTS.md), [PROCESS](PROCESS.md) |
