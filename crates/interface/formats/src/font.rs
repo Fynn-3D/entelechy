@@ -397,6 +397,93 @@ impl CompactFont {
         ))
     }
 
+    /// Flattens only the shapes requested by `codes` at [`TOLERANCE`] and builds
+    /// `(glyphs, segments, metrics)`, matching `entelechy_import::font::glyphs_of`
+    /// word for word without pre-flattening unused characters.
+    pub fn glyphs_of(&self, codes: &[i32]) -> Result<(FieldData, FieldData, FieldData), String> {
+        if self.units == 0 {
+            return Err("compact font has zero units per em".to_owned());
+        }
+        let em = 1.0 / f32::from(self.units);
+        let missing_advance = self.glyphs.first().map_or(0, |g| g.advance as u32);
+        let missing = [-1i32 as u32, missing_advance, 0, 0, 0, 0, 0, 0];
+        let sorted = self.glyphs.get(1..).unwrap_or(&[]);
+
+        let mut glyph_words = Vec::with_capacity(codes.len().max(1) * 8);
+        let mut segments: Vec<u32> = Vec::new();
+        let mut drawn: std::collections::HashMap<u32, [u32; 6]> = std::collections::HashMap::new();
+        let mut first = 0usize;
+
+        if codes.is_empty() {
+            glyph_words.extend_from_slice(&missing);
+        }
+        for &code in codes {
+            if code <= 0 {
+                glyph_words.extend_from_slice(&missing);
+                continue;
+            }
+            let Ok(found) = sorted.binary_search_by_key(&code, |g| g.code) else {
+                glyph_words.extend_from_slice(&missing);
+                continue;
+            };
+            let g = sorted[found];
+            let row = if let Some(&existing) = drawn.get(&g.shape) {
+                existing
+            } else {
+                let verbs = self
+                    .shapes
+                    .get(g.shape as usize)
+                    .ok_or_else(|| "compact font glyph shape out of bounds".to_owned())?;
+                let mut outline = Outline::new(em);
+                for &verb in verbs {
+                    outline.apply(verb);
+                }
+                let flat = outline.finish();
+                let (mut lo, mut hi) = ([0.0f32; 2], [0.0f32; 2]);
+                if let Some(s) = flat.first() {
+                    lo = [s[0], s[1]];
+                    hi = lo;
+                }
+                for s in &flat {
+                    for (x, y) in [(s[0], s[1]), (s[2], s[3])] {
+                        lo = [lo[0].min(x), lo[1].min(y)];
+                        hi = [hi[0].max(x), hi[1].max(y)];
+                    }
+                    segments.extend(s.iter().map(|v| v.to_bits()));
+                }
+                let count = flat.len();
+                let [lo_x, lo_y, hi_x, hi_y] = [lo[0], lo[1], hi[0], hi[1]].map(f32::to_bits);
+                let built = [first as u32, count as u32, lo_x, lo_y, hi_x, hi_y];
+                drawn.insert(g.shape, built);
+                first += count;
+                built
+            };
+            glyph_words.extend_from_slice(&[
+                code as u32,
+                g.advance as u32,
+                row[0],
+                row[1],
+                row[2],
+                row[3],
+                row[4],
+                row[5],
+            ]);
+        }
+        if segments.is_empty() {
+            segments = vec![0; 4];
+        }
+        let glyph_rows = (glyph_words.len() / 8) as u32;
+        let seg_rows = first.max(1) as u32;
+        let field = |schema: Schema, rows: u32, words: Vec<u32>| {
+            FieldData::from_storage(schema, Domain::Rows(rows), words).map_err(|e| e.to_string())
+        };
+        Ok((
+            field(glyph_schema(), glyph_rows, glyph_words)?,
+            field(segment_schema(), seg_rows, segments)?,
+            field(metrics_schema(), 1, self.metrics.to_vec())?,
+        ))
+    }
+
     /// Appends the compact binary encoding of this font to `out`.
     pub fn write_to(&self, out: &mut Vec<u8>) {
         push_leb(out, u64::from(self.units));

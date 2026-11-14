@@ -123,6 +123,10 @@ EntelechySession *entelechy_open_files(EntelechyFiles *files, const char *scene,
  * with no compiler or document store. NULL with entelechy_open_error() set on
  * failure. */
 EntelechySession *entelechy_open_bundle(const uint8_t *data, size_t len, const char *backend);
+/* As entelechy_open_bundle, taking ownership of `data` (from
+ * entelechy_alloc) and freeing it once decoded so the session opens into the
+ * same memory. */
+EntelechySession *entelechy_open_bundle_owned(uint8_t *data, size_t len, const char *backend);
 /* A scene played, as every interface that shows one plays it: the host
  * hands its person's keys, pointer, wheel and pads to the play, asks it
  * for a frame, shows the picture on its own device and plays the sound

@@ -176,12 +176,14 @@ class SinglePlayer {
     const patched = glue
       .replaceAll('from "entelechy"', `from ${JSON.stringify(hostUrl)}`)
       .replaceAll("from 'entelechy'", `from ${JSON.stringify(hostUrl)}`);
+    glue = null;
     const glueUrl = URL.createObjectURL(new Blob([patched], { type: "text/javascript" }));
     await told(0.2, "starting Entelechy");
     let exports;
     try {
       const mod = await import(glueUrl);
       exports = await mod.default({ module_or_path: wasm });
+      wasm = null;
       host.bind(exports);
     } finally {
       URL.revokeObjectURL(glueUrl);
@@ -189,10 +191,10 @@ class SinglePlayer {
     }
 
     await told(0.35, "opening scene");
+    const owned = typeof exports.entelechy_open_bundle_owned === "function";
+    const rawOpen = owned ? exports.entelechy_open_bundle_owned : exports.entelechy_open_bundle;
     const openBundle =
-      typeof WebAssembly.promising === "function"
-        ? WebAssembly.promising(exports.entelechy_open_bundle)
-        : exports.entelechy_open_bundle;
+      typeof WebAssembly.promising === "function" ? WebAssembly.promising(rawOpen) : rawOpen;
     const enc = new TextEncoder();
     const dec = new TextDecoder();
     const readText = (ptr) => {
@@ -202,16 +204,24 @@ class SinglePlayer {
       return dec.decode(mem.subarray(ptr, end));
     };
     const backendBytes = enc.encode(`${backend || "best"}\0`);
-    const dataPtr = exports.entelechy_alloc(bundle.length);
+    const bundleLen = bundle.length;
+    const dataPtr = exports.entelechy_alloc(bundleLen);
     const backPtr = exports.entelechy_alloc(backendBytes.length);
-    if (!dataPtr || !backPtr) throw new Error("Entelechy has no room for the bundle");
+    if (!dataPtr || !backPtr) {
+      if (dataPtr) exports.entelechy_free(dataPtr, bundleLen);
+      if (backPtr) exports.entelechy_free(backPtr, backendBytes.length);
+      throw new Error("Entelechy has no room for the bundle");
+    }
     let session = 0;
+    let passedOwnership = false;
     try {
-      new Uint8Array(exports.memory.buffer, dataPtr, bundle.length).set(bundle);
+      new Uint8Array(exports.memory.buffer, dataPtr, bundleLen).set(bundle);
+      bundle = null;
       new Uint8Array(exports.memory.buffer, backPtr, backendBytes.length).set(backendBytes);
-      session = await openBundle(dataPtr, bundle.length, backPtr);
+      passedOwnership = owned;
+      session = await openBundle(dataPtr, bundleLen, backPtr);
     } finally {
-      exports.entelechy_free(dataPtr, bundle.length);
+      if (!passedOwnership) exports.entelechy_free(dataPtr, bundleLen);
       exports.entelechy_free(backPtr, backendBytes.length);
     }
     if (!session) throw new Error(readText(exports.entelechy_open_error()));

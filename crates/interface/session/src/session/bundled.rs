@@ -31,7 +31,6 @@ pub(crate) struct BundledScene {
 
 pub(super) struct PendingBundle {
     graph: Graph,
-    inputs: Vec<(String, FieldData)>,
     tickets: Vec<Ticket>,
 }
 
@@ -101,8 +100,17 @@ impl Session {
         wait: entelechy_gpu::Wait,
         turns: bool,
     ) -> Result<crate::LoadedBundle, String> {
-        let mut validated = Vec::with_capacity(bundle.modules.len());
-        for module in bundle.modules {
+        let Bundle {
+            modules,
+            graph,
+            params,
+            inputs,
+            presented,
+            feeds,
+            fonts,
+        } = bundle;
+        let mut validated = Vec::with_capacity(modules.len());
+        for module in modules {
             validated.push(entelechy_ir::validate(module).map_err(|e| e.to_string())?);
         }
         let one = [backend];
@@ -132,35 +140,42 @@ impl Session {
                 }
                 return Err(why);
             }
-            match Self::start_bundle(
-                built.runtime,
-                &validated,
-                bundle.graph.clone(),
-                bundle.params.clone(),
-                bundle.inputs.clone(),
-                bundle.presented.clone(),
-                bundle.feeds.clone(),
-                bundle.fonts.clone(),
-                turns,
-            ) {
-                Ok(mut session) => {
-                    let said = session.take_bundle_said();
-                    return Ok(crate::LoadedBundle {
-                        session,
-                        display: built.display,
-                        said,
-                        passed_over,
-                    });
-                }
-                Err(why) => {
-                    last = why.clone();
-                    if named.len() > 1 {
-                        passed_over.push(format!("{name}: the bundle did not load: {why}"));
-                    } else {
-                        return Err(why);
+            let mut runtime = built.runtime;
+            let (nodes, links) = shape_progress(&graph);
+            runtime.progress().shape(nodes, links);
+            if !turns {
+                let prepared = (|| -> Result<(), String> {
+                    let mut candidates = Vec::with_capacity(validated.len());
+                    for m in &validated {
+                        let candidate = runtime
+                            .prepare_module(m.clone(), "")
+                            .map_err(|e| e.to_string())?;
+                        candidates.push((candidate, Expect::Absent));
                     }
+                    runtime
+                        .publish_all(candidates)
+                        .map(|_| ())
+                        .map_err(|e| e.to_string())
+                })();
+                if let Err(why) = prepared {
+                    last = why;
+                    if named.len() > 1 {
+                        passed_over.push(format!("{name}: the bundle did not load: {last}"));
+                        continue;
+                    }
+                    return Err(last);
                 }
             }
+            let mut session = Self::start_bundle(
+                runtime, &validated, graph, params, inputs, presented, feeds, fonts, turns,
+            )?;
+            let said = session.take_bundle_said();
+            return Ok(crate::LoadedBundle {
+                session,
+                display: built.display,
+                said,
+                passed_over,
+            });
         }
         Err(if last.is_empty() {
             format!("no backend opens: {}", passed_over.join("; "))
@@ -181,28 +196,7 @@ impl Session {
         fonts: Vec<BundledFont>,
         turns: bool,
     ) -> Result<Self, String> {
-        let (nodes, links) = shape_progress(&graph);
-        runtime.progress().shape(nodes, links);
-        if turns {
-            runtime.prepare_in_turns();
-        }
-        let tickets: Vec<Ticket> = if turns {
-            validated
-                .iter()
-                .map(|m| runtime.prepare_later(m.clone(), String::new()))
-                .collect()
-        } else {
-            let mut candidates = Vec::with_capacity(validated.len());
-            for m in validated {
-                let candidate = runtime
-                    .prepare_module(m.clone(), "")
-                    .map_err(|e| e.to_string())?;
-                candidates.push((candidate, Expect::Absent));
-            }
-            runtime.publish_all(candidates).map_err(|e| e.to_string())?;
-            Vec::new()
-        };
-        let fonts = fonts
+        let fonts: Vec<BundledFontState> = fonts
             .into_iter()
             .map(|atlas| BundledFontState {
                 atlas,
@@ -210,23 +204,78 @@ impl Session {
                 seen: None,
             })
             .collect();
+        let mut small_inputs = Vec::new();
+        let mut large_inputs = Vec::new();
+        for (name, data) in inputs {
+            if (data.storage().len() as u64).saturating_mul(4) >= COPY_LEAST {
+                large_inputs.push((name, data));
+            } else {
+                small_inputs.push((name, data));
+            }
+        }
+        let mut handles = BTreeMap::new();
+        let mut on_device = BTreeSet::new();
+        for (name, text) in &graph.texts {
+            let words: Vec<u32> = text.chars().map(|c| c as u32).collect();
+            let data = FieldData::from_storage(
+                Schema::new(vec![Scalar::Int]),
+                Domain::Rows(words.len() as u32),
+                words,
+            )
+            .map_err(|e| format!("input `{name}`'s text: {e}"))?;
+            let handle = runtime
+                .host_mut()
+                .adopt(data)
+                .map_err(|e| format!("input `{name}`'s text: {e}"))?;
+            hold_in(&mut handles, runtime.host_mut(), name, handle);
+        }
+        for (name, data) in small_inputs {
+            let handle = runtime
+                .host_mut()
+                .adopt(data)
+                .map_err(|e| format!("input `{name}`: {e}"))?;
+            hold_in(&mut handles, runtime.host_mut(), &name, handle);
+        }
+        for font in &fonts {
+            let fields = glyphs_from_atlas(&font.atlas, &[])?;
+            hold_font_fields(&mut handles, runtime.host_mut(), &font.atlas, fields)?;
+        }
+        // Upload and release large device-bound inputs in reverse allocation
+        // order before queuing shader turns so top-of-heap storage merges back
+        // into the linear allocator's wilderness without fragmentation holes.
+        for (name, data) in large_inputs.into_iter().rev() {
+            let handle = runtime
+                .host_mut()
+                .adopt(data)
+                .map_err(|e| format!("input `{name}`: {e}"))?;
+            if put_on_device(&mut runtime, handle) {
+                on_device.insert(handle);
+            }
+            hold_in(&mut handles, runtime.host_mut(), &name, handle);
+        }
+        let tickets: Vec<Ticket> = if turns {
+            runtime.prepare_in_turns();
+            validated
+                .iter()
+                .map(|m| runtime.prepare_later(m.clone(), String::new()))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let mut session = Self::from_backing(
             runtime,
             Backing::Bundled(Box::new(BundledScene {
                 graph: None,
-                pending: Some(PendingBundle {
-                    graph,
-                    inputs,
-                    tickets,
-                }),
+                pending: Some(PendingBundle { graph, tickets }),
                 params,
-                handles: BTreeMap::new(),
+                handles,
                 presented,
                 feeds,
                 fonts,
                 said: Vec::new(),
             })),
         );
+        session.copies_let_go.extend(on_device);
         if turns {
             session.sync_bundle_turn()?;
         } else {
@@ -324,42 +373,10 @@ impl Session {
                 .publish_all(candidates)
                 .map_err(|e| e.to_string())?;
         }
-        let mut on_device = BTreeSet::new();
         if let Some(b) = self.backing.bundled_mut() {
-            for (name, text) in &pending.graph.texts {
-                let words: Vec<u32> = text.chars().map(|c| c as u32).collect();
-                let data = FieldData::from_storage(
-                    Schema::new(vec![Scalar::Int]),
-                    Domain::Rows(words.len() as u32),
-                    words,
-                )
-                .map_err(|e| format!("input `{name}`'s text: {e}"))?;
-                let handle = self
-                    .runtime
-                    .host_mut()
-                    .adopt(data)
-                    .map_err(|e| format!("input `{name}`'s text: {e}"))?;
-                hold_in(&mut b.handles, self.runtime.host_mut(), name, handle);
-            }
-            for (name, data) in pending.inputs {
-                let handle = self
-                    .runtime
-                    .host_mut()
-                    .adopt(data)
-                    .map_err(|e| format!("input `{name}`: {e}"))?;
-                if put_on_device(&mut self.runtime, handle) {
-                    on_device.insert(handle);
-                }
-                hold_in(&mut b.handles, self.runtime.host_mut(), &name, handle);
-            }
-            for font in &b.fonts {
-                let fields = glyphs_from_atlas(&font.atlas, &[])?;
-                hold_font_fields(&mut b.handles, self.runtime.host_mut(), &font.atlas, fields)?;
-            }
             b.graph = Some(Arc::new(pending.graph));
             b.said.push("scene loaded".to_owned());
         }
-        self.copies_let_go.extend(on_device);
         self.sync_bundled_clipboard();
         self.finish_used();
         Ok(())
@@ -609,20 +626,14 @@ impl Session {
             .chain(graph.texts.iter().map(|(name, _)| name.clone()))
             .collect();
 
-        let mut fonts = Vec::with_capacity(files.fonts.len());
+        let mut fonts: Vec<BundledFont> = Vec::with_capacity(files.fonts.len());
         for font in &files.fonts {
             let inferred = static_chars.get(&font.path).map(String::as_str);
             let baked = font_atlas(&font.node, &font.path, inferred)?;
-            let (glyphs, segments, metrics, compact) = match baked {
-                BundledAtlas::Compact(c) => {
-                    let (g, s, m) = c.to_fields()?;
-                    (g, s, m, Some(c))
-                }
-                BundledAtlas::Fields {
-                    glyphs,
-                    segments,
-                    metrics,
-                } => (glyphs, segments, metrics, None),
+            let atlas = if let Some(prev) = fonts.iter().find(|f| *f.atlas == baked) {
+                Arc::clone(&prev.atlas)
+            } else {
+                Arc::new(baked)
             };
             let port_ext = |port: &str| {
                 font.outputs
@@ -645,10 +656,7 @@ impl Session {
                 node: font.node.clone(),
                 codes: font.codes.clone(),
                 outputs,
-                glyphs,
-                segments,
-                metrics,
-                compact,
+                atlas,
             });
         }
 

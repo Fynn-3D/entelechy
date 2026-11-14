@@ -1,6 +1,7 @@
 //! Binary encoder for [`super::Bundle`].
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use entelechy_abi::{ABI_VERSION, Capability, Domain, Scalar, Shape, Type, Value};
 use entelechy_graph::{
@@ -12,7 +13,7 @@ use entelechy_ir::{
 };
 use entelechy_kernel::FieldData;
 
-use super::{BINARIES, Bundle, MAGIC, VERSION};
+use super::{BINARIES, Bundle, BundledAtlas, MAGIC, VERSION};
 
 impl Bundle {
     /// Encodes the bundle into its self-contained binary representation.
@@ -45,20 +46,26 @@ impl Bundle {
                 w.str(out);
             }
             if let Some(prev) = self.fonts[..i].iter().position(|earlier| {
-                earlier.compact == font.compact
-                    && earlier.glyphs == font.glyphs
-                    && earlier.segments == font.segments
-                    && earlier.metrics == font.metrics
+                Arc::ptr_eq(&earlier.atlas, &font.atlas) || earlier.atlas == font.atlas
             }) {
                 w.tag_u32(0, prev as u32);
-            } else if let Some(compact) = &font.compact {
-                w.byte(2);
-                compact.write_to(&mut w.body);
             } else {
-                w.byte(1);
-                w.field_data(&font.glyphs);
-                w.field_data(&font.segments);
-                w.field_data(&font.metrics);
+                match &*font.atlas {
+                    BundledAtlas::Compact(compact) => {
+                        w.byte(2);
+                        compact.write_to(&mut w.body);
+                    }
+                    BundledAtlas::Fields {
+                        glyphs,
+                        segments,
+                        metrics,
+                    } => {
+                        w.byte(1);
+                        w.field_data(glyphs);
+                        w.field_data(segments);
+                        w.field_data(metrics);
+                    }
+                }
             }
         }
         w.finish()

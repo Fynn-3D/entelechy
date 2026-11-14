@@ -143,26 +143,12 @@ fn a_font_node_is_baked_with_the_characters_named() {
     assert_eq!(compiled.fonts.len(), 1);
     let decoded = Bundle::decode(&compiled.bundle).expect("bundle decodes");
     assert_eq!(decoded.fonts.len(), 1);
-    let kept: Vec<u32> = decoded.fonts[0]
-        .glyphs
-        .values()
-        .chunks_exact(8)
-        .map(|row| row[0])
-        .filter(|&code| code as i32 >= 0)
-        .collect();
-    assert_eq!(kept, vec![mapped[0]]);
+    assert_eq!(decoded.fonts[0].mapped_codes(), vec![mapped[0]]);
 
     // Without `--chars`, a static `codes` producer subsets the font on its own.
     let auto = page::compile(&dir.join("scene.esn"), None).expect("auto-subsetted");
     let auto_decoded = Bundle::decode(&auto.bundle).expect("bundle decodes");
-    let auto_kept: Vec<u32> = auto_decoded.fonts[0]
-        .glyphs
-        .values()
-        .chunks_exact(8)
-        .map(|row| row[0])
-        .filter(|&code| code as i32 >= 0)
-        .collect();
-    assert_eq!(auto_kept, vec![73]);
+    assert_eq!(auto_decoded.fonts[0].mapped_codes(), vec![73]);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

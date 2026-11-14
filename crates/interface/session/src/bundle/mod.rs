@@ -66,32 +66,56 @@ pub struct BundledFont {
     pub codes: Source,
     /// External names fed with `[glyphs, segments, metrics]`.
     pub outputs: [String; 3],
-    /// Atlas glyph rows (`[code, advance, first, count, lo_x, lo_y, hi_x, hi_y]`),
-    /// row 0 holding `.notdef` (`code == -1`) and rows `1..` sorted ascending by `code`.
-    pub glyphs: FieldData,
-    /// Atlas line segments (`Vec4` per segment).
-    pub segments: FieldData,
-    /// Font metrics (`[units, ascender, descender, line_gap]`).
-    pub metrics: FieldData,
-    /// Unflattened contours when available, so `Bundle::encode` carries curves
-    /// instead of flattened segment `f32`s.
-    pub compact: Option<entelechy_formats::font::CompactFont>,
+    /// Shared pre-baked font atlas (compact contours or pre-flattened Fields).
+    pub atlas: std::sync::Arc<BundledAtlas>,
 }
 
-/// Slices the glyph rows and curve segments for `codes` out of a pre-baked
-/// [`BundledFont`] atlas, matching `entelechy_import::font::glyphs_of` word
-/// for word without parsing the font file at run time.
+impl BundledFont {
+    /// Non-negative character codes mapped by this font's atlas, in row order.
+    pub fn mapped_codes(&self) -> Vec<u32> {
+        match &*self.atlas {
+            BundledAtlas::Compact(compact) => compact
+                .glyphs
+                .iter()
+                .filter(|g| g.code >= 0)
+                .map(|g| g.code as u32)
+                .collect(),
+            BundledAtlas::Fields { glyphs, .. } => glyphs
+                .values()
+                .chunks_exact(8)
+                .map(|row| row[0])
+                .filter(|&code| code as i32 >= 0)
+                .collect(),
+        }
+    }
+}
+
+/// Slices or flattens the glyph rows and curve segments for `codes` out of a
+/// pre-baked [`BundledFont`] atlas, matching `entelechy_import::font::glyphs_of`
+/// word for word without parsing the font file at run time.
 pub fn glyphs_from_atlas(
-    atlas: &BundledFont,
+    font: &BundledFont,
     codes: &[i32],
 ) -> Result<(FieldData, FieldData, FieldData), String> {
-    let gw = atlas.glyphs.storage();
+    let (atlas_glyphs, atlas_segments, atlas_metrics) = match &*font.atlas {
+        BundledAtlas::Compact(compact) => {
+            return compact
+                .glyphs_of(codes)
+                .map_err(|e| format!("font `{}`: {e}", font.node));
+        }
+        BundledAtlas::Fields {
+            glyphs,
+            segments,
+            metrics,
+        } => (glyphs, segments, metrics),
+    };
+    let gw = atlas_glyphs.storage();
     if gw.len() < 8 || !gw.len().is_multiple_of(8) {
-        return Err(format!("font `{}`: malformed glyph atlas", atlas.node));
+        return Err(format!("font `{}`: malformed glyph atlas", font.node));
     }
-    let sw = atlas.segments.storage();
+    let sw = atlas_segments.storage();
     if !sw.len().is_multiple_of(4) {
-        return Err(format!("font `{}`: malformed segment atlas", atlas.node));
+        return Err(format!("font `{}`: malformed segment atlas", font.node));
     }
     let sorted_rows: Vec<&[u32]> = gw[8..].chunks_exact(8).collect();
     let missing_advance = gw[1];
@@ -125,7 +149,7 @@ pub fn glyphs_from_atlas(
                 let end = start.saturating_add((count as usize).saturating_mul(4));
                 let slice = sw
                     .get(start..end)
-                    .ok_or_else(|| format!("font `{}`: segment range out of bounds", atlas.node))?;
+                    .ok_or_else(|| format!("font `{}`: segment range out of bounds", font.node))?;
                 segments.extend_from_slice(slice);
                 next_seg = next_seg.saturating_add(count);
             }
@@ -149,18 +173,18 @@ pub fn glyphs_from_atlas(
     }
     let glyph_rows = (glyphs.len() / 8) as u32;
     let glyphs_field = FieldData::from_storage(
-        atlas.glyphs.schema().clone(),
+        atlas_glyphs.schema().clone(),
         Domain::Rows(glyph_rows),
         glyphs,
     )
     .map_err(|e| e.to_string())?;
     let segments_field = FieldData::from_storage(
-        atlas.segments.schema().clone(),
+        atlas_segments.schema().clone(),
         Domain::Rows(seg_rows),
         segments,
     )
     .map_err(|e| e.to_string())?;
-    Ok((glyphs_field, segments_field, atlas.metrics.clone()))
+    Ok((glyphs_field, segments_field, atlas_metrics.clone()))
 }
 
 pub(super) const BINARIES: [BinaryOp; 19] = [

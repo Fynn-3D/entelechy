@@ -493,6 +493,45 @@ pub unsafe extern "C" fn entelechy_open_bundle(
     len: usize,
     backend: *const c_char,
 ) -> *mut EntelechySession {
+    unsafe { open_bundle_inner(data.cast_mut(), len, backend, false) }
+}
+
+/// Opens a compiled binary scene bundle (`Bundle::encode`) from buffer `data`
+/// allocated by [`entelechy_alloc`], freeing `(data, len)` immediately after
+/// decoding so the session and device uploads reuse its memory.
+///
+/// # Safety
+/// `data` is NULL (when `len` is 0) or a pointer returned by
+/// `entelechy_alloc(len)`, not freed yet; ownership passes to this call
+/// whether opening succeeds or fails. `backend` is NULL or NUL-terminated.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_open_bundle_owned(
+    data: *mut u8,
+    len: usize,
+    backend: *const c_char,
+) -> *mut EntelechySession {
+    unsafe { open_bundle_inner(data, len, backend, true) }
+}
+
+unsafe fn open_bundle_inner(
+    data: *mut u8,
+    len: usize,
+    backend: *const c_char,
+    owned: bool,
+) -> *mut EntelechySession {
+    struct OwnedAllocation {
+        ptr: *mut u8,
+        len: usize,
+    }
+    impl Drop for OwnedAllocation {
+        fn drop(&mut self) {
+            if !self.ptr.is_null() {
+                unsafe { entelechy_free(self.ptr, self.len) };
+            }
+        }
+    }
+
+    let mut guard = owned.then(|| OwnedAllocation { ptr: data, len });
     if cfg!(all(target_arch = "wasm32", target_os = "unknown")) {
         entelechy_kernel::clock::give(clock);
     }
@@ -503,15 +542,19 @@ pub unsafe extern "C" fn entelechy_open_bundle(
     if data.is_null() && len > 0 {
         return set_error("entelechy_open_bundle needs bundle bytes".to_owned());
     }
-    let bytes = if len == 0 {
-        &[][..]
-    } else {
-        unsafe { std::slice::from_raw_parts(data, len) }
-    };
     let backend = unsafe { text(backend) }.unwrap_or("best");
     let turns = cfg!(all(target_arch = "wasm32", target_os = "unknown"));
     let made = catch_unwind(AssertUnwindSafe(|| {
-        let bundle = entelechy_session::bundle::Bundle::decode(bytes)?;
+        let bundle = {
+            let bytes = if len == 0 {
+                &[][..]
+            } else {
+                unsafe { std::slice::from_raw_parts(data.cast_const(), len) }
+            };
+            entelechy_session::bundle::Bundle::decode(bytes)
+        };
+        drop(guard.take());
+        let bundle = bundle?;
         let loaded = Session::open_bundle(
             bundle,
             backend,
@@ -528,6 +571,7 @@ pub unsafe extern "C" fn entelechy_open_bundle(
         }
         Ok::<_, String>((loaded.session, loaded.display, play))
     }));
+    drop(guard);
     match made {
         Ok(Ok((session, display, play))) => new_session(session, display, play),
         Ok(Err(message)) => set_error(message),
@@ -1162,6 +1206,12 @@ mod tests {
         assert!(session.is_null());
         let why = unsafe { CStr::from_ptr(entelechy_open_error()) }.to_string_lossy();
         assert!(!why.is_empty());
+
+        let owned = entelechy_alloc(bad.len());
+        assert!(!owned.is_null());
+        unsafe { std::ptr::copy_nonoverlapping(bad.as_ptr(), owned, bad.len()) };
+        let session = unsafe { entelechy_open_bundle_owned(owned, bad.len(), jit.as_ptr()) };
+        assert!(session.is_null());
     }
 
     /// A call made while another is inside is refused as a NULL session's

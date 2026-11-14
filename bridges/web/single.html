@@ -40,7 +40,12 @@ wrote), `runtime` (`entelechy_single_bg.wasm`) and `bundle` (`Bundle::encode`).
 <script type="text/plain" id="bundle">@@slot:bundle@@</script>
 <script>
 (async () => {
-  const text = (id) => document.getElementById(id).textContent;
+  const takeText = (id) => {
+    const el = document.getElementById(id);
+    const s = el.textContent;
+    el.remove();
+    return s;
+  };
   const BAD = [0, 10, 13, 34, 38, 60, 62, 92];
   const unpack = (s) => {
     const out = new Uint8Array(((s.length * 14) >> 3) + 1);
@@ -63,7 +68,7 @@ wrote), `runtime` (`entelechy_single_bg.wasm`) and `bundle` (`Bundle::encode`).
     return out.subarray(0, n);
   };
   const inflated = async (id) => {
-    const packed = unpack(text(id));
+    const packed = unpack(takeText(id));
     const stream = new Blob([packed]).stream().pipeThrough(new DecompressionStream("deflate"));
     return new Uint8Array(await new Response(stream).arrayBuffer());
   };

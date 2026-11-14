@@ -1,6 +1,7 @@
 //! Binary decoder for [`super::Bundle`].
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use entelechy_abi::{
     ABI_VERSION, Capabilities, Capability, Domain, PortType, Scalar, Schema, Shape, Type, Value,
@@ -15,7 +16,8 @@ use entelechy_ir::{
 };
 use entelechy_kernel::FieldData;
 
-use super::{BINARIES, Bundle, BundledFont, MAGIC, MAX_ITEMS, MAX_NESTING, VERSION};
+use super::{BINARIES, Bundle, BundledAtlas, BundledFont, MAGIC, MAX_ITEMS, MAX_NESTING, VERSION};
+use crate::memory::COPY_LEAST;
 
 impl Bundle {
     /// Decodes a bundle produced by [`Bundle::encode`].
@@ -28,7 +30,14 @@ impl Bundle {
         for _ in 0..param_count {
             params.insert(r.str()?, r.value(0)?);
         }
-        let inputs = r.list(MAX_ITEMS, |r| Ok((r.str()?, r.field_data()?)))?;
+        // Scan static input slices in stream order, deferring FieldData word
+        // allocations until after permanent metadata and font atlases land,
+        // and placing large device-bound inputs at the top of the heap last.
+        let input_slices = r.list(MAX_ITEMS, |r| {
+            let name = r.str()?;
+            let (schema, domain, raw) = r.field_slice()?;
+            Ok((name, schema, domain, raw))
+        })?;
         let presented = r.list(MAX_ITEMS, |r| Ok((r.str()?, r.str()?)))?;
         let feeds = r.list(MAX_ITEMS, |r| Ok((r.str()?, r.str()?)))?;
         let font_count = r.len(MAX_ITEMS)?;
@@ -37,24 +46,24 @@ impl Bundle {
             let node = r.str()?;
             let codes = r.source()?;
             let outputs = [r.str()?, r.str()?, r.str()?];
-            let (glyphs, segments, metrics, compact) = match r.byte()? {
+            let atlas = match r.byte()? {
                 0 => {
                     let idx = r.len(fonts.len().saturating_sub(1))?;
-                    let prev = fonts
-                        .get(idx)
-                        .ok_or_else(|| "bundle font atlas index out of range".to_owned())?;
-                    (
-                        prev.glyphs.clone(),
-                        prev.segments.clone(),
-                        prev.metrics.clone(),
-                        prev.compact.clone(),
+                    Arc::clone(
+                        &fonts
+                            .get(idx)
+                            .ok_or_else(|| "bundle font atlas index out of range".to_owned())?
+                            .atlas,
                     )
                 }
-                1 => (r.field_data()?, r.field_data()?, r.field_data()?, None),
+                1 => Arc::new(BundledAtlas::Fields {
+                    glyphs: r.field_data()?,
+                    segments: r.field_data()?,
+                    metrics: r.field_data()?,
+                }),
                 2 => {
                     let compact = entelechy_formats::font::CompactFont::read_from(&mut r.rest)?;
-                    let (glyphs, segments, metrics) = compact.to_fields()?;
-                    (glyphs, segments, metrics, Some(compact))
+                    Arc::new(BundledAtlas::Compact(compact))
                 }
                 other => return Err(format!("unknown bundled font tag {other}")),
             };
@@ -62,10 +71,7 @@ impl Bundle {
                 node,
                 codes,
                 outputs,
-                glyphs,
-                segments,
-                metrics,
-                compact,
+                atlas,
             });
         }
         if !r.rest.is_empty() {
@@ -74,6 +80,34 @@ impl Bundle {
                 r.rest.len()
             ));
         }
+        drop(r);
+
+        let mut staged: Vec<Option<(String, FieldData)>> = Vec::with_capacity(input_slices.len());
+        staged.resize_with(input_slices.len(), || None);
+        let mut inputs = Vec::with_capacity(input_slices.len());
+        let mut pending = input_slices
+            .into_iter()
+            .enumerate()
+            .map(Some)
+            .collect::<Vec<_>>();
+        for pass_large in [false, true] {
+            for entry in &mut pending {
+                let is_large = entry
+                    .as_ref()
+                    .is_some_and(|(_, (_, _, _, raw))| (raw.len() as u64) >= COPY_LEAST);
+                if is_large == pass_large
+                    && let Some((idx, (name, schema, domain, raw))) = entry.take()
+                {
+                    let data = decode_field_data(schema, domain, raw)?;
+                    staged[idx] = Some((name, data));
+                }
+            }
+        }
+        drop(pending);
+        for slot in staged {
+            inputs.push(slot.expect("every input slice decoded"));
+        }
+
         Ok(Self {
             modules,
             graph,
@@ -715,7 +749,7 @@ impl<'a> Reader<'a> {
         })
     }
 
-    fn field_data(&mut self) -> Result<FieldData, String> {
+    fn field_slice(&mut self) -> Result<(Schema, Domain, &'a [u8]), String> {
         let schema: Schema = self.str()?.parse()?;
         let domain = self.domain()?;
         let expected = domain
@@ -729,12 +763,23 @@ impl<'a> Reader<'a> {
             ));
         }
         let raw = self.bytes(byte_len)?;
-        let mut words = Vec::with_capacity(byte_len.div_ceil(4));
-        for chunk in raw.chunks(4) {
-            let mut buf = [0u8; 4];
-            buf[..chunk.len()].copy_from_slice(chunk);
-            words.push(u32::from_le_bytes(buf));
-        }
-        FieldData::from_storage(schema, domain, words).map_err(|e| e.to_string())
+        Ok((schema, domain, raw))
     }
+
+    fn field_data(&mut self) -> Result<FieldData, String> {
+        let (schema, domain, raw) = self.field_slice()?;
+        decode_field_data(schema, domain, raw)
+    }
+}
+
+fn decode_field_data(schema: Schema, domain: Domain, raw: &[u8]) -> Result<FieldData, String> {
+    let mut words = Vec::with_capacity(raw.len().div_ceil(4));
+    let (chunks, rem) = raw.as_chunks::<4>();
+    words.extend(chunks.iter().map(|&b| u32::from_le_bytes(b)));
+    if !rem.is_empty() {
+        let mut tail = [0u8; 4];
+        tail[..rem.len()].copy_from_slice(rem);
+        words.push(u32::from_le_bytes(tail));
+    }
+    FieldData::from_storage(schema, domain, words).map_err(|e| e.to_string())
 }
