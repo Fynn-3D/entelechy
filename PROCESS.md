@@ -103,7 +103,7 @@ verified, limits included.
 Local-commit authorization is not authorization to push, merge, or release.
 Pushing and opening a PR need a configured remote and explicit permission;
 merging back to `main` happens on the user's word, a fast-forward. Never
-force-push or rewrite history without being asked. `origin` is the private
+force-push or rewrite history without being asked. `origin` is the public
 GitHub repository `Fynn-3D/entelechy`; its CI workflow runs when started by hand,
 until a release spans platforms. Commit as the repository's configured
 identity. The conversation may be in any language; everything written into

@@ -31,7 +31,7 @@ Verified surface, as of `main`:
 
 ## Next
 
-No release is planned; `v0.0.2-rc.3` is the last tag.
+No release is planned; `v0.1.0` is the last tag.
 
 Open:
 
