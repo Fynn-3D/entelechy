@@ -47,7 +47,7 @@ pub(crate) struct Spare {
 /// How many buffers the pile holds, and how many bytes; beyond that they
 /// return to the driver. The byte bound holds a frame of ten million
 /// triangles drawn at 4K.
-pub(crate) const SPARE_BUFFERS: usize = 256;
+pub(crate) const SPARE_BUFFERS: usize = 384;
 
 pub(crate) const SPARE_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -342,6 +342,7 @@ impl GpuBackend {
     /// once that run is given to the device ([`Spare::let_go`]). Made while
     /// the run holds the backend's lock, so no other run's submission
     /// destroys it first.
+    #[allow(dead_code)]
     pub(crate) fn run_buffer(
         &self,
         label: &str,
@@ -350,6 +351,22 @@ impl GpuBackend {
     ) -> wgpu::Buffer {
         let buffer = self.buffer(label, contents, usage);
         self.spare.let_go(buffer.clone());
+        buffer
+    }
+
+    /// A uniform buffer taken from [`Spare`] and filled with `contents`; the
+    /// caller returns it to [`Spare::keep`] once every pass of the submission
+    /// has taken its own buffer.
+    pub(crate) fn take_uniform(&self, contents: &[u8]) -> wgpu::Buffer {
+        let size = (contents.len().max(16) as u64).div_ceil(16) * 16;
+        let buffer = self.spare.take(
+            &self.device,
+            size,
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        );
+        if !contents.is_empty() {
+            self.queue.write_buffer(&buffer, 0, contents);
+        }
         buffer
     }
 

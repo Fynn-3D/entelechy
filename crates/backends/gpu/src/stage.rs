@@ -8,36 +8,71 @@ use super::*;
 /// a large Field goes up in pieces, never copied whole.
 const WRITE_WORDS: usize = 1 << 18;
 
+/// Upload scratch capacity kept warm between dispatches (`256 KiB`).
+const KEPT_UPLOAD_BYTES: usize = 256 * 1024;
+
+/// Reusable staging buffers owned by [`GpuBackend`] and used under
+/// [`GpuBackend::lock`].
+#[derive(Default)]
+pub(crate) struct StageScratch {
+    context: Vec<u8>,
+    params: Vec<u8>,
+    words: Vec<u32>,
+    upload: Vec<u8>,
+}
+
 impl GpuBackend {
     /// Writes `words` to `buffer` from word `at` on, queued for the next
     /// submission; the queue copies each piece as it is written.
     pub(crate) fn write_words(&self, buffer: &wgpu::Buffer, at: usize, words: &[u32]) {
-        let mut bytes = Vec::with_capacity(words.len().min(WRITE_WORDS) * 4);
+        if words.is_empty() {
+            return;
+        }
+        let mut scratch = self
+            .staging
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         for (k, piece) in words.chunks(WRITE_WORDS).enumerate() {
-            bytes.clear();
-            bytes.extend(piece.iter().flat_map(|w| w.to_le_bytes()));
+            let byte_len = piece.len() * 4;
+            scratch.upload.resize(byte_len, 0);
+            for (dst, &word) in scratch.upload.chunks_exact_mut(4).zip(piece) {
+                dst.copy_from_slice(&word.to_le_bytes());
+            }
             self.uploaded
-                .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                .fetch_add(byte_len as u64, std::sync::atomic::Ordering::Relaxed);
             let offset = (at + k * WRITE_WORDS) as u64 * 4;
-            self.queue.write_buffer(buffer, offset, &bytes);
+            self.queue.write_buffer(buffer, offset, &scratch.upload);
+        }
+        if scratch.upload.capacity() > KEPT_UPLOAD_BYTES {
+            scratch.upload = Vec::new();
         }
     }
 }
 
-pub(crate) fn param_bytes(params: &[Value]) -> Vec<u8> {
+fn fill_param_bytes(params: &[Value], words: &mut Vec<u32>, bytes: &mut Vec<u8>) {
     // Each parameter's words from a `vec4<u32>` slot of its own, as many
     // slots as they fill (`wgsl::param_slots`).
-    let mut bytes = Vec::with_capacity(params.len().max(1) * 16);
+    bytes.clear();
+    bytes.reserve(params.len().max(1) * 16);
     for value in params {
-        let mut words = value.words();
-        words.resize(words.len().div_ceil(4).max(1) * 4, 0);
-        for word in words {
+        words.clear();
+        value.push_words(words);
+        let padded = words.len().div_ceil(4).max(1) * 4;
+        words.resize(padded, 0);
+        for &word in words.iter() {
             bytes.extend_from_slice(&word.to_le_bytes());
         }
     }
     if bytes.is_empty() {
         bytes.resize(16, 0);
     }
+}
+
+#[allow(dead_code)]
+pub(crate) fn param_bytes(params: &[Value]) -> Vec<u8> {
+    let mut words = Vec::new();
+    let mut bytes = Vec::new();
+    fill_param_bytes(params, &mut words, &mut bytes);
     bytes
 }
 
@@ -92,6 +127,9 @@ pub(crate) fn outputs_fit(
     domain: entelechy_abi::Domain,
     scope: &Scope<'_>,
 ) -> Result<(), ExecutionError> {
+    if module.manifest.outputs.len() == 1 && !wgsl::highs_beside(module) {
+        return Ok(scope.can_hold(&[(&module.manifest.outputs[0].ty.schema, domain)])?);
+    }
     let mut fields: Vec<_> = module
         .manifest
         .outputs
@@ -320,69 +358,33 @@ impl GpuBackend {
         timing: Option<&Timing>,
     ) -> Result<Staged, ExecutionError> {
         let element_count = domain.count();
-        // Context head (see `wgsl::CONTEXT_HEAD`), then one [w, h, d, 0] per
-        // input; extents and the fold are the bits of `u32`s.
-        let input = &invocation.context.input;
-        let mut context = vec![
-            f32::from_bits(domain.width()),
-            f32::from_bits(domain.height()),
-            invocation.context.float_time(),
-            input.button_bits() as f32,
-            input.pointer[0],
-            input.pointer[1],
-            f32::from_bits(domain.depth()),
-            invocation.context.rate,
-        ];
-        context.extend(input.key_words().iter().map(|word| f32::from_bits(*word)));
-        let window = invocation.context.window;
-        context.extend_from_slice(&[input.wheel[0], input.wheel[1], window[0], window[1]]);
         let (groups_x, groups_y, groups_z, fold) = match module.manifest.mode {
             Mode::Group { size } => wgsl::group_dispatch(domain, size),
             _ => wgsl::dispatch(domain),
         };
-        // The third word is a one the shader compiler cannot see through
-        // (`wgsl::OPAQUE_ONE`); the fourth is spare.
-        context.extend_from_slice(&[invocation.context.scale, f32::from_bits(fold), 1.0, 0.0]);
-        // The pad: two sticks in one vec4, the triggers and how many pads
-        // are connected in the next, with the samples the sound device
-        // holds, the bits of a `u32`.
-        let sticks = input.sticks;
-        context.extend_from_slice(&[sticks[0][0], sticks[0][1], sticks[1][0], sticks[1][1]]);
-        context.extend_from_slice(&[
-            sticks[2][0],
-            sticks[2][1],
-            input.pads as f32,
-            f32::from_bits(invocation.context.queued.min(i32::MAX as u32)),
-        ]);
-        // The characters typed, four a slot.
-        context.extend(input.typed_words().iter().map(|c| f32::from_bits(*c)));
         // Inputs: bind resident buffers directly; upload the rest once and
         // leave them resident.
         let mut input_buffers: Vec<wgpu::Buffer> = Vec::with_capacity(invocation.inputs.len());
+        let mut input_extents: Vec<entelechy_abi::Domain> =
+            Vec::with_capacity(invocation.inputs.len());
         // A memory's steps write it, so the bound buffer is a copy of the
         // input's, and that copy is the memory's output afterwards.
         let mut memory_outputs: Vec<(usize, wgpu::Buffer, entelechy_abi::Domain)> = Vec::new();
         let mut copies: Vec<(wgpu::Buffer, wgpu::Buffer, u64)> = Vec::new();
         for (index, handle) in invocation.inputs.iter().enumerate() {
             let extent = scope.size(*handle)?;
-            context.extend_from_slice(&[
-                f32::from_bits(extent.width()),
-                f32::from_bits(extent.height()),
-                f32::from_bits(extent.depth()),
-                0.0,
-            ]);
+            input_extents.push(extent);
             let bound = self.bind_input(scope, *handle)?;
             let port = &module.manifest.inputs[index];
             if module.manifest.memories.contains(&port.name) {
                 let size = (port.ty.schema.storage_words(extent.count()) * 4) as u64;
-                let copy = self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("memory"),
-                    size: size.max(16).div_ceil(16) * 16,
-                    usage: wgpu::BufferUsages::STORAGE
+                let copy = self.spare.take(
+                    &self.device,
+                    size.max(16).div_ceil(16) * 16,
+                    wgpu::BufferUsages::STORAGE
                         | wgpu::BufferUsages::COPY_SRC
                         | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
+                );
                 // Recorded below, into the same encoder as the pass and
                 // before it, once the uniforms are settled.
                 copies.push((bound, copy.clone(), size));
@@ -395,13 +397,14 @@ impl GpuBackend {
         // What the pass binds for its inputs: each its own, except packed ones,
         // copied into one buffer before it runs, each at the word offset the
         // parameters carry after their own.
-        let mut bound_inputs: Vec<(u32, wgpu::Buffer)> = Vec::new();
+        let mut bound_inputs: Vec<(u32, wgpu::Buffer)> =
+            Vec::with_capacity(input_buffers.len() + 1);
         let mut packs: Vec<(wgpu::Buffer, u64, u64)> = Vec::new();
         let mut offsets: Vec<u32> = Vec::new();
         let mut packed_words = 0u64;
         for (index, buffer) in input_buffers.iter().enumerate() {
             if pipeline.packed.contains(&index) {
-                let extent = scope.size(invocation.inputs[index])?;
+                let extent = input_extents[index];
                 let words = module.manifest.inputs[index]
                     .ty
                     .schema
@@ -419,27 +422,89 @@ impl GpuBackend {
             }
         }
         let pack = (!packs.is_empty()).then(|| {
-            self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("packed inputs"),
-                size: (packed_words * 4).max(16).div_ceil(16) * 16,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
+            self.spare.take(
+                &self.device,
+                (packed_words * 4).max(16).div_ceil(16) * 16,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            )
         });
         if let Some(pack) = &pack {
             bound_inputs.push((wgsl::PACKED_BINDING, pack.clone()));
         }
-        let context_bytes: Vec<u8> = context.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let mut params_bytes = param_bytes(&invocation.params);
-        if !offsets.is_empty() {
-            // The offsets start at the first slot after the parameters'.
-            params_bytes.truncate(wgsl::param_slots(module).1 * 16);
-            for offset in &offsets {
-                params_bytes.extend_from_slice(&offset.to_le_bytes());
+        // Context head (see `wgsl::CONTEXT_HEAD`), then one [w, h, d, 0] per
+        // input; extents and the fold are the bits of `u32`s. Built after
+        // `bind_input` so `write_words` is done with `self.staging`.
+        let (context_buffer, params_buffer) = {
+            let mut scratch = self
+                .staging
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let StageScratch {
+                context,
+                params,
+                words,
+                ..
+            } = &mut *scratch;
+            context.clear();
+            context.reserve((wgsl::CONTEXT_HEAD + input_extents.len() * 4) * 4);
+            let push_u32 = |buf: &mut Vec<u8>, v: u32| buf.extend_from_slice(&v.to_le_bytes());
+            let push_f32 = |buf: &mut Vec<u8>, v: f32| buf.extend_from_slice(&v.to_le_bytes());
+            let input = &invocation.context.input;
+            push_u32(context, domain.width());
+            push_u32(context, domain.height());
+            push_f32(context, invocation.context.float_time());
+            push_f32(context, input.button_bits() as f32);
+            push_f32(context, input.pointer[0]);
+            push_f32(context, input.pointer[1]);
+            push_u32(context, domain.depth());
+            push_f32(context, invocation.context.rate);
+            for &word in &input.key_words() {
+                push_u32(context, word);
             }
-            params_bytes.resize(params_bytes.len().div_ceil(16) * 16, 0);
-        }
-        let (context_buffer, params_buffer) = self.uniform_buffers(&context_bytes, &params_bytes);
+            let window = invocation.context.window;
+            push_f32(context, input.wheel[0]);
+            push_f32(context, input.wheel[1]);
+            push_f32(context, window[0]);
+            push_f32(context, window[1]);
+            // The third word is a one the shader compiler cannot see through
+            // (`wgsl::OPAQUE_ONE`); the fourth is spare.
+            push_f32(context, invocation.context.scale);
+            push_u32(context, fold);
+            push_f32(context, 1.0);
+            push_f32(context, 0.0);
+            // The pad: two sticks in one vec4, the triggers and how many pads
+            // are connected in the next, with the samples the sound device
+            // holds, the bits of a `u32`.
+            let sticks = input.sticks;
+            push_f32(context, sticks[0][0]);
+            push_f32(context, sticks[0][1]);
+            push_f32(context, sticks[1][0]);
+            push_f32(context, sticks[1][1]);
+            push_f32(context, sticks[2][0]);
+            push_f32(context, sticks[2][1]);
+            push_f32(context, input.pads as f32);
+            push_u32(context, invocation.context.queued.min(i32::MAX as u32));
+            // The characters typed, four a slot.
+            for &word in &input.typed_words() {
+                push_u32(context, word);
+            }
+            for extent in &input_extents {
+                push_u32(context, extent.width());
+                push_u32(context, extent.height());
+                push_u32(context, extent.depth());
+                push_u32(context, 0);
+            }
+            fill_param_bytes(&invocation.params, words, params);
+            if !offsets.is_empty() {
+                // The offsets start at the first slot after the parameters'.
+                params.truncate(wgsl::param_slots(module).1 * 16);
+                for offset in &offsets {
+                    params.extend_from_slice(&offset.to_le_bytes());
+                }
+                params.resize(params.len().div_ceil(16) * 16, 0);
+            }
+            self.uniform_buffers(context, params)
+        };
         let output_schema = &module.manifest.outputs[0].ty.schema;
         let output_words = output_schema.value_words();
         // A scatter's map pass stores a pair per source element; the
@@ -574,10 +639,8 @@ impl GpuBackend {
         // written before this submission's passes run.
         if let Some((failure, _)) = &failure {
             let limit = entelechy_rules::Run::new(scope.work()).limit();
-            let record: Vec<u8> = [0u32, 0, limit, 0, 0, 0, 0, 0]
-                .iter()
-                .flat_map(|word| word.to_le_bytes())
-                .collect();
+            let mut record = [0u8; 32];
+            record[8..12].copy_from_slice(&limit.to_le_bytes());
             self.queue.write_buffer(failure, 0, &record);
         }
         // A narrow output whose elements share words is stored by atomic
@@ -636,12 +699,9 @@ impl GpuBackend {
                     wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 );
                 let limit = entelechy_rules::Run::new(scope.work()).limit();
-                let record: Vec<u8> = [0u32, 0, limit, 0, 0, 0, 0, 0]
-                    .iter()
-                    .flat_map(|word| word.to_le_bytes())
-                    .collect();
+                let mut record = [0u8; 32];
+                record[8..12].copy_from_slice(&limit.to_le_bytes());
                 self.queue.write_buffer(&counted, 0, &record);
-                self.spare.let_go(counted.clone());
                 counted
             });
             let entries: Vec<wgpu::BindGroupEntry> = entries
@@ -666,6 +726,9 @@ impl GpuBackend {
             pass.set_pipeline(&entry.0);
             pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(groups_x, groups_y, groups_z);
+            if let Some(counted) = counted {
+                self.spare.keep(counted, None);
+            }
         }
         Ok(Staged {
             encoder,

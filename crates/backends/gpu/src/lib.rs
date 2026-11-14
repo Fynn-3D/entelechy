@@ -95,6 +95,9 @@ pub struct GpuBackend {
     /// What those buffers were last given, so a node staged with the same
     /// context and parameters writes nothing.
     written: Mutex<(Vec<u8>, Vec<u8>)>,
+    /// Reusable byte and word buffers for staging context, parameters, and
+    /// Host uploads under [`GpuBackend::lock`].
+    staging: Mutex<StageScratch>,
     /// Whether an execution waits for the device before it returns, so a
     /// timing measures the work. Off, only an observation waits.
     measured: std::sync::atomic::AtomicBool,
@@ -289,6 +292,7 @@ impl GpuBackend {
             lock: Mutex::new(()),
             uniforms: Mutex::new(None),
             written: Mutex::new((Vec::new(), Vec::new())),
+            staging: Mutex::new(StageScratch::default()),
             raster: OnceLock::new(),
             same: OnceLock::new(),
             spare: Spare::default(),
@@ -682,15 +686,16 @@ impl Backend for GpuBackend {
         if let Some((word, back)) = &failure {
             encoder.copy_buffer_to_buffer(word, 0, back, 0, wgsl::FAILURE_BYTES);
         }
-        // The packed inputs' copy is read by this run alone.
-        for (binding, buffer) in &bound_inputs {
-            if *binding == wgsl::PACKED_BINDING {
-                self.spare.let_go(buffer.clone());
-            }
-        }
         let scopes = Scopes::push(&self.device);
         let timing = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
         let submission = self.submit(encoder.finish());
+        // The packed inputs' copy is read by this run alone and goes back to
+        // the pile now that its submission is queued.
+        for (binding, buffer) in &bound_inputs {
+            if *binding == wgsl::PACKED_BINDING {
+                self.spare.keep(buffer.clone(), None);
+            }
+        }
         let submitted = submission.clone();
         // One queue runs submissions in order, so only observation waits; under
         // `set_measured` this call waits, so its time is the work.

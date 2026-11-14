@@ -45,19 +45,18 @@ impl GpuBackend {
         // The first time reads the input it was given and writes the
         // first of the two; every time after reads what the one before
         // wrote and writes the other.
-        let spare = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("repeat"),
-            size: (module.manifest.outputs[0]
+        let spare = self.spare.take(
+            &self.device,
+            (module.manifest.outputs[0]
                 .ty
                 .schema
                 .storage_words(element_count)
                 * 4)
             .max(16) as u64,
-            usage: wgpu::BufferUsages::STORAGE
+            wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        );
         let (groups_x, groups_y, groups_z, _) = wgsl::dispatch(domain);
         // Two buffers take turns: what a time wrote the next reads, and what it
         // read is free for the time after. The Field the run was given is only
@@ -133,7 +132,9 @@ impl GpuBackend {
         self.submit(encoder.finish());
         // The other of the two goes to the pile for a later output.
         self.spare.keep(other, None);
-        let _ = self.device.poll(wgpu::PollType::Poll);
+        if self._waiter.is_none() {
+            let _ = self.device.poll(wgpu::PollType::Poll);
+        }
         scopes
             .pop(self.wait, "")
             .map_err(|error| ExecutionError::Device(error.said()))?;
@@ -172,8 +173,11 @@ impl GpuBackend {
         let per_block = entelechy_rules::prefix::block(count);
         let blocks = count.div_ceil(per_block);
         let plan: [u32; 4] = [count as u32, per_block as u32, blocks as u32, 0];
-        let plan_bytes: Vec<u8> = plan.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let plan_buffer = self.run_buffer("prefix plan", &plan_bytes, wgpu::BufferUsages::UNIFORM);
+        let mut plan_bytes = [0u8; 16];
+        for (slot, word) in plan_bytes.chunks_exact_mut(4).zip(plan) {
+            slot.copy_from_slice(&word.to_le_bytes());
+        }
+        let plan_buffer = self.take_uniform(&plan_bytes);
         let sums = self.spare.take(
             &self.device,
             ((blocks * output_words * 4) as u64).max(16).div_ceil(16) * 16,
@@ -200,7 +204,7 @@ impl GpuBackend {
             (&prefix.offsets, count as u32),
         ];
         for (index, ((pipeline, layout), threads)) in passes.iter().enumerate() {
-            let mut entries = vec![
+            let base_entries = [
                 wgpu::BindGroupEntry {
                     binding: wgsl::PREFIX_PLAN_BINDING,
                     resource: plan_buffer.as_entire_binding(),
@@ -214,26 +218,34 @@ impl GpuBackend {
                     resource: sums.as_entire_binding(),
                 },
             ];
-            if let (Some((out_highs, sum_highs)), Some(failure)) = (&highs, failure) {
-                entries.extend([
-                    wgpu::BindGroupEntry {
-                        binding: wgsl::PREFIX_OUT_HIGHS_BINDING,
-                        resource: out_highs.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: wgsl::PREFIX_SUMS_HIGHS_BINDING,
-                        resource: sum_highs.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: wgsl::FAILURE_BINDING,
-                        resource: failure.as_entire_binding(),
-                    },
-                ]);
-            }
+            let full_entries;
+            let entries: &[wgpu::BindGroupEntry] =
+                if let (Some((out_highs, sum_highs)), Some(failure)) = (&highs, failure) {
+                    full_entries = [
+                        base_entries[0].clone(),
+                        base_entries[1].clone(),
+                        base_entries[2].clone(),
+                        wgpu::BindGroupEntry {
+                            binding: wgsl::PREFIX_OUT_HIGHS_BINDING,
+                            resource: out_highs.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: wgsl::PREFIX_SUMS_HIGHS_BINDING,
+                            resource: sum_highs.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: wgsl::FAILURE_BINDING,
+                            resource: failure.as_entire_binding(),
+                        },
+                    ];
+                    &full_entries
+                } else {
+                    &base_entries
+                };
             let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("entelechy prefix"),
                 layout,
-                entries: &entries,
+                entries,
             });
             let last = index + 1 == passes.len();
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -246,6 +258,7 @@ impl GpuBackend {
             let (x, y) = wgsl::folded(threads.div_ceil(wgsl::PREFIX_WORKGROUP));
             pass.dispatch_workgroups(x, y, 1);
         }
+        self.spare.keep(plan_buffer, None);
         self.spare.keep(sums, None);
         if let Some((out_highs, sum_highs)) = highs {
             self.spare.keep(out_highs, None);
@@ -289,13 +302,14 @@ impl GpuBackend {
         );
         let mut current = final_buffer;
         let mut next = other;
+        let (count_binding, in_binding, out_binding) = wgsl::reduce_bindings(module);
+        let mut used_uniforms = Vec::new();
         while count > 1 {
-            let level: [u32; 4] = [count as u32, 0, 0, 0];
-            let level_bytes: Vec<u8> = level.iter().flat_map(|v| v.to_le_bytes()).collect();
-            let level_buffer =
-                self.run_buffer("reduce count", &level_bytes, wgpu::BufferUsages::UNIFORM);
-            let (count_binding, in_binding, out_binding) = wgsl::reduce_bindings(module);
-            let mut fold_entries = vec![
+            let mut level_bytes = [0u8; 16];
+            level_bytes[..4].copy_from_slice(&(count as u32).to_le_bytes());
+            let level_buffer = self.take_uniform(&level_bytes);
+            let mut fold_entries = Vec::with_capacity(bound_inputs.len() + 6);
+            fold_entries.extend([
                 wgpu::BindGroupEntry {
                     binding: wgsl::CONTEXT_BINDING,
                     resource: context_buffer.as_entire_binding(),
@@ -304,7 +318,7 @@ impl GpuBackend {
                     binding: wgsl::PARAMS_BINDING,
                     resource: params_buffer_for_reduce.as_entire_binding(),
                 },
-            ];
+            ]);
             for (binding, buffer) in bound_inputs {
                 fold_entries.push(wgpu::BindGroupEntry {
                     binding: *binding,
@@ -336,6 +350,8 @@ impl GpuBackend {
                 layout: reduce_layout,
                 entries: &fold_entries,
             });
+            drop(fold_entries);
+            used_uniforms.push(level_buffer);
             // Every level closes the window; the last one to write is
             // the end of the node's work.
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -351,9 +367,12 @@ impl GpuBackend {
             count = u64::from(ahead);
             std::mem::swap(&mut current, &mut next);
         }
-        // One of the two is the answer and becomes the Field; the other goes
-        // back to the pile. What read it was submitted before whatever writes
-        // it next, and one queue runs in order.
+        // One of the two is the answer and becomes the Field; the other and
+        // the levels' counts go back to the pile. What read them was submitted
+        // before whatever writes them next, and one queue runs in order.
+        for buffer in used_uniforms {
+            self.spare.keep(buffer, None);
+        }
         self.spare.keep(next, None);
         current
     }
@@ -537,13 +556,12 @@ impl GpuBackend {
         };
         let over_target = (target_count as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
         let over_sources = (element_count as u32).div_ceil(wgsl::SCATTER_WORKGROUP);
-        let storage = |label: &str, words: usize| {
-            self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: (words as u64 * 4).max(16).div_ceil(16) * 16,
-                usage: wgpu::BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            })
+        let storage = |words: usize, usage: wgpu::BufferUsages| {
+            self.spare.take(
+                &self.device,
+                (words as u64 * 4).max(16).div_ceil(16) * 16,
+                usage | wgpu::BufferUsages::STORAGE,
+            )
         };
         let common = [
             wgpu::BindGroupEntry {
@@ -588,11 +606,8 @@ impl GpuBackend {
                 whole,
             } => {
                 let padded = element_count.next_power_of_two().max(1);
-                let keys_buffer = storage("scatter sort keys", padded);
-                let order_buffer = storage("scatter sort order", padded);
-                // Read by this run alone.
-                self.spare.let_go(keys_buffer.clone());
-                self.spare.let_go(order_buffer.clone());
+                let keys_buffer = storage(padded, wgpu::BufferUsages::empty());
+                let order_buffer = storage(padded, wgpu::BufferUsages::empty());
                 // One parameter record per dispatch, at the alignment
                 // dynamic offsets need: the padded count, then k and j.
                 let mut records: Vec<[u32; 4]> = vec![[padded as u32, 0, 0, 0]];
@@ -617,8 +632,7 @@ impl GpuBackend {
                         bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
                     }
                 }
-                let params =
-                    self.run_buffer("scatter sort params", &bytes, wgpu::BufferUsages::UNIFORM);
+                let params = self.take_uniform(&bytes);
                 let params_entry = wgpu::BindGroupEntry {
                     binding: wgsl::SCATTER_SORT_PARAMS_BINDING,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
@@ -682,6 +696,9 @@ impl GpuBackend {
                     }
                 }
                 dispatch(encoder, fold, &fold_group, &[0], over_target);
+                self.spare.keep(keys_buffer, None);
+                self.spare.keep(order_buffer, None);
+                self.spare.keep(params, None);
             }
             Scatter::Parallel {
                 apply,
@@ -690,13 +707,15 @@ impl GpuBackend {
                 totals,
                 halves,
             } => {
-                // Winners for `last`, zeroed as every new buffer is; a
-                // token buffer where the pass has none to record.
+                // Winners for `last`, cleared before the pass records into it;
+                // a token buffer where the pass has none to record.
                 let winners = storage(
-                    "scatter winners",
                     if gather.is_some() { target_count } else { 1 },
+                    wgpu::BufferUsages::COPY_DST,
                 );
-                self.spare.let_go(winners.clone());
+                if gather.is_some() {
+                    encoder.clear_buffer(&winners, 0, None);
+                }
                 let with_winners: Vec<wgpu::BindGroupEntry> = common
                     .iter()
                     .cloned()
@@ -753,6 +772,7 @@ impl GpuBackend {
                     );
                     dispatch(encoder, &totals.check, &group, &[], over_target);
                 }
+                self.spare.keep(winners, None);
             }
         }
         // The pairs and the high words go back to the pile: what read them

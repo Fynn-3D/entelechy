@@ -131,7 +131,9 @@ impl GpuBackend {
     ) {
         let _ = submission;
         if !self.measured() {
-            let _ = self.device.poll(wgpu::PollType::Poll);
+            if self._waiter.is_none() {
+                let _ = self.device.poll(wgpu::PollType::Poll);
+            }
             return;
         }
         let _ = self.wait.drain(&self.device, &self.queue);

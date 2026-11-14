@@ -22,10 +22,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) g
 }
 ";
 
-/// The comparing pass, built once per backend.
+/// The comparing pass and its scratch buffers, built once per backend and
+/// used under [`GpuBackend::lock`].
 pub(crate) struct SamePipeline {
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
+    differs: wgpu::Buffer,
+    count: wgpu::Buffer,
+    back: wgpu::Buffer,
 }
 
 pub(crate) fn build(device: &wgpu::Device, wait: Wait) -> Result<SamePipeline, String> {
@@ -66,10 +70,39 @@ pub(crate) fn build(device: &wgpu::Device, wait: Wait) -> Result<SamePipeline, S
         compilation_options: Default::default(),
         cache: None,
     });
+    let buffer = |label: &'static str, size: u64, usage: wgpu::BufferUsages| {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage,
+            mapped_at_creation: false,
+        })
+    };
+    let differs = buffer(
+        "entelechy same",
+        4,
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+    );
+    let count = buffer(
+        "entelechy same count",
+        16,
+        wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    );
+    let back = buffer(
+        "entelechy same back",
+        4,
+        wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+    );
     if let Some(error) = wait.block_on(guard.pop()) {
         return Err(format!("same pipeline: {}", device_error(&error)));
     }
-    Ok(SamePipeline { pipeline, layout })
+    Ok(SamePipeline {
+        pipeline,
+        layout,
+        differs,
+        count,
+        back,
+    })
 }
 
 impl GpuBackend {
@@ -90,36 +123,9 @@ impl GpuBackend {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let words = u32::try_from(byte_len / 4).map_err(|_| "a Field too long to compare")?;
-        let buffer = |label: &'static str, size: u64, usage: wgpu::BufferUsages| {
-            self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                usage,
-                mapped_at_creation: false,
-            })
-        };
-        let differs = buffer(
-            "entelechy same",
-            4,
-            wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-        );
-        let count = buffer(
-            "entelechy same count",
-            16,
-            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        );
-        let back = buffer(
-            "entelechy same back",
-            4,
-            wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        );
-        self.queue.write_buffer(
-            &count,
-            0,
-            &[words.to_le_bytes(), [0; 4], [0; 4], [0; 4]].concat(),
-        );
+        let mut count_bytes = [0u8; 16];
+        count_bytes[..4].copy_from_slice(&words.to_le_bytes());
+        self.queue.write_buffer(&same.count, 0, &count_bytes);
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("entelechy same"),
             layout: &same.layout,
@@ -134,11 +140,11 @@ impl GpuBackend {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: differs.as_entire_binding(),
+                    resource: same.differs.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: count.as_entire_binding(),
+                    resource: same.count.as_entire_binding(),
                 },
             ],
         });
@@ -147,7 +153,7 @@ impl GpuBackend {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("entelechy same"),
             });
-        encoder.clear_buffer(&differs, 0, None);
+        encoder.clear_buffer(&same.differs, 0, None);
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("entelechy same"),
@@ -157,26 +163,23 @@ impl GpuBackend {
             pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(words.div_ceil(256).clamp(1, 65535), 1, 1);
         }
-        encoder.copy_buffer_to_buffer(&differs, 0, &back, 0, 4);
-        // Read by this comparison alone.
-        self.spare.let_go(differs);
-        self.spare.let_go(count);
-        self.submit(encoder.finish());
+        encoder.copy_buffer_to_buffer(&same.differs, 0, &same.back, 0, 4);
+        let submitted = self.submit(encoder.finish());
         self.spent
             .time(|| {
                 self.wait
-                    .map_read(&self.device, &self.queue, back.slice(..))
+                    .map_read_after(&self.device, &self.queue, same.back.slice(..), &submitted)
             })
             .map_err(|error| crate::told(&self.heard, error))?;
         let word = {
-            let view = back
+            let view = same
+                .back
                 .slice(..)
                 .get_mapped_range()
                 .map_err(|error| error.to_string())?;
             u32::from_le_bytes([view[0], view[1], view[2], view[3]])
         };
-        back.unmap();
-        crate::wait::discard(back);
+        same.back.unmap();
         Ok(word == 0)
     }
 }

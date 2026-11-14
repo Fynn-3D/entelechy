@@ -595,6 +595,8 @@ pub(crate) struct RasterPipelines {
     resolve: wgpu::ComputePipeline,
     /// The resolving pass of `native.cover`: keys, not a surface.
     cover: wgpu::ComputePipeline,
+    /// A single unread texel bound when a call carries no cutout mask.
+    empty_mask: wgpu::Buffer,
     /// Whether the draw is indexed: see [`GpuBackend::primitive_index`].
     indexed: bool,
     /// Whether the sorting pass draws small triangles itself: where the
@@ -813,6 +815,12 @@ fn build(
         &resolve_module,
         "cover",
     );
+    let empty_mask = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("rasterize mask"),
+        size: 16,
+        usage: wgpu::BufferUsages::STORAGE,
+        mapped_at_creation: false,
+    });
     if let Some(error) = wait.block_on(guard.pop()) {
         return Err(format!(
             "rasterize pipeline: {}",
@@ -830,6 +838,7 @@ fn build(
         resolve_layout,
         resolve,
         cover,
+        empty_mask,
         indexed,
         here,
     })
@@ -921,11 +930,7 @@ pub(crate) fn rasterize(
     };
     let mask_buffer = match mask {
         Some(mask) => gpu.bind_input(scope, mask)?,
-        None => gpu.run_buffer(
-            "rasterize mask",
-            &[0u8; 16],
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        ),
+        None => pipelines.empty_mask.clone(),
     };
     let block_count = triangle_count.div_ceil(BLOCK);
     let blocks_x = block_count.clamp(1, MOST_GROUPS);
@@ -944,8 +949,11 @@ pub(crate) fn rasterize(
         if pipelines.here { SMALL } else { 0 },
         0,
     ];
-    let setup_bytes: Vec<u8> = setup.iter().flat_map(|v| v.to_le_bytes()).collect();
-    let setup_buffer = gpu.run_buffer("rasterize setup", &setup_bytes, wgpu::BufferUsages::UNIFORM);
+    let mut setup_bytes = [0u8; 48];
+    for (slot, word) in setup_bytes.chunks_exact_mut(4).zip(setup) {
+        slot.copy_from_slice(&word.to_le_bytes());
+    }
+    let setup_buffer = gpu.take_uniform(&setup_bytes);
 
     // The keeping pass's buffers, from the pile and back to it.
     let spare = gpu.spare();
@@ -1152,7 +1160,7 @@ pub(crate) fn rasterize(
     for texture in [places, depth] {
         gpu.targets().keep(texture);
     }
-    for buffer in [marks, offsets, indices, rows, args, keys] {
+    for buffer in [setup_buffer, marks, offsets, indices, rows, args, keys] {
         spare.keep(buffer, None);
     }
     Ok(vec![output])
