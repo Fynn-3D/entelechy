@@ -298,7 +298,8 @@ where Entelechy for the web is (the directory holding `bridges/web` and
 `target/page`: a web release, or a checkout that has built it as
 [WebAssembly](#webassembly) says; the current directory by default), and
 `--backend` (`gpu` or `jit`) what runs the scene in the page (by default the
-page chooses the GPU when WebGPU is available, else the JIT). `--hold-pointer`
+page chooses the GPU when WebGPU is available, else the JIT). `--name` sets
+the page's title (otherwise derived from the scene's stem or project folder). `--hold-pointer`
 captures the browser cursor on click and keeps `pointer()` inside the output;
 `--lock-pointer` captures it and steps `pointer()` without bound (Escape
 releases either). The page needs a

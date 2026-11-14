@@ -107,6 +107,12 @@ fn a_page_needs_entelechy_for_the_web_and_a_page_backend() {
     assert_eq!(page::PointerMode::Free.as_str(), "free");
     assert_eq!(page::PointerMode::Hold.as_str(), "hold");
     assert_eq!(page::PointerMode::Lock.as_str(), "lock");
+    assert_eq!(
+        page::default_title(Path::new("examples/voxel/scene.esn")),
+        "voxel"
+    );
+    assert_eq!(page::default_title(Path::new("fps/graph/world.esn")), "fps");
+    assert_eq!(page::default_title(Path::new("demos/harbor.esn")), "harbor");
 }
 
 /// A scene's `font` node baked with `--chars` keeps only the characters

@@ -48,7 +48,8 @@ usage:
       and target/page: a web release, or a checkout that has built it; the
       current directory by default). --backend names what runs it in the
       page (gpu or jit); without it the page chooses the GPU where WebGPU
-      opens, else the JIT. --hold-pointer captures the browser cursor on
+      opens, else the JIT. --name names the page's title (its project or stem
+      by default). --hold-pointer captures the browser cursor on
       click and keeps it inside the output; --lock-pointer captures it and
       steps it without bound (Escape lets either go). --chars and
       --chars-file (each may be given again) name the characters the page's
@@ -163,8 +164,8 @@ fn export(args: &[String]) -> Result<String, String> {
             .map(str::to_ascii_lowercase)
             .unwrap_or_default()
     };
-    if family.is_some() && !matches!(extension(&out).as_str(), "ttf" | "otf" | "woff") {
-        return Err("--name is for a font".into());
+    if family.is_some() && !matches!(extension(&out).as_str(), "ttf" | "otf" | "woff" | "html") {
+        return Err("--name is for a font or a page".into());
     }
     if chars.is_some() && !matches!(extension(&out).as_str(), "ttf" | "otf" | "woff" | "html") {
         return Err("--chars and --chars-file are for a font, or a page's fonts".into());
@@ -186,12 +187,13 @@ fn export(args: &[String]) -> Result<String, String> {
                     scene.display()
                 ));
             }
-            let made = page::page_with_pointer(
+            let made = page::page_with_options(
                 scene,
                 web.as_deref().unwrap_or(Path::new(".")),
                 backend.as_deref(),
                 chars.as_deref(),
                 pointer,
+                family.as_deref(),
             )?;
             std::fs::write(&out, &made.page).map_err(|e| format!("{}: {e}", out.display()))?;
             let mut said = format!(

@@ -178,6 +178,39 @@ pub struct Made {
     pub fonts: Vec<(String, usize, usize)>,
 }
 
+/// Default page title derived from `scene`: the scene's stem, or its owning
+/// directory's name when the stem is the generic entry name `scene` or `world`.
+pub fn default_title(scene: &Path) -> String {
+    let stem = scene
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if matches!(stem.as_str(), "scene" | "world") {
+        let mut dir = scene.parent();
+        while let Some(parent) = dir {
+            let name = parent
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if matches!(name.as_str(), "graph" | "graphs") {
+                dir = parent.parent();
+                continue;
+            }
+            if !name.is_empty() && name != "." && name != ".." {
+                return name;
+            }
+            break;
+        }
+    }
+    stem
+}
+
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 /// `scene` as one page with a free pointer ([`page_with_pointer`]).
 pub fn page(
     scene: &Path,
@@ -185,7 +218,19 @@ pub fn page(
     backend: Option<&str>,
     chars: Option<&str>,
 ) -> Result<Made, String> {
-    page_with_pointer(scene, web, backend, chars, PointerMode::Free)
+    page_with_options(scene, web, backend, chars, PointerMode::Free, None)
+}
+
+/// `scene` as one page with `pointer` handling and its default title
+/// ([`page_with_options`]).
+pub fn page_with_pointer(
+    scene: &Path,
+    web: &Path,
+    backend: Option<&str>,
+    chars: Option<&str>,
+    pointer: PointerMode,
+) -> Result<Made, String> {
+    page_with_options(scene, web, backend, chars, pointer, None)
 }
 
 /// `scene` as one page. `web` is where Entelechy for the web is: the
@@ -194,13 +239,14 @@ pub fn page(
 /// it in the page (`gpu` or `jit`, or `best` when none is named). `chars`,
 /// given, is the characters the scene's font nodes keep; `pointer` says
 /// whether clicking captures the browser cursor (`hold` clamped, `lock`
-/// unbounded).
-pub fn page_with_pointer(
+/// unbounded); `title`, given, names the page instead of [`default_title`].
+pub fn page_with_options(
     scene: &Path,
     web: &Path,
     backend: Option<&str>,
     chars: Option<&str>,
     pointer: PointerMode,
+    title: Option<&str>,
 ) -> Result<Made, String> {
     let backend = match backend {
         None | Some("best") => "best",
@@ -224,12 +270,13 @@ pub fn page_with_pointer(
         String::from_utf8(read(bridge.join("single.html"))?).map_err(|e| e.to_string())?;
     let glue = read(built.join("entelechy_single.js"))?;
     let runtime = read(built.join("entelechy_single_bg.wasm"))?;
-    let title = scene
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let chosen_title = title
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| default_title(scene));
     let mut slots = BTreeMap::new();
-    slots.insert("title", title.replace('&', "&amp;").replace('<', "&lt;"));
+    slots.insert("title", escape_html(&chosen_title));
     slots.insert("backend", backend.to_owned());
     slots.insert("pointer", pointer.as_str().to_owned());
     slots.insert("glue", packed(&glue));
