@@ -108,6 +108,14 @@ if (loaded) {
   } else {
     failures.push("the page still shows that it is loading");
   }
+  // A touch on the page opens its sound worklet from file:// as well.
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x: 16, y: 16, button: "left", clickCount: 1 });
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: 16, y: 16, button: "left", clickCount: 1 });
+  if (await until(10, () => evaluate("Boolean(globalThis.player && globalThis.player.audio && globalThis.player.audio.node)"))) {
+    console.log("page: its sound worklet opened from the disk");
+  } else {
+    failures.push("the page did not open its sound worklet on touch");
+  }
   // Nothing was fetched: every resource the page asked for is itself or made in it.
   const fetched = await evaluate(
     "performance.getEntriesByType('resource').map((entry) => entry.name).filter((name) => !name.startsWith('blob:') && !name.startsWith('data:')).join(' ')",

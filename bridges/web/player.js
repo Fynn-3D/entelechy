@@ -83,6 +83,7 @@ class EntelechySound extends AudioWorkletProcessor {
 }
 registerProcessor("entelechy-sound", EntelechySound);
 `;
+const WORKLET_URL = `data:text/javascript;charset=utf-8,${encodeURIComponent(WORKLET)}`;
 
 class EntelechyPlayer {
   /// Plays `entelechy` (an EntelechyInPage with its scene open) on `canvas`, the
@@ -354,17 +355,30 @@ class EntelechyPlayer {
   /// Opens the sound card at the person's first touch, as a page may; the
   /// play hears of it between frames.
   async startSound() {
-    if (this.audio) return;
-    const context = new AudioContext();
-    this.audio = { context, node: null };
-    const url = URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" }));
-    await context.audioWorklet.addModule(url);
-    const node = new AudioWorkletNode(context, "entelechy-sound", { outputChannelCount: [2] });
-    node.port.onmessage = (event) => (this.held = event.data);
-    node.connect(context.destination);
-    this.audio.node = node;
-    const described = `${context.sampleRate} Hz`;
-    this.hands.push(() => this.entelechy.withText(described, (text) => this.x.entelechy_play_sound_opened(this.session, text)));
+    if (this.audio) {
+      if (this.audio.context.state === "suspended") await this.audio.context.resume();
+      return;
+    }
+    if (this.startingSound) return this.startingSound;
+    this.startingSound = (async () => {
+      const context = new AudioContext();
+      try {
+        await context.audioWorklet.addModule(WORKLET_URL);
+        if (context.state === "suspended") await context.resume();
+        const node = new AudioWorkletNode(context, "entelechy-sound", { outputChannelCount: [2] });
+        node.port.onmessage = (event) => (this.held = event.data);
+        node.connect(context.destination);
+        this.audio = { context, node };
+        const described = `${context.sampleRate} Hz`;
+        this.hands.push(() => this.entelechy.withText(described, (text) => this.x.entelechy_play_sound_opened(this.session, text)));
+      } catch (error) {
+        await context.close().catch(() => {});
+        throw error;
+      } finally {
+        this.startingSound = null;
+      }
+    })();
+    return this.startingSound;
   }
 
   /// Frame after frame, a frame each time the page draws.
@@ -587,15 +601,28 @@ class EntelechyWorkerPlayer {
   /// Opens the sound card at the person's first touch, as a page may, and
   /// hands its worklet's port to the worker, which plays into it.
   async startSound() {
-    if (this.audio) return;
-    const context = new AudioContext();
-    this.audio = { context };
-    const url = URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" }));
-    await context.audioWorklet.addModule(url);
-    const node = new AudioWorkletNode(context, "entelechy-sound", { outputChannelCount: [2] });
-    node.connect(context.destination);
-    this.audio.node = node;
-    this.worker.postMessage({ sound: node.port, rate: context.sampleRate }, [node.port]);
+    if (this.audio) {
+      if (this.audio.context.state === "suspended") await this.audio.context.resume();
+      return;
+    }
+    if (this.startingSound) return this.startingSound;
+    this.startingSound = (async () => {
+      const context = new AudioContext();
+      try {
+        await context.audioWorklet.addModule(WORKLET_URL);
+        if (context.state === "suspended") await context.resume();
+        const node = new AudioWorkletNode(context, "entelechy-sound", { outputChannelCount: [2] });
+        node.connect(context.destination);
+        this.audio = { context, node };
+        this.worker.postMessage({ sound: node.port, rate: context.sampleRate }, [node.port]);
+      } catch (error) {
+        await context.close().catch(() => {});
+        throw error;
+      } finally {
+        this.startingSound = null;
+      }
+    })();
+    return this.startingSound;
   }
 }
 
