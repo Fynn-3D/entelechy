@@ -165,6 +165,14 @@ impl JitBackend {
         flags
             .set("opt_level", "speed")
             .map_err(|error| error.to_string())?;
+        // Frames past one 4 KiB guard page touch each page inline as they
+        // open, matching Windows stack growth without an external helper.
+        flags
+            .set("enable_probestack", "true")
+            .map_err(|error| error.to_string())?;
+        flags
+            .set("probestack_strategy", "inline")
+            .map_err(|error| error.to_string())?;
         let isa = cranelift_native::builder()
             .map_err(|error| error.to_string())?
             .finish(settings::Flags::new(flags))

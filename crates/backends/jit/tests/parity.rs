@@ -1552,3 +1552,113 @@ fn a_counted_group_fails_where_a_lane_first_passes_its_budget() {
         assert_eq!(failed.unwrap_err(), expected, "{}", backend.name());
     }
 }
+
+#[test]
+fn inline_linear_sampling_matches_the_interpreter_at_every_edge() {
+    let source = "kernel test.linear_edges@1 {
+        requires { field.read; field.write; }
+        input rows: Rows<Vec2>;
+        input grid: Grid<Vec4 as unorm8>;
+        input vol: Volume<Vec3>;
+        input coords: Rows<Vec3>;
+        output out: Rows<IVec4>;
+        fn probe(r: Vec2, g: Vec4, v: Vec3) -> IVec4 {
+            return ivec4(bits(r.x), bits(r.y), bits(g.x + g.w), bits(v.x + v.y + v.z));
+        }
+        compute {
+            let p = sample(coords);
+            let r = at_linear(rows, p.x);
+            let g = at_linear(grid, p.xy);
+            let v = at_linear(vol, p);
+            return probe(r, g, v);
+        }
+    }";
+    // Place NaN and infinity in upper cells so zero-weight corners at 0.5
+    // prove untouched neighbors never poison the blend.
+    let rows: Vec<u32> = [
+        (1.25f32, -0.5f32),
+        (f32::NAN, f32::INFINITY),
+        (3.75, 2.0),
+        (-4.0, 0.25),
+    ]
+    .into_iter()
+    .flat_map(|(a, b)| [a.to_bits(), b.to_bits()])
+    .collect();
+    let narrow_schema = entelechy_abi::Schema::pixel()
+        .with_encoding(entelechy_abi::Encoding::Unorm8)
+        .unwrap();
+    let grid_values: Vec<u32> = (0..16 * 4)
+        .map(|i| ((i as f32 * 0.17).sin() * 0.5 + 0.5).to_bits())
+        .collect();
+    let grid_storage = entelechy_abi::FieldData::from_values(
+        narrow_schema.clone(),
+        Domain::Grid(4, 4),
+        &grid_values,
+    )
+    .unwrap()
+    .storage()
+    .to_vec();
+    let mut vol: Vec<u32> = (0..27 * 3)
+        .map(|i| ((i as f32 * 0.31).cos() * 2.5).to_bits())
+        .collect();
+    // Cell (1, 0, 0) holds NaN; at vec3(0.5, 0.5, 0.5) its weight is 0.0.
+    vol[3] = f32::NAN.to_bits();
+    let edge_coords: &[[f32; 3]] = &[
+        [0.5, 0.5, 0.5],
+        [-0.0, 0.0, -2.5],
+        [0.85, 1.35, 2.15],
+        [1.5, 2.5, 0.5],
+        [99.0, 99.0, 99.0],
+        [f32::NAN, 1.25, 0.75],
+        [f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY],
+        [f32::INFINITY, 1.0, 1.0],
+    ];
+    let coords: Vec<u32> = edge_coords
+        .iter()
+        .flat_map(|c| c.map(f32::to_bits))
+        .collect();
+    let (cpu, jit) = both(
+        source,
+        &[
+            (
+                entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float; 2]),
+                Domain::Rows(4),
+                rows,
+            ),
+            (narrow_schema, Domain::Grid(4, 4), grid_storage),
+            (
+                entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float; 3]),
+                Domain::Volume(3, 3, 3),
+                vol,
+            ),
+            (
+                entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float; 3]),
+                Domain::Rows(edge_coords.len() as u32),
+                coords,
+            ),
+        ],
+        vec![],
+        Domain::Rows(edge_coords.len() as u32),
+        Context::default(),
+    );
+    assert_eq!(cpu, jit);
+}
+
+#[test]
+fn multi_page_frames_probe_and_match_the_interpreter() {
+    // 2,048 Vec4s = 32 KiB stack slot (> 4 KiB guard page), exercising inline stack probes.
+    let source = "kernel test.probestack@1 {
+        requires { field.write; }
+        output out: Rows<Float>;
+        compute {
+            let e = element();
+            let table = [each 2048 {
+                let k = index() + e;
+                vec4(float(k), float(k * 2), float(k * 3), float(k * 4))
+            }];
+            return table[(e * 131) % 2048].z + table[2047].x;
+        }
+    }";
+    let (cpu, jit) = both(source, &[], vec![], Domain::Rows(8), Context::default());
+    assert_eq!(cpu, jit);
+}

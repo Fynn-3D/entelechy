@@ -19,7 +19,7 @@ use cranelift_codegen::ir::{
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{ArenaMemoryProvider, JITBuilder, JITModule};
-use cranelift_module::{DataDescription, FuncId, Linkage, Module as _};
+use cranelift_module::{DataDescription, FuncId, Linkage, Module as _, ModuleError};
 use entelechy_abi::{Encoding, Scalar, Type, encoding};
 use entelechy_ir::{BinaryOp, Function, Instruction, Intrinsic, Module, Op, UnaryOp, Validated};
 
@@ -91,12 +91,84 @@ enum Kind {
     Merge,
 }
 
-/// The address space one module's machine code and data may take: reserved,
-/// not committed, so a module takes only the pages it fills.
+/// Maximum address space one module's machine code and data may take.
+/// On Unix `ArenaMemoryProvider` maps with `PROT_NONE` and commits only
+/// touched pages; on Windows `region::alloc` commits the full reservation
+/// up front, so Windows starts from [`initial_reserve`] and grows only if
+/// a module needs more room.
 const MODULE_RESERVE: usize = 1 << 30;
+
+#[cfg(not(target_os = "windows"))]
+fn initial_reserve(_module: &Module) -> usize {
+    MODULE_RESERVE
+}
+
+#[cfg(target_os = "windows")]
+fn initial_reserve(module: &Module) -> usize {
+    estimate_reserve(module)
+}
+
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+fn estimate_reserve(module: &Module) -> usize {
+    const GRANULARITY: usize = 64 * 1024;
+    fn count_body(module: &Module, body: &[Instruction]) -> (usize, usize) {
+        let mut insts = body.len();
+        let mut constructed_words = 0usize;
+        for inst in body {
+            if matches!(inst.op, Op::Construct(_)) {
+                constructed_words =
+                    constructed_words.saturating_add(entelechy_ir::words(&module.structs, inst.ty));
+            }
+            for block in inst.op.blocks() {
+                let (b_insts, b_words) = count_body(module, &block.body);
+                insts = insts.saturating_add(b_insts);
+                constructed_words = constructed_words.saturating_add(b_words);
+            }
+        }
+        (insts, constructed_words)
+    }
+    let mut insts = 0usize;
+    let mut constructed_words = 0usize;
+    for func in module
+        .functions
+        .iter()
+        .chain(std::iter::once(&module.entry))
+        .chain(module.init.as_ref())
+        .chain(module.merge.as_ref())
+    {
+        let (f_insts, f_words) = count_body(module, &func.body);
+        insts = insts.saturating_add(f_insts);
+        constructed_words = constructed_words.saturating_add(f_words);
+    }
+    let raw = GRANULARITY
+        .saturating_add(insts.saturating_mul(128))
+        .saturating_add(constructed_words.saturating_mul(8));
+    let aligned = (raw + GRANULARITY - 1) & !(GRANULARITY - 1);
+    aligned.min(MODULE_RESERVE)
+}
+
+enum CompileFailure {
+    Exhausted(String),
+    Fatal(String),
+}
+
+fn map_module_err(label: &str, error: ModuleError) -> CompileFailure {
+    match error {
+        ModuleError::Allocation { err } => CompileFailure::Exhausted(format!("{label}: {err}")),
+        other => CompileFailure::Fatal(format!("{label}: {other}")),
+    }
+}
 
 /// Compiles the module.
 pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, String> {
+    compile_from_reserve(module, isa, initial_reserve(module))
+}
+
+fn compile_from_reserve(
+    module: &Validated,
+    isa: Arc<dyn TargetIsa>,
+    initial: usize,
+) -> Result<Code, String> {
     // A port keeps every scalar in one encoding, the one generated for.
     for port in module
         .manifest
@@ -111,6 +183,23 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
             ));
         }
     }
+    let mut reserve = initial.clamp(4096, MODULE_RESERVE);
+    loop {
+        match compile_once(module, isa.clone(), reserve) {
+            Ok(code) => return Ok(code),
+            Err(CompileFailure::Exhausted(_)) if reserve < MODULE_RESERVE => {
+                reserve = reserve.saturating_mul(4).min(MODULE_RESERVE);
+            }
+            Err(CompileFailure::Exhausted(err) | CompileFailure::Fatal(err)) => return Err(err),
+        }
+    }
+}
+
+fn compile_once(
+    module: &Validated,
+    isa: Arc<dyn TargetIsa>,
+    reserve: usize,
+) -> Result<Code, CompileFailure> {
     let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
     for (name, address) in crate::symbols() {
         builder.symbol(name, address);
@@ -118,8 +207,9 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     // A module's code and read-only data lie in one reserved region, so the
     // page-relative address of a table from the code that reads it is in
     // reach (±2 GiB), however far apart the process's other memory lies.
-    let arena = ArenaMemoryProvider::new_with_size(MODULE_RESERVE)
-        .map_err(|error| format!("reserving room for machine code: {error}"))?;
+    let arena = ArenaMemoryProvider::new_with_size(reserve).map_err(|error| {
+        CompileFailure::Fatal(format!("reserving room for machine code: {error}"))
+    })?;
     builder.memory_provider(Box::new(arena));
     let mut jit = JITModule::new(builder);
     let ptr = jit.target_config().pointer_type();
@@ -132,7 +222,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     };
     let declare = |jit: &mut JITModule, name: &str, signature: &Signature| {
         jit.declare_function(name, Linkage::Import, signature)
-            .map_err(|error| error.to_string())
+            .map_err(|error| CompileFailure::Fatal(error.to_string()))
     };
     let (f, i) = (types::F32, types::I32);
     let linear_sig = sig(&[ptr, i, f, f, f, ptr], &[]);
@@ -208,7 +298,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
         let signature = sig(&params, &[]);
         let id = jit
             .declare_function(&format!("f{index}"), Linkage::Local, &signature)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| map_module_err(&function.name, error))?;
         functions.push((id, signature));
     }
     let scan = module.manifest.mode == entelechy_ir::Mode::Scan;
@@ -219,12 +309,12 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     };
     let entry_id = jit
         .declare_function("entry", Linkage::Local, &entry_signature)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| map_module_err("entry", error))?;
     let init_signature = sig(&[ptr, ptr], &[]);
     let init_id = match &module.init {
         Some(_) if scan => Some(
             jit.declare_function("init", Linkage::Local, &init_signature)
-                .map_err(|error| error.to_string())?,
+                .map_err(|error| map_module_err("init", error))?,
         ),
         _ => None,
     };
@@ -232,7 +322,7 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
     let merge_id = match &module.merge {
         Some(_) if module.manifest.mode == entelechy_ir::Mode::Reduce => Some(
             jit.declare_function("merge", Linkage::Local, &merge_signature)
-                .map_err(|error| error.to_string())?,
+                .map_err(|error| map_module_err("merge", error))?,
         ),
         _ => None,
     };
@@ -269,10 +359,10 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
             Fx::new(
                 module, &mut jit, builder, &imports, &functions, ptr, max_stride,
             )
-            .function(function, Kind::Function, &format!("f{index}"));
+            .function(function, Kind::Function, &format!("f{index}"))?;
         }
         jit.define_function(functions[index].0, &mut context)
-            .map_err(|error| format!("{}: {error}", function.name))?;
+            .map_err(|error| map_module_err(&function.name, error))?;
         functions_bytes.push(frame_bytes(&context));
         jit.clear_context(&mut context);
     }
@@ -283,10 +373,10 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
             Fx::new(
                 module, &mut jit, builder, &imports, &functions, ptr, max_stride,
             )
-            .function(init, Kind::Function, "init");
+            .function(init, Kind::Function, "init")?;
         }
         jit.define_function(init_id, &mut context)
-            .map_err(|error| format!("init: {error}"))?;
+            .map_err(|error| map_module_err("init", error))?;
         init_bytes = frame_bytes(&context);
         jit.clear_context(&mut context);
     }
@@ -297,10 +387,10 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
             Fx::new(
                 module, &mut jit, builder, &imports, &functions, ptr, max_stride,
             )
-            .function(merge, Kind::Merge, "merge");
+            .function(merge, Kind::Merge, "merge")?;
         }
         jit.define_function(merge_id, &mut context)
-            .map_err(|error| format!("merge: {error}"))?;
+            .map_err(|error| map_module_err("merge", error))?;
         merge_bytes = frame_bytes(&context);
         jit.clear_context(&mut context);
     }
@@ -314,14 +404,14 @@ pub fn compile(module: &Validated, isa: Arc<dyn TargetIsa>) -> Result<Code, Stri
             &module.entry,
             if scan { Kind::Scan } else { Kind::Map },
             "entry",
-        );
+        )?;
     }
     jit.define_function(entry_id, &mut context)
-        .map_err(|error| format!("entry: {error}"))?;
+        .map_err(|error| map_module_err("entry", error))?;
     let entry_bytes = frame_bytes(&context);
     jit.clear_context(&mut context);
     jit.finalize_definitions()
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| map_module_err("finalize", error))?;
     let entry = jit.get_finalized_function(entry_id) as usize;
     let init = init_id.map(|id| jit.get_finalized_function(id) as usize);
     let merge = merge_id.map(|id| jit.get_finalized_function(id) as usize);
@@ -368,8 +458,13 @@ struct ViewOnce {
     words: Value,
     /// Bytes an element takes.
     element: Value,
-    /// The Field's largest `x`.
+    /// Extent along `x` and `y`.
+    width: Value,
+    height: Value,
+    /// Largest valid coordinate on each axis.
     last_x: Value,
+    last_y: Value,
+    last_z: Value,
     /// The first element of the row this run is on, clamped into the
     /// Field as `sample` clamps.
     row: Value,
@@ -464,6 +559,8 @@ struct Fx<'a, 'b> {
     group: Option<GroupSlots>,
     /// In a group's lanes, the lane running.
     running: Option<Value>,
+    /// First data-table allocation failure seen while lowering a function.
+    failed: Option<CompileFailure>,
 }
 
 /// A group's lanes in stack slots, lane after lane: each lane's work and
@@ -577,6 +674,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             ran: HashMap::new(),
             group: None,
             running: None,
+            failed: None,
         }
     }
 
@@ -975,7 +1073,12 @@ impl<'a, 'b> Fx<'a, 'b> {
     /// Translates a whole function: arguments, body and return. `place`
     /// is its name in the module (`f0`, `entry`), its tables' names begin
     /// with it: two functions of one name each define their own.
-    fn function(mut self, function: &Function, kind: Kind, place: &str) {
+    fn function(
+        mut self,
+        function: &Function,
+        kind: Kind,
+        place: &str,
+    ) -> Result<(), CompileFailure> {
         let slots = function.slot_count();
         self.name = place.to_string();
         self.values = vec![Vec::new(); slots];
@@ -1028,11 +1131,15 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.store_count();
         self.b.ins().return_(&[]);
         self.b.finalize();
+        match self.failed {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 
     /// A map's entry: the body in a loop over the given run of elements,
     /// with loop-invariant reads hoisted.
-    fn map_run(mut self, function: &Function, params: &[Value]) {
+    fn map_run(mut self, function: &Function, params: &[Value]) -> Result<(), CompileFailure> {
         let (x0, y, z, count, out0) = (params[1], params[2], params[3], params[4], params[5]);
         // A group's lanes are elements in rows of their own: each reads
         // at its own place.
@@ -1153,6 +1260,10 @@ impl<'a, 'b> Fx<'a, 'b> {
         self.b.seal_block(exit);
         self.b.ins().return_(&[]);
         self.b.finalize();
+        match self.failed {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 
     fn block(&mut self, instructions: &[Instruction]) {
@@ -1244,15 +1355,23 @@ impl<'a, 'b> Fx<'a, 'b> {
                 let words = self.constants.get(&id).cloned().unwrap_or_default();
                 let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
                 let name = format!("{}.{id}", self.name);
-                let data = self
-                    .jit
-                    .declare_data(&name, Linkage::Local, false, false)
-                    .expect("a table's name is its own");
+                let data = match self.jit.declare_data(&name, Linkage::Local, false, false) {
+                    Ok(data) => data,
+                    Err(error) => {
+                        if self.failed.is_none() {
+                            self.failed = Some(map_module_err(&name, error));
+                        }
+                        return self.b.ins().iconst(self.ptr, 0);
+                    }
+                };
                 let mut description = DataDescription::new();
                 description.define(bytes.into_boxed_slice());
-                self.jit
-                    .define_data(data, &description)
-                    .expect("a table is defined once");
+                if let Err(error) = self.jit.define_data(data, &description) {
+                    if self.failed.is_none() {
+                        self.failed = Some(map_module_err(&name, error));
+                    }
+                    return self.b.ins().iconst(self.ptr, 0);
+                }
                 let global = self.jit.declare_data_in_func(data, self.b.func);
                 self.tables.insert(id, global);
                 global
@@ -1500,7 +1619,11 @@ impl<'a, 'b> Fx<'a, 'b> {
             settled.push(Some(ViewOnce {
                 words,
                 element,
+                width,
+                height,
                 last_x,
+                last_y,
+                last_z,
                 row,
                 last,
                 at: None,
@@ -1716,29 +1839,193 @@ impl<'a, 'b> Fx<'a, 'b> {
     /// zero, and clamped into the Field as an integer: `entelechy_rules::clamp_axis`
     /// inline.
     fn float_index(&mut self, input: u32, x: Value, y: Value, z: Value) -> Value {
-        let view = self.view(input);
-        let extent =
-            |fx: &mut Self, offset: i32| fx.b.ins().load(types::I32, fx.settled, view, offset);
-        let width = extent(self, offsets::VIEW_WIDTH);
-        let height = extent(self, offsets::VIEW_HEIGHT);
-        let depth = extent(self, offsets::VIEW_DEPTH);
-        let axis = |fx: &mut Self, v: Value, limit: Value| {
+        let (width, height, last_x, last_y, last_z) = match self.settled_view(input) {
+            Some(view) => (
+                view.width,
+                view.height,
+                view.last_x,
+                view.last_y,
+                view.last_z,
+            ),
+            None => {
+                let view = self.view(input);
+                let extent = |fx: &mut Self, offset: i32| {
+                    fx.b.ins().load(types::I32, fx.settled, view, offset)
+                };
+                let width = extent(self, offsets::VIEW_WIDTH);
+                let height = extent(self, offsets::VIEW_HEIGHT);
+                let depth = extent(self, offsets::VIEW_DEPTH);
+                let last_x = self.b.ins().iadd_imm(width, -1);
+                let last_y = self.b.ins().iadd_imm(height, -1);
+                let last_z = self.b.ins().iadd_imm(depth, -1);
+                (width, height, last_x, last_y, last_z)
+            }
+        };
+        let axis = |fx: &mut Self, v: Value, last: Value| {
             let zero = fx.f32c(0.0);
             let nan = fx.is_nan(v);
             let v = fx.b.ins().select(nan, zero, v);
             let floored = fx.b.ins().floor(v);
             // Saturating: below zero is zero, past the largest the largest.
             let whole = fx.b.ins().fcvt_to_uint_sat(types::I32, floored);
-            let last = fx.b.ins().iadd_imm(limit, -1);
             fx.b.ins().umin(whole, last)
         };
-        let cx = axis(self, x, width);
-        let cy = axis(self, y, height);
-        let cz = axis(self, z, depth);
+        let cx = axis(self, x, last_x);
+        let cy = axis(self, y, last_y);
+        let cz = axis(self, z, last_z);
         let layer = self.b.ins().imul(cz, height);
         let row = self.b.ins().iadd(layer, cy);
         let scaled = self.b.ins().imul(row, width);
         self.b.ins().iadd(scaled, cx)
+    }
+
+    /// One axis of `entelechy_rules::linear_axis` inline: lower neighbor,
+    /// upper neighbor, and upper weight, matching the interpreter's NaN,
+    /// infinity, and clamp rules bit for bit.
+    fn linear_axis(&mut self, value: Value, last: Value) -> (Value, Value, Value) {
+        let zero = self.f32c(0.0);
+        let half = self.f32c(0.5);
+        let one = self.f32c(1.0);
+        let nan = self.is_nan(value);
+        let sub = self.b.ins().fsub(value, half);
+        let t = self.b.ins().select(nan, zero, sub);
+        let fl = self.b.ins().floor(t);
+        let whole = self.b.ins().fcvt_to_uint_sat(types::I32, fl);
+        let lower = self.b.ins().umin(whole, last);
+        let below = self.b.ins().icmp(IntCC::UnsignedLessThan, lower, last);
+        let step = self.b.ins().uextend(types::I32, below);
+        let upper = self.b.ins().iadd(lower, step);
+        let diff = self.b.ins().fsub(t, fl);
+        let lt0 = self.b.ins().fcmp(FloatCC::LessThan, diff, zero);
+        let c0 = self.b.ins().select(lt0, zero, diff);
+        let gt1 = self.b.ins().fcmp(FloatCC::GreaterThan, c0, one);
+        let c1 = self.b.ins().select(gt1, one, c0);
+        let neg = self.b.ins().fcmp(FloatCC::LessThan, t, zero);
+        let weight = self.b.ins().select(neg, zero, c1);
+        (lower, upper, weight)
+    }
+
+    /// Linearly blends 1D, 2D, or 3D neighbors of `input` inline, skipping
+    /// zero-weight corners so untouched `NaN` or infinite neighbors match
+    /// `entelechy_jit_linear` bit for bit.
+    fn linear_words(
+        &mut self,
+        input: u32,
+        position: &entelechy_ir::ValueId,
+        ty: Type,
+        tys: &[types::Type],
+    ) -> Vec<Value> {
+        let pos = self.words(position);
+        let pos_ty = self.ty(position);
+        let (words, element, width, height, last_x, last_y, last_z) = match self.settled_view(input)
+        {
+            Some(view) => (
+                view.words,
+                view.element,
+                view.width,
+                view.height,
+                view.last_x,
+                view.last_y,
+                view.last_z,
+            ),
+            None => {
+                let view = self.view(input);
+                let words = self
+                    .b
+                    .ins()
+                    .load(self.ptr, self.settled, view, offsets::VIEW_WORDS);
+                let element =
+                    self.b
+                        .ins()
+                        .load(types::I32, self.settled, view, offsets::VIEW_BYTES);
+                let width = self
+                    .b
+                    .ins()
+                    .load(types::I32, self.settled, view, offsets::VIEW_WIDTH);
+                let height =
+                    self.b
+                        .ins()
+                        .load(types::I32, self.settled, view, offsets::VIEW_HEIGHT);
+                let depth = self
+                    .b
+                    .ins()
+                    .load(types::I32, self.settled, view, offsets::VIEW_DEPTH);
+                let last_x = self.b.ins().iadd_imm(width, -1);
+                let last_y = self.b.ins().iadd_imm(height, -1);
+                let last_z = self.b.ins().iadd_imm(depth, -1);
+                (words, element, width, height, last_x, last_y, last_z)
+            }
+        };
+        let one = self.f32c(1.0);
+        let zero = self.f32c(0.0);
+        let corners: Vec<(Value, Value)> = match pos_ty {
+            Type::Float => {
+                let (x0, x1, fx) = self.linear_axis(pos[0], last_x);
+                let ox = self.b.ins().fsub(one, fx);
+                vec![(x0, ox), (x1, fx)]
+            }
+            Type::Vec2 => {
+                let (x0, x1, fx) = self.linear_axis(pos[0], last_x);
+                let (y0, y1, fy) = self.linear_axis(pos[1], last_y);
+                let ox = self.b.ins().fsub(one, fx);
+                let oy = self.b.ins().fsub(one, fy);
+                let r0 = self.b.ins().imul(y0, width);
+                let r1 = self.b.ins().imul(y1, width);
+                vec![
+                    (self.b.ins().iadd(r0, x0), self.b.ins().fmul(ox, oy)),
+                    (self.b.ins().iadd(r0, x1), self.b.ins().fmul(fx, oy)),
+                    (self.b.ins().iadd(r1, x0), self.b.ins().fmul(ox, fy)),
+                    (self.b.ins().iadd(r1, x1), self.b.ins().fmul(fx, fy)),
+                ]
+            }
+            _ => {
+                let (x0, x1, fx) = self.linear_axis(pos[0], last_x);
+                let (y0, y1, fy) = self.linear_axis(pos[1], last_y);
+                let (z0, z1, fz) = self.linear_axis(pos[2], last_z);
+                let ox = self.b.ins().fsub(one, fx);
+                let oy = self.b.ins().fsub(one, fy);
+                let oz = self.b.ins().fsub(one, fz);
+                let b00 = self.b.ins().fmul(ox, oy);
+                let b10 = self.b.ins().fmul(fx, oy);
+                let b01 = self.b.ins().fmul(ox, fy);
+                let b11 = self.b.ins().fmul(fx, fy);
+                let l0 = self.b.ins().imul(z0, height);
+                let l1 = self.b.ins().imul(z1, height);
+                let r00 = self.b.ins().iadd(l0, y0);
+                let r00 = self.b.ins().imul(r00, width);
+                let r01 = self.b.ins().iadd(l0, y1);
+                let r01 = self.b.ins().imul(r01, width);
+                let r10 = self.b.ins().iadd(l1, y0);
+                let r10 = self.b.ins().imul(r10, width);
+                let r11 = self.b.ins().iadd(l1, y1);
+                let r11 = self.b.ins().imul(r11, width);
+                vec![
+                    (self.b.ins().iadd(r00, x0), self.b.ins().fmul(b00, oz)),
+                    (self.b.ins().iadd(r00, x1), self.b.ins().fmul(b10, oz)),
+                    (self.b.ins().iadd(r01, x0), self.b.ins().fmul(b01, oz)),
+                    (self.b.ins().iadd(r01, x1), self.b.ins().fmul(b11, oz)),
+                    (self.b.ins().iadd(r10, x0), self.b.ins().fmul(b00, fz)),
+                    (self.b.ins().iadd(r10, x1), self.b.ins().fmul(b10, fz)),
+                    (self.b.ins().iadd(r11, x0), self.b.ins().fmul(b01, fz)),
+                    (self.b.ins().iadd(r11, x1), self.b.ins().fmul(b11, fz)),
+                ]
+            }
+        };
+        let mut sums = vec![zero; tys.len()];
+        for (index, weight) in corners {
+            let bytes = self.b.ins().imul(index, element);
+            let offset = self.b.ins().uextend(self.ptr, bytes);
+            let at = self.b.ins().iadd(words, offset);
+            let vals = self.field_loads(input, at, ty, tys);
+            // `NotEqual` is `UN | LT | GT`, the exact inverse of `weight == 0.0`.
+            let active = self.b.ins().fcmp(FloatCC::NotEqual, weight, zero);
+            for (sum, val) in sums.iter_mut().zip(vals) {
+                let prod = self.b.ins().fmul(val, weight);
+                let added = self.b.ins().fadd(*sum, prod);
+                *sum = self.b.ins().select(active, added, *sum);
+            }
+        }
+        sums
     }
 
     /// The element `at` reads at `address`: an `Int` over rows, a `Vec2`
@@ -2454,6 +2741,20 @@ impl<'a, 'b> Fx<'a, 'b> {
                 self.part_words(*input, index, within, ty, &tys)
             }
             Op::AtLinear(input, position) => {
+                let tys = word_types(self.module, ty);
+                let encoding = self.module.manifest.inputs[*input as usize]
+                    .ty
+                    .schema
+                    .uniform_encoding()
+                    .unwrap_or(Encoding::Word);
+                let max_lanes = if self.ty(position) == Type::Vec3 {
+                    8
+                } else {
+                    16
+                };
+                if encoding != Encoding::F16 && tys.len() <= max_lanes {
+                    return self.linear_words(*input, position, ty, &tys);
+                }
                 let words = self.words(position);
                 let out = self.scratch_addr();
                 let index = self.i32c(*input as i64);
@@ -2466,7 +2767,6 @@ impl<'a, 'b> Fx<'a, 'b> {
                 self.b
                     .ins()
                     .call(self.linear, &[self.ctx, index, x, y, z, out]);
-                let tys = word_types(self.module, ty);
                 self.load_scratch(&tys)
             }
             Op::Spend(counted) => {
@@ -2852,4 +3152,42 @@ fn indexed(body: &[Instruction]) -> std::collections::HashSet<u32> {
     let mut out = std::collections::HashSet::new();
     walk(body, &mut out);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn small_initial_reserve_grows_across_code_and_tables() {
+        let mut tables = String::new();
+        for k in 0..8 {
+            let elems: Vec<String> = (0..128)
+                .map(|i| format!("{:.1}", (i + k * 7) as f32))
+                .collect();
+            tables.push_str(&format!(
+                "fn t{k}(i: Int) -> Float {{ let a = [{}]; return a[i % 128]; }}\n",
+                elems.join(", ")
+            ));
+        }
+        let source = format!(
+            "kernel test.grow@1 {{
+                requires {{ field.write; }}
+                output out: Rows<Float>;
+                {tables}
+                compute {{
+                    let e = element();
+                    return t0(e) + t1(e) + t2(e) + t3(e) + t4(e) + t5(e) + t6(e) + t7(e);
+                }}
+            }}"
+        );
+        let module = entelechy_compiler::compile(&source).unwrap();
+        let estimated = estimate_reserve(&module);
+        assert!((64 * 1024..=4 * 1024 * 1024).contains(&estimated));
+        let backend = crate::JitBackend::new().unwrap();
+        // Force at least one exhaustion retry by starting at a single 4 KiB page.
+        let code = compile_from_reserve(&module, backend.isa.clone(), 4096).unwrap();
+        assert_ne!(code.entry, 0);
+        unsafe { code.module.free_memory() };
+    }
 }
