@@ -13,6 +13,12 @@ verified as replays, evolved while running, and carried anywhere.
 </p>
 
 <p align="center">
+  <a href="https://entelechy.run"><b>Website</b></a> ·
+  <a href="https://play.entelechy.run"><b>Playground</b></a> ·
+  <a href="https://docs.entelechy.run"><b>Documentation</b></a>
+</p>
+
+<p align="center">
   <a href="#how-a-program-becomes">How it works</a> ·
   <a href="#ai-is-the-creator">Creation protocol</a> ·
   <a href="#start">Start</a> ·
