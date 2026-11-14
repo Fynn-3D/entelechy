@@ -66,6 +66,24 @@ fn failure_shape(message: &str) -> String {
     shape
 }
 
+/// Maps a window position to output pixel coordinates without clamping to
+/// the output's edges, for a locked pointer that turns without bound.
+pub fn to_output_unbounded(
+    placement: &Placement,
+    window_x: f32,
+    window_y: f32,
+    width: u32,
+    height: u32,
+) -> [f32; 2] {
+    if placement.width == 0 || placement.height == 0 {
+        return [window_x, window_y];
+    }
+    [
+        (window_x - placement.x as f32) * width as f32 / placement.width as f32,
+        (window_y - placement.y as f32) * height as f32 / placement.height as f32,
+    ]
+}
+
 /// Maps a window position to output pixel coordinates; positions in the
 /// letterbox clamp to the nearest edge.
 pub fn to_output(
@@ -78,8 +96,7 @@ pub fn to_output(
     if placement.width == 0 || placement.height == 0 {
         return [0.0, 0.0];
     }
-    let x = (window_x - placement.x as f32) * width as f32 / placement.width as f32;
-    let y = (window_y - placement.y as f32) * height as f32 / placement.height as f32;
+    let [x, y] = to_output_unbounded(placement, window_x, window_y, width, height);
     [
         x.clamp(0.0, width.saturating_sub(1) as f32),
         y.clamp(0.0, height.saturating_sub(1) as f32),
@@ -301,8 +318,10 @@ pub struct Play {
     /// Pad buttons let go of, and when: a button pressed again within
     /// [`PAD_SETTLE`] was held all along.
     pad_released: Vec<(PadButton, f64)>,
-    /// The pointer in window pixels.
+    /// The pointer in window pixels, and whether a locked pointer is moving
+    /// without clamping to the picture's edges.
     cursor: (f32, f32),
+    pointer_roaming: bool,
     placement: Placement,
     shown_size: (u32, u32),
     /// The node shown instead of the graph's picture.
@@ -366,6 +385,7 @@ impl Play {
             typing: String::new(),
             pad_released: Vec::new(),
             cursor: (0.0, 0.0),
+            pointer_roaming: false,
             placement: Placement::default(),
             shown_size: (0, 0),
             preview: None,
@@ -556,6 +576,17 @@ impl Play {
         }
     }
 
+    /// Every key and pointer button let go: the window or page lost focus
+    /// or pointer lock, and the releases go to whatever took it.
+    pub fn release_all(&mut self) {
+        self.release_keys();
+        self.pressed.retain(|held| !matches!(held, Held::Button(_)));
+        self.late.retain(|held| !matches!(held, Held::Button(_)));
+        self.input.pointer_down = false;
+        self.input.pointer_right = false;
+        self.input.pointer_middle = false;
+    }
+
     /// The modifier keys the system says are held: Shift, Control, Alt
     /// and Command (or Windows) that are not are let go, whichever
     /// window their release went to.
@@ -572,6 +603,15 @@ impl Play {
     /// The pointer at `(x, y)` in window pixels.
     pub fn pointer(&mut self, x: f32, y: f32) {
         self.cursor = (x, y);
+        self.pointer_roaming = false;
+        self.update_pointer();
+    }
+
+    /// Moves the pointer by `(dx, dy)` window pixels without clamping to
+    /// the picture's edges, for a locked pointer turning without bound.
+    pub fn move_pointer(&mut self, dx: f32, dy: f32) {
+        self.cursor = (self.cursor.0 + dx, self.cursor.1 + dy);
+        self.pointer_roaming = true;
         self.update_pointer();
     }
 
@@ -954,7 +994,12 @@ impl Play {
     }
 
     fn update_pointer(&mut self) {
-        self.input.pointer = to_output(
+        let map = if self.pointer_roaming {
+            to_output_unbounded
+        } else {
+            to_output
+        };
+        self.input.pointer = map(
             &self.placement,
             self.cursor.0,
             self.cursor.1,

@@ -141,7 +141,8 @@ file of this directory, packed (`single.js`; `@@include:<file>@@` puts one in
 as it is), and `@@slot:<name>@@` is what the exporter made: `glue` and
 `runtime` the slim playback build (`entelechy_single.js` and
 `entelechy_single_bg.wasm`), `bundle` the compiled scene bundle, `backend`
-what runs it (`best`, `gpu`, or `jit`), and `title` the page's. What is
+what runs it (`best`, `gpu`, or `jit`), `pointer` how the cursor behaves
+(`free`, `hold`, or `lock`), and `title` the page's. What is
 packed is a zlib stream encoded in UTF-8 base122 (`entelechy_formats::base122`),
 decoded and inflated by the browser's `DecompressionStream`.
 `node bridges/web/page.test.mjs --page <page>.html` opens such a page from

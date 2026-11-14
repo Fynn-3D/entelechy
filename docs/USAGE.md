@@ -182,7 +182,9 @@ off the frames and swaps in when ready. It takes `run`'s `--library`,
 - `--no-audio` leaves the sound card closed.
 - `--show-while-building` opens the window before the device has built
   what only shows, drawing it on the processor meanwhile.
-- `--hold-pointer` locks and hides the system cursor once clicked.
+- `--hold-pointer` locks and hides the system cursor once clicked, keeping
+  `pointer()` inside the output; `--lock-pointer` locks and hides it with
+  unbounded relative motion (for 360-degree camera aim; Escape releases it).
 - `--folder <name,...>` lets Cmd+O choose a folder for those directory
   inputs and outputs, allowed what `--folder-allow` says.
 - `--replay <file>` plays a replay in the window.
@@ -296,7 +298,10 @@ where Entelechy for the web is (the directory holding `bridges/web` and
 `target/page`: a web release, or a checkout that has built it as
 [WebAssembly](#webassembly) says; the current directory by default), and
 `--backend` (`gpu` or `jit`) what runs the scene in the page (by default the
-page chooses the GPU when WebGPU is available, else the JIT). The page needs a
+page chooses the GPU when WebGPU is available, else the JIT). `--hold-pointer`
+captures the browser cursor on click and keeps `pointer()` inside the output;
+`--lock-pointer` captures it and steps `pointer()` without bound (Escape
+releases either). The page needs a
 browser with WebGPU for the GPU backend, or runs on WebAssembly JIT alone. A
 file the scene only reads later, by a name it computes, is not in the page.
 Each `font` node whose `codes` come from static inputs alone keeps only those

@@ -16,7 +16,7 @@ usage:
               [--filter linear|nearest] [--joints <name>,<name>,...]
               [--double-sided] [--name <family>]
               [--chars <text> | --chars-file <file>]
-              [--web <dir>] [--backend gpu|jit]
+              [--web <dir>] [--backend gpu|jit] [--hold-pointer | --lock-pointer]
       To .glb: a vertices .field (rows of position, normal, uv, and a
       tangent where a normal map is read along one), a triangles .field
       (rows of three ints), and PNGs: the base color, a normal map named
@@ -48,10 +48,12 @@ usage:
       and target/page: a web release, or a checkout that has built it; the
       current directory by default). --backend names what runs it in the
       page (gpu or jit); without it the page chooses the GPU where WebGPU
-      opens, else the JIT. --chars and --chars-file (each may be given
-      again) name the characters the page's font nodes keep, so a page that
-      writes a few words does not carry a whole font; a character not among
-      them is then not drawn.";
+      opens, else the JIT. --hold-pointer captures the browser cursor on
+      click and keeps it inside the output; --lock-pointer captures it and
+      steps it without bound (Escape lets either go). --chars and
+      --chars-file (each may be given again) name the characters the page's
+      font nodes keep, so a page that writes a few words does not carry a
+      whole font; a character not among them is then not drawn.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -87,6 +89,7 @@ fn export(args: &[String]) -> Result<String, String> {
     let mut chars: Option<String> = None;
     let mut web: Option<PathBuf> = None;
     let mut backend: Option<String> = None;
+    let mut pointer = page::PointerMode::Free;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -144,6 +147,8 @@ fn export(args: &[String]) -> Result<String, String> {
                     .get_or_insert_with(String::new)
                     .push_str(&std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?);
             }
+            "--hold-pointer" => pointer = page::PointerMode::Hold,
+            "--lock-pointer" => pointer = page::PointerMode::Lock,
             other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
             other => inputs.push(PathBuf::from(other)),
         }
@@ -167,6 +172,9 @@ fn export(args: &[String]) -> Result<String, String> {
     if (web.is_some() || backend.is_some()) && extension(&out) != "html" {
         return Err("--web and --backend are for a page".into());
     }
+    if pointer != page::PointerMode::Free && extension(&out) != "html" {
+        return Err("--hold-pointer and --lock-pointer are for a page".into());
+    }
     match extension(&out).as_str() {
         "html" => {
             let [scene] = inputs.as_slice() else {
@@ -178,11 +186,12 @@ fn export(args: &[String]) -> Result<String, String> {
                     scene.display()
                 ));
             }
-            let made = page::page(
+            let made = page::page_with_pointer(
                 scene,
                 web.as_deref().unwrap_or(Path::new(".")),
                 backend.as_deref(),
                 chars.as_deref(),
+                pointer,
             )?;
             std::fs::write(&out, &made.page).map_err(|e| format!("{}: {e}", out.display()))?;
             let mut said = format!(

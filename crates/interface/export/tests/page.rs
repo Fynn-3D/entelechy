@@ -100,10 +100,13 @@ fn a_page_needs_entelechy_for_the_web_and_a_page_backend() {
         why.contains("single.html") && why.contains("--web"),
         "{why}"
     );
-    let cpu = page::page(&scene, &nowhere, Some("cpu"), None)
+    let cpu = page::page_with_pointer(&scene, &nowhere, Some("cpu"), None, page::PointerMode::Lock)
         .err()
         .expect("cpu refused");
     assert!(cpu.contains("gpu or jit"), "{cpu}");
+    assert_eq!(page::PointerMode::Free.as_str(), "free");
+    assert_eq!(page::PointerMode::Hold.as_str(), "hold");
+    assert_eq!(page::PointerMode::Lock.as_str(), "lock");
 }
 
 /// A scene's `font` node baked with `--chars` keeps only the characters

@@ -144,6 +144,29 @@ pub fn fill(
     Ok(out)
 }
 
+/// How an exported page handles the browser's pointer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PointerMode {
+    /// Free browser cursor mapped into the canvas.
+    #[default]
+    Free,
+    /// Captured on click, stepped by relative motion and clamped to the output's edges.
+    Hold,
+    /// Captured on click, stepped by unbounded relative motion for 360-degree camera aim.
+    Lock,
+}
+
+impl PointerMode {
+    /// The slot text written into `single.html`'s `data-pointer`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Free => "free",
+            Self::Hold => "hold",
+            Self::Lock => "lock",
+        }
+    }
+}
+
 /// What a page was made of, for the line the exporter prints.
 pub struct Made {
     pub page: String,
@@ -155,16 +178,29 @@ pub struct Made {
     pub fonts: Vec<(String, usize, usize)>,
 }
 
-/// `scene` as one page. `web` is where Entelechy for the web is: the
-/// directory with `bridges/web/` (the template and its player) and
-/// `target/page/` (`entelechy_single.{js,_bg.wasm}`). `backend` is what runs
-/// it in the page (`gpu` or `jit`, or `best` when none is named). `chars`,
-/// given, is the characters the scene's font nodes keep.
+/// `scene` as one page with a free pointer ([`page_with_pointer`]).
 pub fn page(
     scene: &Path,
     web: &Path,
     backend: Option<&str>,
     chars: Option<&str>,
+) -> Result<Made, String> {
+    page_with_pointer(scene, web, backend, chars, PointerMode::Free)
+}
+
+/// `scene` as one page. `web` is where Entelechy for the web is: the
+/// directory with `bridges/web/` (the template and its player) and
+/// `target/page/` (`entelechy_single.{js,_bg.wasm}`). `backend` is what runs
+/// it in the page (`gpu` or `jit`, or `best` when none is named). `chars`,
+/// given, is the characters the scene's font nodes keep; `pointer` says
+/// whether clicking captures the browser cursor (`hold` clamped, `lock`
+/// unbounded).
+pub fn page_with_pointer(
+    scene: &Path,
+    web: &Path,
+    backend: Option<&str>,
+    chars: Option<&str>,
+    pointer: PointerMode,
 ) -> Result<Made, String> {
     let backend = match backend {
         None | Some("best") => "best",
@@ -195,6 +231,7 @@ pub fn page(
     let mut slots = BTreeMap::new();
     slots.insert("title", title.replace('&', "&amp;").replace('<', "&lt;"));
     slots.insert("backend", backend.to_owned());
+    slots.insert("pointer", pointer.as_str().to_owned());
     slots.insert("glue", packed(&glue));
     slots.insert("runtime", packed(&runtime));
     slots.insert("bundle", packed(&compiled.bundle));

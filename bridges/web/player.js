@@ -45,10 +45,66 @@ const AHEAD = "ahead";
 /// What a key press writes, if it writes a character: its own text, when
 /// no command is held with it.
 function written(event) {
-  return event.key.length === 1 && !event.ctrlKey && !event.metaKey ? event.key : "";
+  return event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.isComposing ? event.key : "";
 }
 
-const HELD = new Set(["Tab", "Escape", "F5", "F6", "F10", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " "]);
+const HELD = new Set(["Tab", "Escape", "F5", "F6", "F7", "F8", "F9", "F10", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " ", "Space"]);
+const CODE_KEYS = {
+  Space: "Space", Enter: "Enter", NumpadEnter: "Enter", Escape: "Escape",
+  Backspace: "Backspace", Tab: "Tab",
+  ShiftLeft: "Shift", ShiftRight: "Shift",
+  ControlLeft: "Control", ControlRight: "Control",
+  AltLeft: "Alt", AltRight: "Alt",
+  MetaLeft: "Meta", MetaRight: "Meta",
+  PageUp: "PageUp", PageDown: "PageDown", End: "End", Home: "Home",
+  ArrowLeft: "ArrowLeft", ArrowUp: "ArrowUp", ArrowRight: "ArrowRight", ArrowDown: "ArrowDown",
+  Delete: "Delete",
+  Semicolon: ";", Equal: "=", Comma: ",", Minus: "-", Period: ".", Slash: "/",
+  Backquote: "`", BracketLeft: "[", Backslash: "\\", BracketRight: "]", Quote: "'",
+};
+let rawPointerSupported = true;
+
+function codeKey(event) {
+  const code = event.code || "";
+  if (code.length === 4 && code.startsWith("Key")) return code.slice(3);
+  if (code.length === 6 && code.startsWith("Digit")) return code.slice(5);
+  if (code.length === 7 && code.startsWith("Numpad")) {
+    const d = code.charCodeAt(6);
+    if (d >= 48 && d <= 57) return code.slice(6);
+  }
+  if (/^F([1-9]|1[0-2])$/.test(code)) return code;
+  return CODE_KEYS[code] || event.key || "";
+}
+
+function lockPointer(canvas, onRefused) {
+  if (typeof canvas.requestPointerLock !== "function") {
+    onRefused();
+    return;
+  }
+  const attempt = (raw) => {
+    try {
+      const asked = raw ? canvas.requestPointerLock({ unadjustedMovement: true }) : canvas.requestPointerLock();
+      if (asked && typeof asked.catch === "function") {
+        asked.catch((error) => {
+          if (raw) {
+            if (error && error.name === "NotSupportedError") rawPointerSupported = false;
+            attempt(false);
+          } else {
+            onRefused();
+          }
+        });
+      }
+    } catch {
+      if (raw) {
+        rawPointerSupported = false;
+        attempt(false);
+      } else {
+        onRefused();
+      }
+    }
+  };
+  attempt(rawPointerSupported);
+}
 
 /// The sound card: a worklet that plays the blocks it is handed, in
 /// order, and says how many samples it holds, which paces the frames as
@@ -89,11 +145,12 @@ class EntelechyPlayer {
   /// Plays `entelechy` (an EntelechyInPage with its scene open) on `canvas`, the
   /// page's window, with `shown` a canvas over it that takes no pointer,
   /// where the GPU presents.
-  constructor(entelechy, canvas, shown) {
+  constructor(entelechy, canvas, shown, pointer = "free") {
     this.entelechy = entelechy;
     this.x = entelechy.x;
     this.canvas = canvas;
     this.shown = shown;
+    this.pointer = pointer || "free";
     this.context = canvas.getContext("2d");
     const promising = (name) =>
       typeof WebAssembly.promising === "function" ? WebAssembly.promising(this.x[name]) : this.x[name];
@@ -118,6 +175,10 @@ class EntelechyPlayer {
     // Player's window answers `--serve`: an agent in the page creates in
     // the world a person is playing.
     this.requests = [];
+    this.downByCode = new Map();
+    this.heldAt = [0, 0];
+    this.swallowedButton = null;
+    this.lockFailedOnce = false;
     this.listen();
   }
 
@@ -125,7 +186,7 @@ class EntelechyPlayer {
   /// pairs, or [path, length] for a file the page's server keeps, read
   /// from there when it is read), on `backend`, or as the Player does
   /// when none is named: the GPU, else the JIT, else the interpreter.
-  static async open({ glue, host, wasm, files, scene, replay, backend, canvas, shown }) {
+  static async open({ glue, host, wasm, files, scene, replay, backend, pointer, canvas, shown }) {
     const entelechy = await EntelechyInPage.load(glue, host, wasm);
     globalThis.entelechy_files_base = new URL(".", location.href).href;
     for (const [path, bytes] of files) {
@@ -137,7 +198,7 @@ class EntelechyPlayer {
     const on = backend || "best";
     if (replay) await entelechy.openReplay(replay, on);
     else await entelechy.open(scene, on);
-    return new EntelechyPlayer(entelechy, canvas, shown);
+    return new EntelechyPlayer(entelechy, canvas, shown, pointer);
   }
 
   get session() {
@@ -182,38 +243,108 @@ class EntelechyPlayer {
     return true;
   }
 
+  releaseAll() {
+    this.downByCode.clear();
+    this.swallowedButton = null;
+    this.hands.push(() => {
+      if (this.x.entelechy_play_release) this.x.entelechy_play_release(this.session);
+    });
+  }
+
   listen() {
     window.addEventListener("keydown", (event) => {
       // A key that writes a character is typed as well as pressed, and
       // typed again each time it repeats: what a scene's `typed()` reads.
       const text = written(event);
       if (text) this.hands.push(() => this.typed(text));
-      if (event.repeat) return;
-      if (HELD.has(event.key)) event.preventDefault();
+      const key = codeKey(event);
+      if (HELD.has(event.key) || HELD.has(key)) event.preventDefault();
+      if (event.repeat || !key) return;
+      if (event.code) this.downByCode.set(event.code, key);
       this.startSound().catch(() => {});
-      const key = event.key;
       this.hands.push(() => this.key(key, true));
       if (!this.running) this.run();
     });
     window.addEventListener("keyup", (event) => {
-      if (HELD.has(event.key)) event.preventDefault();
-      const key = event.key;
+      const key = (event.code && this.downByCode.get(event.code)) || codeKey(event);
+      if (event.code) this.downByCode.delete(event.code);
+      if (HELD.has(event.key) || HELD.has(key)) event.preventDefault();
+      if (!key) return;
       this.hands.push(() => this.key(key, false));
     });
+    window.addEventListener("blur", () => this.releaseAll());
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) this.releaseAll();
+    });
+    document.addEventListener("pointerlockchange", () => {
+      if (document.pointerLockElement === this.canvas) this.lockFailedOnce = false;
+      else this.releaseAll();
+    });
     const scale = () => window.devicePixelRatio || 1;
+    const clampHeld = (dx, dy) => {
+      const mostX = Math.max(0, this.canvas.width - 1);
+      const mostY = Math.max(0, this.canvas.height - 1);
+      this.heldAt = [
+        Math.min(mostX, Math.max(0, this.heldAt[0] + dx)),
+        Math.min(mostY, Math.max(0, this.heldAt[1] + dy)),
+      ];
+      return this.heldAt;
+    };
     this.canvas.addEventListener("pointermove", (event) => {
-      const [x, y] = [event.offsetX * scale(), event.offsetY * scale()];
+      const s = scale();
+      if (document.pointerLockElement === this.canvas) {
+        const [dx, dy] = [event.movementX * s, event.movementY * s];
+        if (this.pointer === "lock" && this.x.entelechy_play_pointer_moved) {
+          this.hands.push(() => this.x.entelechy_play_pointer_moved(this.session, dx, dy));
+        } else {
+          const [x, y] = clampHeld(dx, dy);
+          this.hands.push(() => this.x.entelechy_play_pointer(this.session, x, y));
+        }
+        return;
+      }
+      if (this.pointer === "lock") {
+        if (event.buttons !== 0 && this.x.entelechy_play_pointer_moved) {
+          const [dx, dy] = [event.movementX * s, event.movementY * s];
+          this.hands.push(() => this.x.entelechy_play_pointer_moved(this.session, dx, dy));
+        }
+        return;
+      }
+      const [x, y] = [event.offsetX * s, event.offsetY * s];
+      this.heldAt = [x, y];
       this.hands.push(() => this.x.entelechy_play_pointer(this.session, x, y));
     });
     this.canvas.addEventListener("pointerdown", (event) => {
+      this.canvas.focus();
+      event.preventDefault();
       this.startSound().catch(() => {});
-      this.canvas.setPointerCapture(event.pointerId);
+      const s = scale();
+      this.heldAt = [event.offsetX * s, event.offsetY * s];
       const button = BUTTON[event.button] ?? 0;
+      if ((this.pointer === "lock" || this.pointer === "hold") && document.pointerLockElement !== this.canvas) {
+        const swallow = this.pointer === "lock" && !this.lockFailedOnce;
+        lockPointer(this.canvas, () => {
+          this.lockFailedOnce = true;
+        });
+        if (swallow) {
+          this.swallowedButton = button;
+          if (!this.running) this.run();
+          return;
+        }
+      }
+      if (document.pointerLockElement !== this.canvas && this.canvas.setPointerCapture) {
+        try {
+          this.canvas.setPointerCapture(event.pointerId);
+        } catch {}
+      }
       this.hands.push(() => this.x.entelechy_play_button(this.session, button, 1));
       if (!this.running) this.run();
     });
     this.canvas.addEventListener("pointerup", (event) => {
       const button = BUTTON[event.button] ?? 0;
+      if (this.swallowedButton === button) {
+        this.swallowedButton = null;
+        return;
+      }
       this.hands.push(() => this.x.entelechy_play_button(this.session, button, 0));
     });
     this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
@@ -431,10 +562,11 @@ class EntelechyPlayer {
 /// page. The device draws on `shown`, handed to the worker; a frame drawn
 /// on the CPU comes back to be put on `canvas`.
 class EntelechyWorkerPlayer {
-  constructor(worker, canvas, shown) {
+  constructor(worker, canvas, shown, pointer = "free") {
     this.worker = worker;
     this.canvas = canvas;
     this.shown = shown;
+    this.pointer = pointer || "free";
     this.context = canvas.getContext("2d");
     this.said = [];
     this.onsaid = (line) => console.log(line);
@@ -443,6 +575,10 @@ class EntelechyWorkerPlayer {
     this.asked = new Map();
     this.next = 0;
     this.pads = "";
+    this.downByCode = new Map();
+    this.heldAt = [0, 0];
+    this.swallowedButton = null;
+    this.lockFailedOnce = false;
   }
 
   /// Opens a scene or a replay in a new worker, as `EntelechyPlayer.open`
@@ -451,10 +587,10 @@ class EntelechyWorkerPlayer {
   /// has the console told each pipeline the device is asked to compile,
   /// before and after. Resolves once the scene has loaded and its frames
   /// run.
-  static openInWorker({ worker, glue, files, scene, replay, backend, canvas, shown, onpreparing, trace }) {
+  static openInWorker({ worker, glue, files, scene, replay, backend, pointer, canvas, shown, onpreparing, trace }) {
     const at = new URL(worker || "player-worker.js", location.href);
     const host = new URL("entelechy-host.mjs", at).href;
-    const player = new EntelechyWorkerPlayer(new Worker(at), canvas, shown);
+    const player = new EntelechyWorkerPlayer(new Worker(at), canvas, shown, pointer);
     player.onpreparing = onpreparing || null;
     const offscreen = shown.transferControlToOffscreen();
     shown.style.display = "block";
@@ -546,28 +682,96 @@ class EntelechyWorkerPlayer {
 
   listen() {
     const send = (message) => this.worker.postMessage(message);
+    const releaseAll = () => {
+      this.downByCode.clear();
+      this.swallowedButton = null;
+      send({ release: true });
+    };
     window.addEventListener("keydown", (event) => {
       const text = written(event);
       if (text) send({ typed: text });
-      if (event.repeat) return;
-      if (HELD.has(event.key)) event.preventDefault();
+      const key = codeKey(event);
+      if (HELD.has(event.key) || HELD.has(key)) event.preventDefault();
+      if (event.repeat || !key) return;
+      if (event.code) this.downByCode.set(event.code, key);
       this.startSound().catch(() => {});
-      send({ key: event.key, down: true });
+      send({ key, down: true });
     });
     window.addEventListener("keyup", (event) => {
-      if (HELD.has(event.key)) event.preventDefault();
-      send({ key: event.key, down: false });
+      const key = (event.code && this.downByCode.get(event.code)) || codeKey(event);
+      if (event.code) this.downByCode.delete(event.code);
+      if (HELD.has(event.key) || HELD.has(key)) event.preventDefault();
+      if (!key) return;
+      send({ key, down: false });
+    });
+    window.addEventListener("blur", releaseAll);
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) releaseAll();
+    });
+    document.addEventListener("pointerlockchange", () => {
+      if (document.pointerLockElement === this.canvas) this.lockFailedOnce = false;
+      else releaseAll();
     });
     const scale = () => window.devicePixelRatio || 1;
+    const clampHeld = (dx, dy) => {
+      const mostX = Math.max(0, this.canvas.width - 1);
+      const mostY = Math.max(0, this.canvas.height - 1);
+      this.heldAt = [
+        Math.min(mostX, Math.max(0, this.heldAt[0] + dx)),
+        Math.min(mostY, Math.max(0, this.heldAt[1] + dy)),
+      ];
+      return this.heldAt;
+    };
     // The page's canvas takes the pointer; the worker's draws over it.
     for (const target of [this.canvas, this.shown]) {
-      target.addEventListener("pointermove", (event) => send({ pointer: [event.offsetX * scale(), event.offsetY * scale()] }));
-      target.addEventListener("pointerdown", (event) => {
-        this.startSound().catch(() => {});
-        target.setPointerCapture(event.pointerId);
-        send({ button: BUTTON[event.button] ?? 0, down: true });
+      target.addEventListener("pointermove", (event) => {
+        const s = scale();
+        if (document.pointerLockElement === this.canvas) {
+          const [dx, dy] = [event.movementX * s, event.movementY * s];
+          if (this.pointer === "lock") send({ pointerMoved: [dx, dy] });
+          else send({ pointer: clampHeld(dx, dy) });
+          return;
+        }
+        if (this.pointer === "lock") {
+          if (event.buttons !== 0) send({ pointerMoved: [event.movementX * s, event.movementY * s] });
+          return;
+        }
+        const at = [event.offsetX * s, event.offsetY * s];
+        this.heldAt = at;
+        send({ pointer: at });
       });
-      target.addEventListener("pointerup", (event) => send({ button: BUTTON[event.button] ?? 0, down: false }));
+      target.addEventListener("pointerdown", (event) => {
+        this.canvas.focus();
+        event.preventDefault();
+        this.startSound().catch(() => {});
+        const s = scale();
+        this.heldAt = [event.offsetX * s, event.offsetY * s];
+        const button = BUTTON[event.button] ?? 0;
+        if ((this.pointer === "lock" || this.pointer === "hold") && document.pointerLockElement !== this.canvas) {
+          const swallow = this.pointer === "lock" && !this.lockFailedOnce;
+          lockPointer(this.canvas, () => {
+            this.lockFailedOnce = true;
+          });
+          if (swallow) {
+            this.swallowedButton = button;
+            return;
+          }
+        }
+        if (document.pointerLockElement !== this.canvas && target.setPointerCapture) {
+          try {
+            target.setPointerCapture(event.pointerId);
+          } catch {}
+        }
+        send({ button, down: true });
+      });
+      target.addEventListener("pointerup", (event) => {
+        const button = BUTTON[event.button] ?? 0;
+        if (this.swallowedButton === button) {
+          this.swallowedButton = null;
+          return;
+        }
+        send({ button, down: false });
+      });
       target.addEventListener("contextmenu", (event) => event.preventDefault());
       target.addEventListener("wheel", (event) => {
         event.preventDefault();

@@ -65,6 +65,10 @@ usage:
       the system's cursor is locked and hidden, the scene's pointer moves
       with the mouse and stays inside the window (the scene draws it);
       the window losing the focus (Cmd+Tab) lets it go.
+      --lock-pointer locks and hides the system's cursor once clicked and
+      moves the scene's pointer by the mouse's motion without clamping to
+      the window's edges, for a first-person view; Escape or losing focus
+      lets it go.
       --memory says how many mebibytes of Fields the Host may hold at once,
       2048 by default; a scene of millions of triangles wants more.
       --work says how many million loop iterations one run of a Kernel may
@@ -110,6 +114,13 @@ impl entelechy_session::Clipboard for SystemClipboard {
 /// The window `window()` reads before one opens, when none was asked for.
 const DEFAULT_WINDOW: (u32, u32) = (960, 540);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PointerMode {
+    Free,
+    Hold,
+    Lock,
+}
+
 struct Options {
     /// The session: scene, library, inputs, params, backend, limits and
     /// allowances.
@@ -128,8 +139,8 @@ struct Options {
     /// A replay driving the scene frame by frame at its own times; the
     /// person takes over when it ends.
     replay: Option<entelechy_session::replay::Replay>,
-    /// Hold the pointer in the window once it is clicked.
-    hold_pointer: bool,
+    /// How the window grabs the system's cursor once clicked.
+    pointer_mode: PointerMode,
     /// The inputs and outputs a folder chosen with Cmd+O takes, and what
     /// the folder is allowed besides reads.
     folder: Vec<String>,
@@ -147,7 +158,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         no_audio: false,
         show_while_building: false,
         replay: None,
-        hold_pointer: false,
+        pointer_mode: PointerMode::Free,
         folder: Vec::new(),
         folder_allow: Vec::new(),
     };
@@ -166,7 +177,8 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--allow-origin" => options.origins.push(value("--allow-origin")?),
             "--no-audio" => options.no_audio = true,
             "--show-while-building" => options.show_while_building = true,
-            "--hold-pointer" => options.hold_pointer = true,
+            "--hold-pointer" => options.pointer_mode = PointerMode::Hold,
+            "--lock-pointer" => options.pointer_mode = PointerMode::Lock,
             "--folder" => options.folder.extend(listed(&value("--folder")?)),
             "--folder-allow" => {
                 for grant in listed(&value("--folder-allow")?) {
@@ -269,12 +281,13 @@ struct Player {
     /// The pointer's look a frame asked for, worn once the event loop is
     /// at hand ([`Player::wear`]).
     pointer_look: Option<play::PointerLook>,
-    /// Whether the pointer is held once the window is clicked, where the
-    /// system's cursor last was, and the held pointer while it is held
-    /// ([`entelechy_player::pointer`]).
-    hold_pointer: bool,
+    /// How the pointer is grabbed once the window is clicked, where the
+    /// system's cursor last was, the held pointer while grabbed
+    /// ([`entelechy_player::pointer`]), and the click that grabbed a lock.
+    pointer_mode: PointerMode,
     cursor: (f64, f64),
     held: Option<(f64, f64)>,
+    swallowed_button: Option<MouseButton>,
     /// The modifiers held: a key's text with Control or Command is a
     /// shortcut, not typing.
     modifiers: ModifiersState,
@@ -658,6 +671,10 @@ impl Player {
             .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined));
         if locked.is_ok() {
             window.set_cursor_visible(false);
+            if self.pointer_mode == PointerMode::Lock {
+                window.set_ime_allowed(false);
+                self.composing = false;
+            }
             self.held = Some(self.cursor);
         }
     }
@@ -671,6 +688,9 @@ impl Player {
         let _ = window.set_cursor_grab(CursorGrabMode::None);
         let _ = window.set_cursor_position(winit::dpi::PhysicalPosition::new(at.0, at.1));
         window.set_cursor_visible(true);
+        if self.pointer_mode == PointerMode::Lock {
+            window.set_ime_allowed(true);
+        }
         self.cursor = at;
     }
 }
@@ -733,20 +753,29 @@ impl ApplicationHandler for Player {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x, position.y);
-                if self.held.is_none() {
+                if self.held.is_none() && self.pointer_mode != PointerMode::Lock {
                     self.play.pointer(position.x as f32, position.y as f32);
                 }
             }
-            // Out of the focus, a held pointer and every held key are let
-            // go: their releases go to the window that has it.
+            // Out of the focus, a held pointer and every held key and
+            // button are let go: their releases go to the window that has it.
             WindowEvent::Focused(false) => {
+                self.swallowed_button = None;
                 self.let_go();
-                self.play.release_keys();
+                self.play.release_all();
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let held = state == ElementState::Pressed;
-                if held && self.hold_pointer && self.held.is_none() {
+                if held && self.pointer_mode != PointerMode::Free && self.held.is_none() {
                     self.hold();
+                    if self.pointer_mode == PointerMode::Lock && !self.play.replaying() {
+                        self.swallowed_button = Some(button);
+                        return;
+                    }
+                }
+                if !held && self.swallowed_button == Some(button) {
+                    self.swallowed_button = None;
+                    return;
                 }
                 match button {
                     MouseButton::Left => self.play.button(0, held),
@@ -823,6 +852,16 @@ impl ApplicationHandler for Player {
                     Key::Character(text) => text.to_string(),
                     _ => return,
                 };
+                if down
+                    && name == "Escape"
+                    && self.pointer_mode == PointerMode::Lock
+                    && self.held.is_some()
+                {
+                    self.swallowed_button = None;
+                    self.let_go();
+                    self.play.release_all();
+                    return;
+                }
                 self.play.key(&mut self.session, &name, down);
                 self.say();
             }
@@ -839,21 +878,28 @@ impl ApplicationHandler for Player {
         }
     }
 
-    /// A held pointer moves by the mouse's own motion, inside the window.
+    /// A grabbed pointer moves by the mouse's own motion: kept inside the
+    /// window under `--hold-pointer`, unbounded under `--lock-pointer`.
     fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
         let (Some(at), Some(window)) = (self.held, &self.window) else {
             return;
         };
         if let DeviceEvent::MouseMotion { delta } = event {
-            let size = window.inner_size();
-            let next = entelechy_player::pointer::held_step(
-                at,
-                delta,
-                window.scale_factor(),
-                (size.width, size.height),
-            );
-            self.held = Some(next);
-            self.play.pointer(next.0 as f32, next.1 as f32);
+            let scale = window.scale_factor();
+            if self.pointer_mode == PointerMode::Lock {
+                self.play
+                    .move_pointer((delta.0 * scale) as f32, (delta.1 * scale) as f32);
+            } else {
+                let size = window.inner_size();
+                let next = entelechy_player::pointer::held_step(
+                    at,
+                    delta,
+                    scale,
+                    (size.width, size.height),
+                );
+                self.held = Some(next);
+                self.play.pointer(next.0 as f32, next.1 as f32);
+            }
         }
     }
 
@@ -975,9 +1021,10 @@ fn main() -> ExitCode {
         audio_allowed: !options.no_audio,
         audio_failed: false,
         pointer_look: None,
-        hold_pointer: options.hold_pointer,
+        pointer_mode: options.pointer_mode,
         cursor: (0.0, 0.0),
         held: None,
+        swallowed_button: None,
         modifiers: ModifiersState::empty(),
         composing: false,
         folder: options.folder.clone(),

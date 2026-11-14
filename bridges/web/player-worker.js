@@ -217,6 +217,8 @@ self.onmessage = ({ data }) => {
   if (data.typed) hands.push(() => withText(data.typed, (t) => x.entelechy_play_typed(session(), t)));
   else if (data.key) hands.push(() => withText(data.key, (t) => x.entelechy_play_key(session(), t, data.down ? 1 : 0)));
   else if (data.pointer) hands.push(() => x.entelechy_play_pointer(session(), data.pointer[0], data.pointer[1]));
+  else if (data.pointerMoved) hands.push(() => x.entelechy_play_pointer_moved && x.entelechy_play_pointer_moved(session(), data.pointerMoved[0], data.pointerMoved[1]));
+  else if (data.release) hands.push(() => x.entelechy_play_release && x.entelechy_play_release(session()));
   else if (data.button !== undefined) hands.push(() => x.entelechy_play_button(session(), data.button, data.down ? 1 : 0));
   else if (data.wheel) hands.push(() => x.entelechy_play_wheel(session(), data.wheel[0], data.wheel[1]));
   else if (data.pads) hands.push(() => padsNow(data.pads));

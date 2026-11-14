@@ -422,3 +422,42 @@ fn f8_holds_the_time_and_f9_and_f7_step_it() {
     assert_eq!(play.time(), 0.0);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A locked pointer moved by deltas turns past the picture's edges without
+/// clamping (even after frames land), while `pointer` returns to clamped
+/// coordinates and `release_all` lets go of buttons as well as keys.
+#[test]
+fn a_locked_pointer_moves_past_the_edges_and_release_all_lets_buttons_go() {
+    let dir = scratch("locked_pointer");
+    let mut session = open(&dir);
+    let mut play = Play::new(still);
+    shown(&mut play, &mut session);
+    play.landed(
+        Some(entelechy_session::play::Placement {
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 8,
+        }),
+        (4, 4),
+    );
+    play.pointer(4.0, 4.0);
+    assert_eq!(play.context(VIEW).input.pointer, [2.0, 2.0]);
+    play.move_pointer(20.0, -12.0);
+    assert_eq!(play.context(VIEW).input.pointer, [12.0, -4.0]);
+    // Presenting the next frame keeps the unbounded coordinates intact.
+    play.landed(None, (4, 4));
+    assert_eq!(play.context(VIEW).input.pointer, [12.0, -4.0]);
+    // A positioned cursor clamps again.
+    play.pointer(100.0, -10.0);
+    assert_eq!(play.context(VIEW).input.pointer, [3.0, 0.0]);
+
+    play.key(&mut session, "w", true);
+    play.button(0, true);
+    play.button(1, true);
+    shown(&mut play, &mut session);
+    play.release_all();
+    let input = play.context(VIEW).input;
+    assert!(!input.key(87) && !input.pointer_down && !input.pointer_right);
+    let _ = std::fs::remove_dir_all(&dir);
+}

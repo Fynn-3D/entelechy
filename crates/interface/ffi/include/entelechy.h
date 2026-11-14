@@ -149,6 +149,12 @@ int entelechy_play_key(EntelechySession *session, const char *name, int down);
 int entelechy_play_typed(EntelechySession *session, const char *typed);
 /* The pointer at (x, y) in the window's pixels. */
 void entelechy_play_pointer(EntelechySession *session, float x, float y);
+/* Moves the pointer by (dx, dy) window pixels without clamping to the
+ * picture's edges, for a locked pointer turning without bound. */
+void entelechy_play_pointer_moved(EntelechySession *session, float dx, float dy);
+/* Lets go of every held key and pointer button when a window or page loses
+ * focus or pointer lock. */
+void entelechy_play_release(EntelechySession *session);
 /* A pointer button, 0 left, 1 right, 2 middle, pressed or released. */
 void entelechy_play_button(EntelechySession *session, int which, int down);
 /* The wheel turned by (x, y) lines, y positive away from the person. */

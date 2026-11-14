@@ -127,6 +127,34 @@ pub unsafe extern "C" fn entelechy_play_pointer(session: *mut EntelechySession, 
     }
 }
 
+/// Moves the pointer by `(dx, dy)` canvas pixels without clamping to the
+/// picture's edges, for a locked pointer turning without bound.
+///
+/// # Safety
+/// `session` is a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_play_pointer_moved(
+    session: *mut EntelechySession,
+    dx: f32,
+    dy: f32,
+) {
+    if let Some(mut s) = unsafe { enter(session) } {
+        s.play.move_pointer(dx, dy);
+    }
+}
+
+/// Lets go of every held key and pointer button when a window or page
+/// loses focus or pointer lock.
+///
+/// # Safety
+/// `session` is a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_play_release(session: *mut EntelechySession) {
+    if let Some(mut s) = unsafe { enter(session) } {
+        s.play.release_all();
+    }
+}
+
 /// A pointer button, 0 left, 1 right, 2 middle.
 ///
 /// # Safety
