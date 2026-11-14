@@ -622,9 +622,25 @@ pub(crate) fn declarations_keyed(
     own: entelechy_language::Own<'_>,
 ) -> Result<(Declarations, Option<String>), String> {
     let (reach, direct) = reached(store, origin, base, uses)?;
+    let key = scope_key(store, base, uses, own, &reach.documents);
+    scope_reach(store, own, &reach, &direct).map(|named| (named, key))
+}
+
+fn scope_reach(
+    store: &dyn Store,
+    own: entelechy_language::Own<'_>,
+    reach: &Reach,
+    direct: &[PathBuf],
+) -> Result<Declarations, String> {
     // The names are the language's: it is handed the documents and which
     // uses which.
-    let place = |path: &Path| reach.documents.iter().position(|(p, _)| p == path);
+    let places: std::collections::HashMap<&Path, usize> = reach
+        .documents
+        .iter()
+        .enumerate()
+        .map(|(i, (p, _))| (p.as_path(), i))
+        .collect();
+    let place = |path: &Path| places.get(path).copied();
     let sources: Vec<entelechy_language::Source<'_>> = reach
         .documents
         .iter()
@@ -647,11 +663,9 @@ pub(crate) fn declarations_keyed(
         })
         .collect();
     let direct: Vec<usize> = direct.iter().filter_map(|p| place(p)).collect();
-    let key = scope_key(store, base, uses, own, &reach.documents);
-    let named = entelechy_language::scope(&sources, &direct, own, &|name| {
+    entelechy_language::scope(&sources, &direct, own, &|name| {
         builtin_names().contains(name)
-    });
-    named.map(|named| (named, key))
+    })
 }
 
 /// What a scene's lowerings name ([`declarations_for`]) for its places,
@@ -701,16 +715,32 @@ impl<'a> Naming<'a> {
         uses: &[entelechy_language::Use],
         own: entelechy_language::Own<'_>,
     ) -> Result<(Declarations, Option<String>), String> {
-        if let Ok(Some(key)) = reach_key(self.store, None, base, uses, own)
-            && let Some(declarations) = self.named().get(&key)
+        self.within(None, base, uses, own)
+            .map(|(declarations, key, _)| (declarations, key))
+    }
+
+    /// [`declarations_within`] and the documents `uses` reaches, named once
+    /// a reach.
+    pub(crate) fn within(
+        &self,
+        origin: Option<&Path>,
+        base: &Path,
+        uses: &[entelechy_language::Use],
+        own: entelechy_language::Own<'_>,
+    ) -> Result<(Declarations, Option<String>, Vec<PathBuf>), String> {
+        let (reach, direct) = reached(self.store, origin, base, uses)?;
+        let used: Vec<PathBuf> = reach.documents.iter().map(|(p, _)| p.clone()).collect();
+        let key = scope_key(self.store, base, uses, own, &reach.documents);
+        if let Some(key) = &key
+            && let Some(declarations) = self.named().get(key)
         {
-            return Ok((declarations.clone(), Some(key)));
+            return Ok((declarations.clone(), Some(key.clone()), used));
         }
-        let (declarations, key) = declarations_keyed(self.store, None, base, uses, own)?;
+        let declarations = scope_reach(self.store, own, &reach, &direct)?;
         if let Some(key) = &key {
             self.named().insert(key.clone(), declarations.clone());
         }
-        Ok((declarations, key))
+        Ok((declarations, key, used))
     }
 }
 

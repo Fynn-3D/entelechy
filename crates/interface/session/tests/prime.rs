@@ -83,6 +83,14 @@ fn kernels_prepared_at_once_are_prepared_once_and_said_in_order() {
     let mut session = Session::open_with(&dir.join("scene.esn"), None, runtime);
     let events = session.sync();
     assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, Event::SceneLoaded))
+            .count(),
+        1,
+        "{events:?}"
+    );
+    assert_eq!(
         said(&events),
         [
             ("published", "a.ent".to_owned()),

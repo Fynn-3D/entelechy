@@ -13,8 +13,8 @@ use entelechy_kernel::{Runtime, Value};
 
 use crate::kernels::{Batch, Change, Defined, Kernels};
 use crate::sources::{
-    Expanded, declarations_for, declarations_within, functions_checked, is_library,
-    locate_document, named_id, used_documents,
+    Expanded, Named, Naming, declarations_for, functions_checked, is_library, locate_document,
+    named_id,
 };
 use crate::store::{Stamp, Store};
 use crate::{Diagnostic, Event};
@@ -388,11 +388,13 @@ impl Scene {
         // The libraries the running scene uses first: what changed there
         // either publishes now, or is handed to another thread before the
         // scene is read, which then waits for it.
-        if self.sync_libraries(kernels, runtime, events) {
+        if self.sync_libraries(kernels, runtime, events).changed {
             self.stamp = None;
         }
+        let had_lowering = self.lowering.is_some();
         self.sync_root(kernels, runtime, events, readable, apart);
-        if self.sync_libraries(kernels, runtime, events) {
+        let libraries = self.sync_libraries(kernels, runtime, events);
+        if libraries.reread || (libraries.changed && (had_lowering || kernels.preparing())) {
             self.stamp = None;
             self.sync_root(kernels, runtime, events, readable, apart);
         }
@@ -1119,14 +1121,16 @@ impl Scene {
         }
     }
 
-    /// Loads the libraries the root uses; returns whether any changed.
+    /// Loads the libraries the root uses; returns whether any was read and
+    /// whether any previously read library changed.
     fn sync_libraries(
         &mut self,
         kernels: &mut Kernels,
         runtime: &mut Runtime,
         events: &mut Vec<Event>,
-    ) -> bool {
+    ) -> Libraries {
         let mut changed = false;
+        let mut reread = false;
         let uses: Vec<(PathBuf, bool)> = self
             .uses
             .iter()
@@ -1191,6 +1195,7 @@ impl Scene {
             }
             kernels.take_made(compiled.made);
             changed = true;
+            reread = true;
         } else if self.compiling.is_none() {
             let mut to_read: Vec<(PathBuf, Option<Stamp>)> = Vec::new();
             // The libraries that use a changed document. While every used
@@ -1224,6 +1229,7 @@ impl Scene {
                 }
                 to_read.push((path, current));
             }
+            let any_reread = to_read.iter().any(|(path, _)| kernels.has_read(path));
             // Where replacements prepare off the frames, so are documents
             // read before read again and their Kernels compiled; one read
             // for the first time is read now, as a Kernel nothing runs yet
@@ -1237,15 +1243,17 @@ impl Scene {
                 match Compiling::start(Arc::clone(&self.store), to_read, ledger) {
                     Ok(compiling) => {
                         self.compiling = Some(compiling);
-                        return false;
+                        return Libraries::default();
                     }
                     Err(back) => to_read = back,
                 }
             }
             changed |= !to_read.is_empty();
+            reread |= any_reread;
             let store = self.store.as_ref();
+            let named = &self.named;
             let reads = crate::spread::map(&to_read, |(path, current)| {
-                read_library(store, path.clone(), *current)
+                read_library(store, path.clone(), *current, named)
             });
             for (document, depends) in reads {
                 self.used_settled = None;
@@ -1289,7 +1297,7 @@ impl Scene {
             self.land(outcome, kernels, runtime, events);
         }
         kernels.unprime();
-        changed
+        Libraries { changed, reread }
     }
 
     /// Prepares a one-Kernel document unpublished; see
@@ -1450,11 +1458,22 @@ fn undeclared(graph: &Graph, name: &str) -> String {
     why
 }
 
+#[derive(Clone, Copy, Default)]
+struct Libraries {
+    changed: bool,
+    reread: bool,
+}
+
 /// One library document read: parsed, its declarations gathered and
 /// checked, its Kernels found; and the documents it uses with their
 /// stamps, when it got as far as gathering them. It reads the store and
-/// nothing else, so it runs on any thread.
-fn read_library(store: &dyn Store, path: PathBuf, current: Option<Stamp>) -> (Read, Depends) {
+/// `named` alone, so it runs on any thread.
+fn read_library(
+    store: &dyn Store,
+    path: PathBuf,
+    current: Option<Stamp>,
+    named: &Named,
+) -> (Read, Depends) {
     let mut depends = None;
     let mut said = Vec::new();
     let text = match store.read_text(&path) {
@@ -1517,22 +1536,25 @@ fn read_library(store: &dyn Store, path: PathBuf, current: Option<Stamp>) -> (Re
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
     let mut document = document;
-    match declarations_within(
-        store,
+    let naming = Naming::sharing(store, Arc::clone(named));
+    match naming.within(
         Some(&path),
         &dir,
         &document.uses,
         entelechy_language::Own::of(&document),
     ) {
-        Ok(entelechy_language::Declarations {
-            structs,
-            types,
-            functions,
-            qualified,
-        }) => {
+        Ok((
+            entelechy_language::Declarations {
+                structs,
+                types,
+                functions,
+                qualified,
+            },
+            _,
+            used,
+        )) => {
             document.unqualify(&qualified);
-            let used = used_documents(store, &dir, &document.uses)
-                .unwrap_or_default()
+            let used = used
                 .into_iter()
                 .map(|used| {
                     let stamp = store.stamp(&used);
@@ -1765,8 +1787,9 @@ impl Compiling {
                     return;
                 };
                 let store = store.as_ref();
+                let named = Named::default();
                 let reads = crate::spread::map(&to_read, |(path, current)| {
-                    read_library(store, path.clone(), *current)
+                    read_library(store, path.clone(), *current, &named)
                 });
                 let documents: Vec<(&Path, &[Defined])> = reads
                     .iter()

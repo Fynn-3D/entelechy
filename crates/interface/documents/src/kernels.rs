@@ -148,26 +148,38 @@ pub(crate) struct Made {
 impl Ledger {
     /// Primes `documents` as [`Kernels::prime`] does.
     pub(crate) fn prime(&self, store: &dyn Store, documents: &[(&Path, &[Defined])]) -> Made {
-        let mut reaches_now = Vec::new();
-        let mut jobs: Vec<(&Path, &Defined, String, Option<Arc<KernelVersion>>)> = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut distinct: Vec<(&Path, &Defined)> = Vec::new();
         for (path, defined) in documents {
-            let before = self.documents.get(*path);
             for d in defined.iter() {
-                if jobs.iter().any(|(_, seen, _, _)| seen.id == d.id) {
-                    continue;
+                if seen.insert(&d.id) {
+                    distinct.push((*path, d));
                 }
-                let reaches = crate::sources::reached_key(store, &d.kernel);
-                reaches_now.push(((d.id.clone(), d.text.clone()), reaches.clone()));
-                let running = self.running.get(&d.id).cloned();
-                let unchanged = before.is_some_and(|before| {
-                    before.kernels.get(&d.id) == Some(&d.text)
-                        && before.reached.get(&d.id) == Some(&reaches)
-                });
-                if running.is_some() && unchanged {
-                    continue;
-                }
-                jobs.push((path, d, reaches, running));
             }
+        }
+        let keys: Vec<String> = if distinct.len() < 2 {
+            distinct
+                .iter()
+                .map(|(_, d)| crate::sources::reached_key(store, &d.kernel))
+                .collect()
+        } else {
+            crate::spread::map(&distinct, |(_, d)| {
+                crate::sources::reached_key(store, &d.kernel)
+            })
+        };
+        let mut reaches_now = Vec::with_capacity(distinct.len());
+        let mut jobs: Vec<(&Path, &Defined, String, Option<Arc<KernelVersion>>)> = Vec::new();
+        for ((path, d), reaches) in distinct.into_iter().zip(keys) {
+            reaches_now.push(((d.id.clone(), d.text.clone()), reaches.clone()));
+            let running = self.running.get(&d.id).cloned();
+            let unchanged = self.documents.get(path).is_some_and(|before| {
+                before.kernels.get(&d.id) == Some(&d.text)
+                    && before.reached.get(&d.id) == Some(&reaches)
+            });
+            if running.is_some() && unchanged {
+                continue;
+            }
+            jobs.push((path, d, reaches, running));
         }
         if jobs.len() < 2 {
             return Made {
