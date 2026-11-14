@@ -42,7 +42,7 @@ directions: a test needing a higher crate lives in that crate's tests.
 | Scene documents | [scene](crates/frontend/scene/src/lib.rs), [domain](crates/frontend/scene/src/domain.rs) | lowering tests in place, [every form lowered](crates/frontend/scene/tests/surface.rs) |
 | Graph Runtime | [graph](crates/core/graph/src/lib.rs), [evaluator](crates/core/graph/src/evaluate/mod.rs), [domain](crates/core/graph/src/domain.rs) | [composition tests](crates/core/graph/tests/composition.rs), [with the compiler](crates/interface/session/tests/composition.rs) |
 | Documents | [documents](crates/interface/documents/src/lib.rs): [scene](crates/interface/documents/src/scene.rs), [kernels](crates/interface/documents/src/kernels.rs), [inputs](crates/interface/documents/src/inputs/mod.rs), [sources](crates/interface/documents/src/sources.rs), [store](crates/interface/documents/src/store.rs); [formats](crates/interface/formats/src/lib.rs) | [layers](crates/interface/entelechy/tests/layers.rs) |
-| Session | [session](crates/interface/session/src/session.rs), [observe](crates/interface/session/src/observe.rs), [bench](crates/interface/session/src/bench.rs) | [session tests](crates/interface/entelechy/tests/session.rs) |
+| Session | [session](crates/interface/session/src/session.rs), [bundle](crates/interface/session/src/bundle/mod.rs), [observe](crates/interface/session/src/observe.rs), [bench](crates/interface/session/src/bench.rs) | [session tests](crates/interface/entelechy/tests/session.rs), [bundle tests](crates/interface/session/tests/bundle.rs) |
 | Creation protocol | [protocol](crates/interface/protocol/src/lib.rs): [inspect](crates/interface/protocol/src/inspect.rs), [create](crates/interface/protocol/src/create.rs), [run](crates/interface/protocol/src/run.rs), [fields](crates/interface/protocol/src/fields.rs), [wire](crates/interface/protocol/src/wire.rs), [transport](crates/interface/protocol/src/transport.rs), [WebSocket](crates/interface/protocol/src/websocket.rs) | [client](crates/interface/entelechy/tests/protocol.rs), [live agents](crates/interface/entelechy/tests/agent.rs), [what agents found wanting](crates/interface/entelechy/tests/findings/) |
 | Command line | [entelechy](crates/interface/entelechy/src/main.rs), [replay](crates/interface/session/src/replay.rs), [render](crates/interface/entelechy/src/render.rs), [packages](crates/interface/entelechy/src/package.rs), [scaffold](crates/interface/entelechy/src/scaffold.rs) | every example replay on three backends |
 | C ABI | [ffi](crates/interface/ffi/src/lib.rs), [header](crates/interface/ffi/include/entelechy.h) | [ABI](crates/interface/ffi/tests/abi.rs), [header held to the exports](crates/interface/ffi/tests/header.rs), [C example](bridges/c/hello.c) |
@@ -307,6 +307,10 @@ only after running that test on the device.
 - WGSL's float `%` rounds the quotient: a Float remainder is an `fmod` on
   a fused multiply-add.
 - Fast math may fold `inf * 0`: a NaN made on the GPU is not promised.
+  A NaN already in a buffer is tested on its `bitcast<u32>` words rather
+  than `x != x`, and `pow` goes through `ent_pow` where WGSL leaves negative
+  bases undefined ([prelude](crates/backends/gpu/src/wgsl/prelude.rs),
+  [parity](crates/backends/gpu/tests/parity.rs)).
 - Narrow outputs sharing a word are `atomic<u32>` stored by `atomicOr`,
   with integer encodings rather than `pack2x16float`
   ([wgsl](crates/backends/gpu/src/wgsl/storage.rs) `narrow_store_body`).
