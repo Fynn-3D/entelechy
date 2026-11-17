@@ -19,9 +19,13 @@
 // - The sums may be smaller than the surface (half its size, say, for
 //   soft glow at a quarter of the work): a pixel of the sums tests depth
 //   at the surface pixel under its center.
-// - Each triangle walks its own box in one invocation: the form for
-//   particles, sparks, flames and other small triangles.
+// - Without tiles each triangle walks its own box in one invocation
+//   (`raster.veil@1`): the form for particles, sparks, flames and other
+//   small triangles. With tiles (`graphs/veil_tiled.esn`), a triangle
+//   whose box exceeds `tile` is cut across tiles so close translucent
+//   surfaces (domes, bells, sails, glass) draw in parallel on a device.
 
+use "tile.ent";
 use "triangle.ent";
 
 fn veil_scale() -> Float { return 1024.0; }
@@ -89,6 +93,113 @@ kernel raster.veil@1 {
                 dx + 1
             };
             dy + 1
+        };
+        return none;
+    }
+}
+
+/// Each translucent triangle's box on `light`, found once: none for one
+/// that is skipped. Both `raster.veil_small@1` and `raster.veil_tiles@1`
+/// read it.
+kernel raster.veil_boxes@1 {
+    requires { field.read; field.write; }
+    input triangles: Rows<Face>;
+    input vertices: Rows<Corner>;
+    input light: Grid<IVec4>;
+    output result: Rows<Box>;
+    compute { return boxed(corners(sample(triangles), vertices, size(light)), size(light)); }
+}
+
+/// Every pixel's sums of light and absorption for the translucent
+/// triangles whose box is one `tile` or less; larger ones are left to
+/// `raster.veil_tiles@1`, which adds to the sums these leave.
+kernel raster.veil_small@1 {
+    requires { field.read; field.write; }
+    input triangles: Rows<Face>;
+    input vertices: Rows<Corner>;
+    input boxes: Rows<Box>;
+    input tints: Rows<Vec4>;
+    input surface: Grid<Surface>;
+    input light: Grid<IVec4>;
+    param soft: Float = 0.0;
+    param tile: Int = 0;
+    output result: Grid<IVec4>;
+    struct Drop { pixel: Vec2; sums: IVec4; }
+    scatter over triangles into light with sum {
+        let t = element();
+        let k = corners(sample(triangles), vertices, size(light));
+        let b = at(boxes, t);
+        let none = Drop { pixel: vec2(-1.0, -1.0), sums: ivec4(0, 0, 0, 0) };
+        if b.w == 0 || large(b, tile) { return none; }
+        let ta = at(tints, k.ia);
+        let tb = at(tints, k.ib);
+        let tc = at(tints, k.ic);
+        loop b.h with dy = 0 {
+            loop b.w with dx = 0 {
+                let px = b.x0 + dx;
+                let py = b.y0 + dy;
+                let z = depth_at(k, px, py);
+                let s = at(surface, int(floor((vec2(px, py) + 0.5) * vec2(size(surface)) / vec2(size(light)))));
+                let behind = if s.id >= 0 { s.depth } else { 1.0 };
+                if z >= 0.0 && z < behind {
+                    let fade = if soft > 0.0 { saturate((behind - z) / soft) } else { 1.0 };
+                    emit(Drop { pixel: vec2(px, py), sums: veil_of(tint_at(k, ta, tb, tc, px, py), fade) });
+                }
+                dx + 1
+            };
+            dy + 1
+        };
+        return none;
+    }
+}
+
+/// Every pixel's sums of light and absorption for the large translucent
+/// triangles, a tile of one's box at a time across a pool of invocations,
+/// added to the sums `raster.veil_small@1` left.
+kernel raster.veil_tiles@1 {
+    requires { field.read; field.write; }
+    input triangles: Rows<Face>;
+    input vertices: Rows<Corner>;
+    input boxes: Rows<Box>;
+    input counts: Rows<Int>;
+    input offsets: Rows<Int>;
+    input total: Rows<Int>;
+    input tints: Rows<Vec4>;
+    input surface: Grid<Surface>;
+    input light: Grid<IVec4>;
+    param soft: Float = 0.0;
+    param tile: Int = 16;
+    output result: Grid<IVec4>;
+    struct Drop { pixel: Vec2; sums: IVec4; }
+    scatter over triangles into light with sum {
+        let none = Drop { pixel: vec2(-1.0, -1.0), sums: ivec4(0, 0, 0, 0) };
+        let light_size = size(light);
+        let n = idomain();
+        let e = element();
+        let total = at(total, 0);
+        let rounds = if e < total { (total - e + n - 1) / n } else { 0 };
+        loop rounds with j = 0 {
+            let at_ = tile_place(e + j * n, counts, offsets, boxes, tile);
+            let k = corners(at(triangles, at_.t), vertices, light_size);
+            let ta = at(tints, k.ia);
+            let tb = at(tints, k.ib);
+            let tc = at(tints, k.ic);
+            loop at_.h with dy = 0 {
+                loop at_.w with dx = 0 {
+                    let px = at_.x0 + dx;
+                    let py = at_.y0 + dy;
+                    let z = depth_at(k, px, py);
+                    let s = at(surface, int(floor((vec2(px, py) + 0.5) * vec2(size(surface)) / light_size)));
+                    let behind = if s.id >= 0 { s.depth } else { 1.0 };
+                    if z >= 0.0 && z < behind {
+                        let fade = if soft > 0.0 { saturate((behind - z) / soft) } else { 1.0 };
+                        emit(Drop { pixel: vec2(px, py), sums: veil_of(tint_at(k, ta, tb, tc, px, py), fade) });
+                    }
+                    dx + 1
+                };
+                dy + 1
+            };
+            j + 1
         };
         return none;
     }

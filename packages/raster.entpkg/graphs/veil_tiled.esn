@@ -1,0 +1,51 @@
+//! The tiled form of `veil.esn`: a translucent triangle whose box exceeds
+//! `tile` is summed a tile to an invocation, by a pool of `pool`
+//! invocations, so close translucent geometry (domes, bells, sails, glass)
+//! draws in parallel on a device, to the same pixels and in any order.
+//! Small particles and sparks draw faster with `veil.esn`.
+use "../kernels/";
+
+input vertices: Rows<Corner>;
+input triangles: Rows<Face>;
+input tints: Rows<Vec4>;
+input surface: Grid<Surface>;
+param soft: Float = 0.0;
+param tile: Int = 16;
+param pool: Int = 4096;
+
+node unveiled: raster.unveiled@1 { surface <- surface; }
+node boxes: raster.veil_boxes@1 {
+    triangles <- triangles;
+    vertices <- vertices;
+    light <- unveiled.result;
+}
+node small: raster.veil_small@1 {
+    triangles <- triangles;
+    vertices <- vertices;
+    boxes <- boxes.result;
+    tints <- tints;
+    surface <- surface;
+    light <- unveiled.result;
+    soft = soft;
+    tile = tile;
+}
+node tiles: raster.tiles@2 { boxes <- boxes.result; tile = tile; }
+node offsets: raster.offsets@1 { counts <- tiles.result; }
+node total: raster.total@1 { offsets <- offsets.result; domain = 1; }
+node tiled: raster.veil_tiles@1 {
+    triangles <- triangles;
+    vertices <- vertices;
+    boxes <- boxes.result;
+    counts <- tiles.result;
+    offsets <- offsets.result;
+    total <- total.result;
+    tints <- tints;
+    surface <- surface;
+    light <- small.result;
+    soft = soft;
+    tile = tile;
+    domain = pool;
+}
+node veiled: raster.veiled@1 { sums <- tiled.result; }
+
+output light <- veiled.result;

@@ -7,27 +7,29 @@
 // same sums, and sums half the surface's size the same light.
 use "../kernels/";
 
-// Four quads, four corners each: the opaque half, the front, back and
-// soft sheets.
+// Five quads, four corners each: the opaque half, the front, back and
+// soft sheets, and a small spark inside one tile.
 node corners: kernel {
     requires { field.write; }
     output result: Rows<Corner>;
-    domain = 16;
+    domain = 20;
     compute {
         let v = element();
         let q = v / 4;
         let s = [vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0)][v % 4];
-        let x0 = if q == 0 { -1.0 } else { -1.0 };
-        let x1 = if q == 0 { 0.0 } else { 1.0 };
-        let depth = [0.5, 0.3, 0.7, 0.45][q];
-        return Corner { clip: vec4(mix(x0, x1, s.x), s.y * 2.0 - 1.0, depth, 1.0), normal: vec3(0.0, 0.0, 1.0), uv: vec2(0.0, 0.0) };
+        let x0 = if q == 4 { 0.1 } else { -1.0 };
+        let x1 = if q == 0 { 0.0 } else if q == 4 { 0.2 } else { 1.0 };
+        let y0 = if q == 4 { 0.0 } else { -1.0 };
+        let y1 = if q == 4 { 0.25 } else { 1.0 };
+        let depth = [0.5, 0.3, 0.7, 0.45, 0.25][q];
+        return Corner { clip: vec4(mix(x0, x1, s.x), mix(y0, y1, s.y), depth, 1.0), normal: vec3(0.0, 0.0, 1.0), uv: vec2(0.0, 0.0) };
     }
 }
 node tints: kernel {
     requires { field.write; }
     output result: Rows<Vec4>;
-    domain = 16;
-    compute { return [vec4(0.0, 0.0, 0.0, 0.0), vec4(0.5, 0.25, 0.0, 0.5), vec4(0.0, 0.0, 1.0, 0.5), vec4(1.0, 0.0, 0.0, 0.0)][element() / 4]; }
+    domain = 20;
+    compute { return [vec4(0.0, 0.0, 0.0, 0.0), vec4(0.5, 0.25, 0.0, 0.5), vec4(0.0, 0.0, 1.0, 0.5), vec4(1.0, 0.0, 0.0, 0.0), vec4(0.25, 0.5, 0.0, 0.5)][element() / 4]; }
 }
 // Faces of quads `first` to `first + count - 1`, in order or reversed.
 node opaque: kernel {
@@ -54,34 +56,50 @@ node soft_sheet: kernel {
     domain = 2;
     compute { let t = element(); return if t == 0 { Face { a: 12, b: 13, c: 14 } } else { Face { a: 12, b: 14, c: 15 } }; }
 }
+node mixed: kernel {
+    requires { field.write; }
+    output result: Rows<Face>;
+    domain = 6;
+    compute {
+        let t = element();
+        let b = if t < 4 { 4 + (t / 2) * 4 } else { 16 };
+        return if t % 2 == 0 { Face { a: b, b: b + 1, c: b + 2 } } else { Face { a: b, b: b + 2, c: b + 3 } };
+    }
+}
 
 node raster: graph "../graphs/surface.esn" { vertices <- corners.result; triangles <- opaque.result; width = 64; height = 32; }
 node glow: graph "../graphs/veil.esn" { vertices <- corners.result; triangles <- sheets.result; tints <- tints.result; surface <- raster.surface; }
 node glow_back: graph "../graphs/veil.esn" { vertices <- corners.result; triangles <- reversed.result; tints <- tints.result; surface <- raster.surface; }
+node mixed_whole: graph "../graphs/veil.esn" { vertices <- corners.result; triangles <- mixed.result; tints <- tints.result; surface <- raster.surface; }
+node mixed_tiled: graph "../graphs/veil_tiled.esn" { vertices <- corners.result; triangles <- mixed.result; tints <- tints.result; surface <- raster.surface; tile = 8; pool = 5; }
 // The same sheets summed at half the surface's size.
 node half_unveiled: raster.unveiled@1 { surface <- raster.surface; domain = vec2(32, 16); }
 node half_sums: raster.veil@1 { triangles <- sheets.result; vertices <- corners.result; tints <- tints.result; surface <- raster.surface; light <- half_unveiled.result; }
 node half: raster.veiled@1 { sums <- half_sums.result; }
 node faded: graph "../graphs/veil.esn" { vertices <- corners.result; triangles <- soft_sheet.result; tints <- tints.result; surface <- raster.surface; soft = 0.1; }
+node faded_tiled: graph "../graphs/veil_tiled.esn" { vertices <- corners.result; triangles <- soft_sheet.result; tints <- tints.result; surface <- raster.surface; soft = 0.1; tile = 8; pool = 3; }
 
 // The probes, in thousandths: at a left pixel (16, 16) and a right one
 // (48, 16), the light's red, green, blue and the share left of the
 // surface; then the soft sheet's red at both; then the half-size sums'
-// blue and share left at the same two places.
+// blue and share left at the same two places; then the small spark over
+// both sheets in `mixed_tiled` at (36, 14).
 node probe: kernel {
     requires { field.read; field.write; }
     input glow: Grid<Vec4> <- glow.light;
     input faded: Grid<Vec4> <- faded.light;
     input half: Grid<Vec4> <- half.result;
+    input tiled: Grid<Vec4> <- mixed_tiled.light;
     output result: Rows<Int>;
-    domain = 14;
+    domain = 18;
     compute {
         let i = element();
         let p = if i < 4 || i == 8 { ivec2(16, 16) } else { ivec2(48, 16) };
         let g = at(glow, p);
         let hp = if i == 10 || i == 11 { ivec2(8, 8) } else { ivec2(24, 8) };
         let hv = at(half, hp);
-        let v = if i < 8 { [g.x, g.y, g.z, g.w][i % 4] } else if i < 10 { at(faded, p).x } else if i % 2 == 0 { hv.z } else { hv.w };
+        let sp = at(tiled, ivec2(36, 14));
+        let v = if i < 8 { [g.x, g.y, g.z, g.w][i % 4] } else if i < 10 { at(faded, p).x } else if i < 14 { if i % 2 == 0 { hv.z } else { hv.w } } else { [sp.x, sp.y, sp.z, sp.w][i - 14] };
         return int(round(v * 1000.0));
     }
 }
@@ -96,6 +114,27 @@ node order: kernel {
         let p = sample(a);
         let q = sample(b);
         return if bits(p.x) == bits(q.x) && bits(p.y) == bits(q.y) && bits(p.z) == bits(q.z) && bits(p.w) == bits(q.w) { 0 } else { 1 };
+    }
+    merge(a, b) { return a + b; }
+}
+
+// How many pixels `veil_tiled.esn` sums differently from `veil.esn`,
+// over both the mixed large-and-small triangles and the soft sheet.
+node tiled_diff: kernel {
+    requires { field.read; field.write; }
+    input a: Grid<Vec4> <- mixed_whole.light;
+    input b: Grid<Vec4> <- mixed_tiled.light;
+    input c: Grid<Vec4> <- faded.light;
+    input d: Grid<Vec4> <- faded_tiled.light;
+    output result: Rows<Int>;
+    compute over a {
+        let p = sample(a);
+        let q = sample(b);
+        let r = sample(c);
+        let s = sample(d);
+        let m = bits(p.x) == bits(q.x) && bits(p.y) == bits(q.y) && bits(p.z) == bits(q.z) && bits(p.w) == bits(q.w);
+        let f = bits(r.x) == bits(s.x) && bits(r.y) == bits(s.y) && bits(r.z) == bits(s.z) && bits(r.w) == bits(s.w);
+        return if m && f { 0 } else { 1 };
     }
     merge(a, b) { return a + b; }
 }

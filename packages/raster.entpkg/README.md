@@ -25,9 +25,10 @@ use "raster.entpkg";
 - `kernels/triangle.ent` — Rasterization as Kernels. Kernels:
   `raster.cover@3`, `raster.cover@4`, `raster.resolve@2`.
 - `kernels/veil.ent` — Translucent triangles over an opaque surface: the
-  light they add and the share of the surface left showing, summed so
-  any order of triangles gives the same pixel. Kernels:
-  `raster.unveiled@1`, `raster.veil@1`, `raster.veiled@1`.
+  light they add and the share of the surface left showing, summed whole
+  or tiled so any order of triangles gives the same pixel. Kernels:
+  `raster.unveiled@1`, `raster.veil@1`, `raster.veil_boxes@1`,
+  `raster.veil_small@1`, `raster.veil_tiles@1`, `raster.veiled@1`.
 
 ## Graph presets
 
@@ -43,6 +44,7 @@ use "raster.entpkg";
 - `graphs/tiled_window.esn` — The tiled form of `window.esn`.
 - `graphs/veil.esn` — Translucent triangles, their tints and the opaque
   surface in; the light and what shows through out.
+- `graphs/veil_tiled.esn` — The tiled form of `veil.esn`.
 - `graphs/window.esn` — The raster preset at the window's size.
 
 ## Tests

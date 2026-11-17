@@ -100,7 +100,7 @@ Pictures, and the shapes they are drawn from.
 | Package | Holds |
 | --- | --- |
 | [`image`](image.entpkg/README.md) | A picture alone: color, blending and masks, filters, tone, scaling, antialiasing, histograms, distance fields, mipmaps, pixel art |
-| [`raster`](raster.entpkg/README.md) | Triangles rasterized alike on every backend, plain, tiled or cut out |
+| [`raster`](raster.entpkg/README.md) | Triangles rasterized alike on every backend, plain, tiled, cut out or translucent |
 | [`voxel`](voxel.entpkg/README.md) | Rays walked through voxels, shapes as data, bodies posed by joints |
 | [`vector`](vector.entpkg/README.md) | SVG drawings filled pixel by pixel, whole or tiled |
 | [`mesh`](mesh.entpkg/README.md) | Triangle meshes as points and faces: lattices, primitives, subdivision and surfaces from fields |
