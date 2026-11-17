@@ -485,3 +485,165 @@ fn a_plan_is_made_for_the_window_asked() {
         .unwrap();
     assert_eq!(plan[0].domain, Some(Domain::Grid(6, 4)));
 }
+
+/// State made on a device and read `<~` on the processor queues its readback
+/// as soon as its producer runs, ahead of the device work that follows it.
+#[test]
+fn state_read_on_the_processor_queues_its_readback_when_made() {
+    use std::sync::{Arc, Mutex};
+
+    struct ResidentWords(Vec<u32>);
+    struct Queued {
+        words: Vec<u32>,
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+    impl entelechy_kernel::Downloading for Queued {
+        fn take(self: Box<Self>) -> Result<Vec<u32>, String> {
+            self.events.lock().unwrap().push("take");
+            Ok(self.words)
+        }
+    }
+    struct LoggedDevice {
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+    impl Backend for LoggedDevice {
+        fn name(&self) -> &'static str {
+            "device"
+        }
+        fn has_device(&self) -> bool {
+            true
+        }
+        fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
+            Stub.prepare(module)
+        }
+        fn execute(
+            &self,
+            prepared: &dyn Prepared,
+            module: &Validated,
+            invocation: &Invocation,
+            scope: &mut Scope<'_>,
+        ) -> Result<Vec<Handle>, ExecutionError> {
+            let tag = if module.manifest.id.to_string().contains("depths") {
+                "depths"
+            } else {
+                "picture"
+            };
+            self.events.lock().unwrap().push(tag);
+            let given = prepared.as_any().downcast_ref::<Given>().unwrap();
+            let words: Vec<u32> = given
+                .value
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>()
+                .repeat(invocation.domain.count());
+            let port = &module.manifest.outputs[0];
+            Ok(vec![scope.adopt_resident(
+                port.ty.schema.clone(),
+                invocation.domain,
+                Box::new(ResidentWords(words)),
+            )?])
+        }
+        fn download(
+            &self,
+            device: &(dyn Any + Send + Sync),
+            _byte_len: usize,
+        ) -> Result<Vec<u32>, String> {
+            self.events.lock().unwrap().push("download");
+            Ok(device.downcast_ref::<ResidentWords>().unwrap().0.clone())
+        }
+        fn download_later(
+            &self,
+            device: &(dyn Any + Send + Sync),
+            _byte_len: usize,
+        ) -> Result<Box<dyn entelechy_kernel::Downloading>, String> {
+            self.events.lock().unwrap().push("download_later");
+            Ok(Box::new(Queued {
+                words: device.downcast_ref::<ResidentWords>().unwrap().0.clone(),
+                events: Arc::clone(&self.events),
+            }))
+        }
+    }
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut runtime = Runtime::with_backends(
+        1 << 20,
+        Box::new(LoggedDevice {
+            events: Arc::clone(&events),
+        }),
+        Some(Box::new(Stub)),
+    );
+    runtime.set_small(10);
+    runtime
+        .load(kernel("test.init@1", 0.0, false, &[]), "")
+        .unwrap();
+    runtime
+        .load(
+            kernel("test.step@1", 1.0, true, &[Capability::TimeRead]),
+            "",
+        )
+        .unwrap();
+    runtime
+        .load(kernel("test.depths@1", 2.0, true, &[]), "")
+        .unwrap();
+    runtime
+        .load(kernel("test.picture@1", 3.0, true, &[]), "")
+        .unwrap();
+
+    let mut init = node("init", "test.init@1", None);
+    init.domain = Some(DomainSpec::Literal(Domain::Grid(1, 1)));
+
+    let mut step = node("step", "test.step@1", None);
+    step.domain = Some(DomainSpec::Literal(Domain::Grid(1, 1)));
+    step.inputs.insert(
+        "source".into(),
+        Binding::Previous {
+            source: Source::Node {
+                node: id("depths"),
+                port: "result".into(),
+            },
+            initial: Source::Node {
+                node: id("init"),
+                port: "result".into(),
+            },
+            migration: None,
+        },
+    );
+
+    let mut depths = node("depths", "test.depths@1", Some("step"));
+    depths.domain = Some(DomainSpec::Literal(Domain::Grid(128, 1)));
+
+    let mut picture = node("picture", "test.picture@1", Some("depths"));
+    picture.domain = Some(DomainSpec::Literal(Domain::Grid(128, 1)));
+
+    let scene = graph(vec![init, step, depths, picture], "picture");
+    let mut evaluator = Evaluator::new();
+
+    for t in [0.0, 1.0] {
+        let context = Context {
+            time: t,
+            ..Context::default()
+        };
+        evaluator
+            .evaluate(
+                &scene,
+                &mut runtime,
+                &BTreeMap::new(),
+                &context,
+                &BTreeMap::new(),
+            )
+            .unwrap();
+    }
+
+    assert_eq!(
+        &events.lock().unwrap()[..],
+        &[
+            "depths",
+            "download_later",
+            "picture",
+            "take",
+            "depths",
+            "download_later",
+            "picture",
+        ]
+    );
+}

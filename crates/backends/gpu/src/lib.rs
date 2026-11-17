@@ -878,14 +878,13 @@ impl Backend for GpuBackend {
             });
         encoder.copy_buffer_to_buffer(&image.buffer, 0, &staging, 0, byte_len as u64);
         let after = self.submit(encoder.finish());
-        let asked = self.wait.ask_map(&self.queue, staging.slice(..));
+        let asked = Some(self.wait.ask_map_now(&self.queue, staging.slice(..)));
         Ok(Box::new(Coming {
             asked,
             wait: self.wait,
             spent: self.spent.clone(),
             device: self.device.clone(),
-            queue: self.queue.clone(),
-            staging,
+            staging: Some(staging),
             byte_len,
             after,
             heard: Arc::clone(&self.heard),

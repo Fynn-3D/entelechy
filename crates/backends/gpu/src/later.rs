@@ -9,31 +9,34 @@ pub(crate) struct Coming {
     pub(crate) wait: Wait,
     pub(crate) spent: Spent,
     pub(crate) device: wgpu::Device,
-    pub(crate) queue: wgpu::Queue,
-    pub(crate) staging: wgpu::Buffer,
+    pub(crate) staging: Option<wgpu::Buffer>,
     pub(crate) byte_len: usize,
     /// The copy's submission: taking waits for it alone.
     pub(crate) after: wgpu::SubmissionIndex,
-    /// The copy's readback, asked for as it was submitted where the device
-    /// answers only for everything before ([`Wait::ask_map`]).
+    /// The copy's readback, asked for as it was submitted ([`Wait::ask_map`]).
     pub(crate) asked: Option<crate::wait::Asked<Result<(), wgpu::BufferAsyncError>>>,
     /// What the device said by itself ([`crate::told`]).
     pub(crate) heard: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
+impl Drop for Coming {
+    fn drop(&mut self) {
+        if let Some(staging) = self.staging.take() {
+            crate::wait::discard(staging);
+        }
+    }
+}
+
 impl entelechy_rules::Downloading for Coming {
     fn take(mut self: Box<Self>) -> Result<Vec<u32>, String> {
-        let asked = self.asked.take();
-        let slice = self.staging.slice(..);
+        let asked = self.asked.take().expect("asked on submission");
+        let staging = self.staging.take().expect("staging buffer held");
+        let slice = staging.slice(..);
         self.spent
-            .time(|| match asked {
-                Some(asked) => self
-                    .wait
-                    .answer(&self.device, asked)?
-                    .map_err(|error| error.to_string()),
-                None => self
-                    .wait
-                    .map_read_after(&self.device, &self.queue, slice, &self.after),
+            .time(|| {
+                self.wait
+                    .answer_after(&self.device, &self.after, asked)?
+                    .map_err(|error| error.to_string())
             })
             .map_err(|error| crate::told(&self.heard, error))?;
         let words = crate::words_of(
@@ -41,8 +44,8 @@ impl entelechy_rules::Downloading for Coming {
                 .get_mapped_range()
                 .map_err(|error| error.to_string())?[..self.byte_len],
         );
-        self.staging.unmap();
-        crate::wait::discard(self.staging);
+        staging.unmap();
+        crate::wait::discard(staging);
         Ok(words)
     }
 }

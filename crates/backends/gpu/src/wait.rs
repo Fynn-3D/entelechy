@@ -250,16 +250,29 @@ impl Wait {
         queue: &wgpu::Queue,
         slice: wgpu::BufferSlice<'_>,
     ) -> Option<Asked<Result<(), wgpu::BufferAsyncError>>> {
-        self.parks_with_host().then(|| {
-            let (sender, receiver) = std::sync::mpsc::channel();
-            let wake = self.wake();
-            slice.map_async(wgpu::MapMode::Read, move |result| {
-                let _ = sender.send(result);
-                wake();
-            });
+        self.parks_with_host()
+            .then(|| self.ask_map_now(queue, slice))
+    }
+
+    /// Asks for `slice` mapped for reading now on every target, to be
+    /// answered by [`Wait::answer_after`]: on a machine [`Waiter`] hears it
+    /// finish while later work is submitted, and in a page an empty
+    /// submission makes browsers that poll on submissions look now.
+    pub(crate) fn ask_map_now(
+        self,
+        queue: &wgpu::Queue,
+        slice: wgpu::BufferSlice<'_>,
+    ) -> Asked<Result<(), wgpu::BufferAsyncError>> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let wake = self.wake();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+            wake();
+        });
+        if self.parks_with_host() {
             queue.submit(std::iter::empty());
-            Asked(receiver)
-        })
+        }
+        Asked(receiver)
     }
 
     /// Asks to be told when everything submitted so far is done, as
@@ -279,6 +292,16 @@ impl Wait {
     /// The answer to what was asked, once it comes.
     pub(crate) fn answer<T>(self, device: &wgpu::Device, asked: Asked<T>) -> Result<T, String> {
         self.until(device, || asked.0.try_recv().ok())
+    }
+
+    /// The answer to what was asked at `after`, polling only up to `after`.
+    pub(crate) fn answer_after<T>(
+        self,
+        device: &wgpu::Device,
+        after: &wgpu::SubmissionIndex,
+        asked: Asked<T>,
+    ) -> Result<T, String> {
+        self.until_after(device, after, || asked.0.try_recv().ok())
     }
 
     /// What wakes the host, or nothing when the thread blocks.

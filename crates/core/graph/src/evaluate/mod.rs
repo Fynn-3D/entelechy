@@ -550,6 +550,12 @@ struct Layout {
     /// ([`CHILL_STREAK`]). What is never let go, and what an `async` node
     /// reads, is not among them.
     chill_after: Vec<Vec<NodeId>>,
+    /// Output slots of each group that the Host reads directly (`awake`,
+    /// `value` in a domain, or an `async` reader's inputs).
+    host_outputs: Vec<Vec<usize>>,
+    /// `(output_slot, reader)` pairs for each group's executing readers,
+    /// prefetched when `reader` runs routed off the main device.
+    slot_readers: Vec<Vec<(usize, NodeId)>>,
     /// Pre-compiled slot bindings for every group and graph output.
     compiled: CompiledPlan,
 }
@@ -674,6 +680,73 @@ impl Layout {
             .filter_map(|(group, absorbed)| Some((runs_at.get(group)?, absorbed)))
             .flat_map(|(at, absorbed)| absorbed.iter().map(|node| (node.clone(), *at)))
             .collect();
+        let output_slot = |producer: &NodeId, port: &str| -> Option<(usize, usize)> {
+            let at = *runs_at.get(producer)?;
+            let slot = groups[at]
+                .manifest()
+                .outputs
+                .iter()
+                .position(|output| output.name == port)?;
+            Some((at, slot))
+        };
+        let mut host_outputs = vec![Vec::new(); groups.len()];
+        let mut slot_readers: Vec<Vec<(usize, NodeId)>> = vec![Vec::new(); groups.len()];
+        let mark_host = |host_outputs: &mut [Vec<usize>], at: usize, slot: usize| {
+            if !host_outputs[at].contains(&slot) {
+                host_outputs[at].push(slot);
+            }
+        };
+        for node in &graph.nodes {
+            for awake in &node.awake {
+                if let Source::Node {
+                    node: producer,
+                    port,
+                } = &awake.source
+                    && let Some((at, slot)) = output_slot(producer, port)
+                {
+                    mark_host(&mut host_outputs, at, slot);
+                }
+            }
+        }
+        for group in groups {
+            if let Some(DomainSpec::Expr(expr)) = &group.node.domain {
+                for (in_port, _) in expr.values_read() {
+                    if let Some(binding) = group.node.inputs.get(&in_port) {
+                        let source = match binding {
+                            Binding::Now(source) | Binding::Previous { source, .. } => source,
+                        };
+                        if let Source::Node {
+                            node: producer,
+                            port,
+                        } = source
+                            && let Some((at, slot)) = output_slot(producer, port)
+                        {
+                            mark_host(&mut host_outputs, at, slot);
+                        }
+                    }
+                }
+            }
+            for binding in group.node.inputs.values() {
+                let source = match binding {
+                    Binding::Now(source) | Binding::Previous { source, .. } => source,
+                };
+                if let Source::Node {
+                    node: producer,
+                    port,
+                } = source
+                    && let Some((at, slot)) = output_slot(producer, port)
+                {
+                    if group.node.is_async {
+                        mark_host(&mut host_outputs, at, slot);
+                    } else {
+                        let pair = (slot, group.node.id.clone());
+                        if !slot_readers[at].contains(&pair) {
+                            slot_readers[at].push(pair);
+                        }
+                    }
+                }
+            }
+        }
         let compiled = CompiledPlan::new(graph, groups, &runs_at);
         Self {
             runs_at,
@@ -691,6 +764,8 @@ impl Layout {
             readers_at,
             moving,
             chill_after,
+            host_outputs,
+            slot_readers,
             compiled,
         }
     }
@@ -956,6 +1031,8 @@ pub struct Evaluator {
     made_once: Option<(Arc<Vec<Group>>, Vec<MadeOnce>)>,
     /// How many frames in a row each node's outputs came out new.
     changing: crate::hash::QuickMap<NodeId, u32>,
+    /// Executing nodes whose last run was routed off the main device.
+    routed: crate::hash::QuickSet<NodeId>,
     /// The last shared graph that read a fallback, the externals it was
     /// given none for, and the graph with their fallbacks written in
     /// ([`Evaluator::with_fallbacks`]).
@@ -1127,6 +1204,7 @@ impl Evaluator {
         self.drop_in_flight(&mut released, runtime);
         let (cache, committed) = self.ledger.take_all();
         self.fused.clear();
+        self.routed.clear();
         for (_, pending) in std::mem::take(&mut self.pending) {
             runtime.discard(pending.ticket);
         }
@@ -2248,6 +2326,12 @@ impl Evaluator {
             .last_placement()
             .cloned()
             .unwrap_or_else(|| runtime.placement(&group.version));
+        let on_main = placement.routed.is_none();
+        if on_main {
+            self.routed.remove(&node.id);
+        } else {
+            self.routed.insert(node.id.clone());
+        }
         let moved = runtime.take_moved();
         frame.placements.push(Placed {
             node: node.id.clone(),
@@ -2263,6 +2347,33 @@ impl Evaluator {
         match rerun.filter(|_| runtime.last_repeats_exactly()) {
             Some(epoch) => self.store_as(&node.id, key, outputs, output_names, epoch, runtime),
             None => self.store(&node.id, key, outputs, output_names, runtime),
+        }
+        if on_main && !self.trial && runtime.has_device() {
+            let host_slots = &frame.layout.host_outputs[at];
+            let readers = &frame.layout.slot_readers[at];
+            if (!host_slots.is_empty() || !readers.is_empty())
+                && let Some(cached) = self.ledger.entry(&node.id)
+            {
+                let mut to_prefetch: Vec<Handle> = Vec::new();
+                for &slot in host_slots {
+                    if let Some(&handle) = cached.outputs.get(slot)
+                        && !to_prefetch.contains(&handle)
+                    {
+                        to_prefetch.push(handle);
+                    }
+                }
+                for (slot, reader) in readers {
+                    if self.routed.contains(reader)
+                        && let Some(&handle) = cached.outputs.get(*slot)
+                        && !to_prefetch.contains(&handle)
+                    {
+                        to_prefetch.push(handle);
+                    }
+                }
+                for handle in to_prefetch {
+                    runtime.prefetch(handle);
+                }
+            }
         }
         frame.executed.push(node.id.clone());
         frame.ran[at] = true;
@@ -2514,7 +2625,7 @@ fn same_words(runtime: &Runtime, previous: &[Handle], fresh: &[Handle], on_devic
 fn release(runtime: &mut Runtime, handle: Handle) {
     // The evaluator owns these handles; a failure means the interface
     // already released one, so the error is ignored.
-    let _ = runtime.host_mut().release(handle);
+    let _ = runtime.release(handle);
 }
 
 /// The context a domain expression reads: the window's size, while one

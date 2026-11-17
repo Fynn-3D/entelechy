@@ -3,7 +3,7 @@
 //! keyed hash's resistance to chosen collisions for speed; with no random
 //! state, a map's order is the same on every run.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hasher};
 
 /// Builds [`Quick`] hashers.
@@ -63,3 +63,6 @@ impl Hasher for Quick {
 
 /// A map hashed with [`Quick`].
 pub(crate) type QuickMap<K, V> = HashMap<K, V, QuickState>;
+
+/// A set hashed with [`Quick`].
+pub(crate) type QuickSet<K> = HashSet<K, QuickState>;

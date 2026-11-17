@@ -857,6 +857,9 @@ pub struct Runtime {
     /// The Kernels whose runs go to the ordered backend while the main one
     /// has not finished them ([`Runtime::set_shown_while_building`]).
     shown_while_building: BTreeSet<KernelId>,
+    /// Resident Fields whose readback was queued when they were made
+    /// ([`Runtime::prefetch`]), redeemed by [`Runtime::bring_home`].
+    coming: hash::QuickMap<Handle, (usize, Box<dyn entelechy_rules::Downloading>)>,
 }
 
 impl Runtime {
@@ -893,6 +896,7 @@ impl Runtime {
             spared: hash::QuickMap::default(),
             last_placement: None,
             shown_while_building: BTreeSet::new(),
+            coming: hash::QuickMap::default(),
         };
         // Native operations are published at generation zero, so graphs
         // bind to them like any Kernel.
@@ -1305,12 +1309,59 @@ impl Runtime {
         })
     }
 
+    /// Queues a resident Field's readback behind the work submitted so far
+    /// ([`Backend::download_later`]), so a later [`Runtime::materialize`] or
+    /// ordered execution waits only up to this submission, not for device
+    /// work submitted after it.
+    pub fn prefetch(&mut self, handle: Handle) {
+        if self.coming.len() > 64 {
+            self.coming
+                .retain(|held, _| self.host.domain(*held).is_ok());
+        }
+        if self.coming.contains_key(&handle) || self.host.data(handle).is_ok() {
+            return;
+        }
+        let (Ok(Some(device)), Ok(domain), Ok(schema)) = (
+            self.host.resident(handle),
+            self.host.domain(handle),
+            self.host.schema(handle),
+        ) else {
+            return;
+        };
+        let byte_len = schema.storage_words(domain.count()) * 4;
+        if let Ok(coming) = self.backend.download_later(device, byte_len) {
+            self.coming.insert(handle, (byte_len, coming));
+        }
+    }
+
+    /// Releases a Field from the Host, dropping any queued readback for it.
+    pub fn release(&mut self, handle: Handle) -> Result<(), HostError> {
+        self.coming.remove(&handle);
+        self.host.release(handle)
+    }
+
     /// Brings a resident Field's words into Host memory and answers the
     /// bytes moved.
     fn bring_home(&mut self, handle: Handle) -> Result<u64, ExecutionError> {
         // Words kept in memory beside the device's need no trip.
         if self.host.data(handle).is_ok() {
+            self.coming.remove(&handle);
             return Ok(0);
+        }
+        if let Some((byte_len, coming)) = self.coming.remove(&handle) {
+            if self
+                .host
+                .resident(handle)
+                .map_err(|e| ExecutionError::Abi(e.into()))?
+                .is_none()
+            {
+                return Ok(0);
+            }
+            let words = coming.take().map_err(ExecutionError::Device)?;
+            self.host
+                .materialize(handle, words)
+                .map_err(|e| ExecutionError::Abi(e.into()))?;
+            return Ok(byte_len as u64);
         }
         let Some(device) = self
             .host
