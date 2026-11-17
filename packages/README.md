@@ -103,7 +103,7 @@ Pictures, and the shapes they are drawn from.
 | [`raster`](raster.entpkg/README.md) | Triangles rasterized alike on every backend, plain, tiled, cut out or translucent |
 | [`voxel`](voxel.entpkg/README.md) | Rays walked through voxels, shapes as data, bodies posed by joints |
 | [`vector`](vector.entpkg/README.md) | SVG drawings filled pixel by pixel, whole or tiled |
-| [`mesh`](mesh.entpkg/README.md) | Triangle meshes as points and faces: lattices, primitives, subdivision and surfaces from fields |
+| [`mesh`](mesh.entpkg/README.md) | Triangle meshes as points and faces: lattices, primitives, placement, joining, subdivision and surfaces from fields |
 | [`terrain`](terrain.entpkg/README.md) | Ground as heights: sampled, ray-marched, eroded and meshed |
 | [`texture`](texture.entpkg/README.md) | Patterns, projections, layers and normals a material is drawn with |
 

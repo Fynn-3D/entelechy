@@ -1,0 +1,73 @@
+// Meshes placed, repeated and joined: a plane, a sphere squashed and moved,
+// and three copies of the plane along x, joined into one mesh with `ends`
+// naming which of the three parts each face belongs to.
+use "geometry.entpkg";
+use "../kernels/";
+
+node plane: mesh.plane_points@1 { size = vec2(2.0, 2.0); columns = 3; rows = 2; domain = 6; }
+node plane_faces: mesh.lattice_faces@1 { columns = 3; rows = 2; domain = 4; }
+
+node sphere: mesh.sphere_points@1 { columns = 5; rows = 3; domain = 15; }
+node sphere_faces: mesh.lattice_faces@1 { columns = 5; rows = 3; domain = 16; }
+node dome: mesh.place_points@1 {
+    points <- sphere.result;
+    at = vec3(3.0, 2.0, -1.0);
+    scale = vec3(2.0, 0.5, 2.0);
+}
+
+node places: kernel {
+    requires { field.write; }
+    output result: Rows<Mat4>;
+    domain = 3;
+    compute {
+        let x = float(element() - 1) * 4.0;
+        return transform(vec3(x, 0.0, 5.0), vec4(0.0, 0.0, 0.0, 1.0), vec3(1.0, 1.0, 1.0));
+    }
+}
+node copies: graph "../graphs/instance.esn" {
+    points <- plane.result;
+    faces <- plane_faces.result;
+    places <- places.result;
+}
+
+node pair: graph "../graphs/join.esn" {
+    first_points <- plane.result;
+    first_faces <- plane_faces.result;
+    second_points <- dome.result;
+    second_faces <- sphere_faces.result;
+}
+node whole: graph "../graphs/join.esn" {
+    first_points <- pair.points;
+    first_faces <- pair.faces;
+    second_points <- copies.points;
+    second_faces <- copies.faces;
+}
+node three_ends: mesh.append_end@1 {
+    ends <- pair.ends;
+    faces <- copies.faces;
+    domain = count(ends) + 1;
+}
+
+node parts: kernel {
+    requires { field.read; field.write; }
+    input ends: Rows<Int> <- three_ends.result;
+    output result: Rows<Int>;
+    domain = 6;
+    compute {
+        let t = [0, 3, 4, 19, 20, 31][element()];
+        return mesh_part(t, ends);
+    }
+}
+
+node normal_probe: kernel {
+    requires { field.write; }
+    output result: Rows<Vec3>;
+    domain = 1;
+    compute {
+        let p = MeshPoint { position: vec3(1.0, 1.0, 0.0), normal: normalize(vec3(1.0, 1.0, 0.0)), uv: vec2(0.0, 0.0) };
+        let m = transform(vec3(0.0, 0.0, 0.0), vec4(0.0, 0.0, 0.0, 1.0), vec3(2.0, 1.0, 1.0));
+        return mesh_placed(p, m).normal;
+    }
+}
+
+output faces <- whole.faces;

@@ -1,0 +1,37 @@
+scene assembly.esn
+
+# Placing moves and squashes the sphere while keeping normals square to an
+# ellipse; three copies of the 6-point, 4-face plane make 18 points and 12
+# faces; joining the plane, the dome and the copies yields 39 points and 32
+# faces with ends [4, 20, 32], and mesh_part recovers each face's part.
+frame 0.0
+expect dome.result[7].position = 1 2 -1 0.0001
+expect dome.result[7].normal = -1 0 0 0.0001
+expect dome.result[14].position = 3 2.5 -1 0.0001
+expect normal_probe.result[0] = 0.4472136 0.8944272 0 0.0001
+
+expect count copies.copied_points.result = 18
+expect count copies.copied_faces.result = 12
+expect copies.copied_points.result[12].position = 3 0 4 0.0001
+expect copies.copied_faces.result[8].a = 12
+expect copies.copied_faces.result[8].b = 13
+expect copies.copied_faces.result[8].c = 16
+
+expect count whole.points.result = 39
+expect count whole.faces.result = 32
+expect whole.faces.result[4].a = 6
+expect whole.faces.result[4].b = 7
+expect whole.faces.result[4].c = 12
+expect whole.faces.result[20].a = 21
+expect whole.faces.result[20].b = 22
+expect whole.faces.result[20].c = 25
+
+expect three_ends.result[0] = 4
+expect three_ends.result[1] = 20
+expect three_ends.result[2] = 32
+expect parts.result[0] = 0
+expect parts.result[1] = 0
+expect parts.result[2] = 1
+expect parts.result[3] = 1
+expect parts.result[4] = 2
+expect parts.result[5] = 2

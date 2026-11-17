@@ -1,0 +1,23 @@
+//! Copies of one mesh placed at each matrix of `places`
+//! (`kernels/assembly.ent`): copy `k` sits at `places[k]`, and face `t`
+//! belongs to copy `t / count(faces)`.
+use "../kernels/";
+
+input points: Rows<MeshPoint>;
+input faces: Rows<Face>;
+input places: Rows<Mat4>;
+
+node copied_points: mesh.instance_points@1 {
+    points <- points;
+    places <- places;
+    domain = count(places) * count(points);
+}
+node copied_faces: mesh.instance_faces@1 {
+    points <- points;
+    faces <- faces;
+    places <- places;
+    domain = count(places) * count(faces);
+}
+
+output points <- copied_points.result;
+output faces <- copied_faces.result;

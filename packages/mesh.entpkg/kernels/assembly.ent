@@ -1,0 +1,135 @@
+// Meshes placed, repeated and joined into one, and which part a face
+// belongs to.
+//
+// - `mesh_placed` carries a point by a `Mat4` and its normal by the
+//   inverse transpose, so a non-uniform scale keeps normals square to the
+//   surface.
+// - `graphs/join.esn` lays `first` and `second` end to end, shifting
+//   `second`'s face indices past `first`'s points, and writes `ends` so
+//   `mesh_part(face, ends)` names which part a rasterized `surface.id`
+//   came from; `mesh.append_end@1` extends `ends` as more parts are
+//   joined.
+// - `graphs/instance.esn` repeats one mesh across a row of `Mat4` places;
+//   face `t` belongs to copy `t / count(faces)`.
+use "geometry.entpkg";
+use "parallel.entpkg";
+use "raster.entpkg";
+use "lattice.ent";
+
+/// Point `p` carried by `m`, its normal kept square to the surface under
+/// non-uniform scale.
+fn mesh_placed(p: MeshPoint, m: Mat4) -> MeshPoint {
+    let q = m * vec4(p.position.x, p.position.y, p.position.z, 1.0);
+    let n = transpose(inverse(m)) * vec4(p.normal.x, p.normal.y, p.normal.z, 0.0);
+    let len = length(n.xyz);
+    return MeshPoint {
+        position: q.xyz,
+        normal: if len > 0.000001 { n.xyz / len } else { p.normal },
+        uv: p.uv,
+    };
+}
+
+/// Face `face` with each corner shifted by `offset` points.
+fn mesh_face_shifted(face: Face, offset: Int) -> Face {
+    return Face { a: face.a + offset, b: face.b + offset, c: face.c + offset };
+}
+
+/// Which part's run of faces in `ends` holds `face` (such as a rasterized
+/// `surface.id`).
+fn mesh_part(face: Int, ends: Rows<Int>) -> Int {
+    return owner(face, ends);
+}
+
+/// A mesh's points scaled by `scale`, turned by unit quaternion `turn`,
+/// and moved to `at`.
+kernel mesh.place_points@1 {
+    requires { field.read; field.write; }
+    input points: Rows<MeshPoint>;
+    param at: Vec3 = vec3(0.0, 0.0, 0.0);
+    param turn: Vec4 = vec4(0.0, 0.0, 0.0, 1.0);
+    param scale: Vec3 = vec3(1.0, 1.0, 1.0);
+    output result: Rows<MeshPoint>;
+    compute { return mesh_placed(sample(points), transform(at, turn, scale)); }
+}
+
+/// `first`'s points followed by `second`'s (`domain = count(first) + count(second)`).
+kernel mesh.join_points@1 {
+    requires { field.read; field.write; }
+    input first: Rows<MeshPoint>;
+    input second: Rows<MeshPoint>;
+    output result: Rows<MeshPoint>;
+    compute {
+        let i = element();
+        let n = count(first);
+        return if i < n { at(first, i) } else { at(second, i - n) };
+    }
+}
+
+/// `first_faces` followed by `second_faces` shifted past `first_points`
+/// (`domain = count(first_faces) + count(second_faces)`).
+kernel mesh.join_faces@1 {
+    requires { field.read; field.write; }
+    input first_points: Rows<MeshPoint>;
+    input first_faces: Rows<Face>;
+    input second_faces: Rows<Face>;
+    output result: Rows<Face>;
+    compute {
+        let i = element();
+        let n = count(first_faces);
+        return if i < n { at(first_faces, i) } else { mesh_face_shifted(at(second_faces, i - n), count(first_points)) };
+    }
+}
+
+/// Where each of two joined parts' faces end (`domain = 2`), for `mesh_part`.
+kernel mesh.join_ends@1 {
+    requires { field.read; field.write; }
+    input first_faces: Rows<Face>;
+    input second_faces: Rows<Face>;
+    output result: Rows<Int>;
+    compute {
+        let n = count(first_faces);
+        return if element() == 0 { n } else { n + count(second_faces) };
+    }
+}
+
+/// `ends` extended by one more joined part's `faces` (`domain = count(ends) + 1`).
+kernel mesh.append_end@1 {
+    requires { field.read; field.write; }
+    input ends: Rows<Int>;
+    input faces: Rows<Face>;
+    output result: Rows<Int>;
+    compute {
+        let i = element();
+        let n = count(ends);
+        return if i < n { at(ends, i) } else { at(ends, n - 1) + count(faces) };
+    }
+}
+
+/// One copy of `points` at each matrix of `places` (`domain = count(places) * count(points)`).
+kernel mesh.instance_points@1 {
+    requires { field.read; field.write; }
+    input points: Rows<MeshPoint>;
+    input places: Rows<Mat4>;
+    output result: Rows<MeshPoint>;
+    compute {
+        let i = element();
+        let n = count(points);
+        return mesh_placed(at(points, i % n), at(places, i / n));
+    }
+}
+
+/// One copy of `faces` for each matrix of `places`, shifted to that copy's
+/// points (`domain = count(places) * count(faces)`).
+kernel mesh.instance_faces@1 {
+    requires { field.read; field.write; }
+    input points: Rows<MeshPoint>;
+    input faces: Rows<Face>;
+    input places: Rows<Mat4>;
+    output result: Rows<Face>;
+    compute {
+        let i = element();
+        let m = count(faces);
+        let copy = min(i / m, max(count(places) - 1, 0));
+        return mesh_face_shifted(at(faces, i % m), copy * count(points));
+    }
+}

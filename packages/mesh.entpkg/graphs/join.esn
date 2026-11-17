@@ -1,0 +1,30 @@
+//! Two meshes joined into one (`kernels/assembly.ent`): `first` followed
+//! by `second`, `second`'s face indices shifted past `first`'s points,
+//! and `ends` holding where each part's faces end for `mesh_part`.
+use "../kernels/";
+
+input first_points: Rows<MeshPoint>;
+input first_faces: Rows<Face>;
+input second_points: Rows<MeshPoint>;
+input second_faces: Rows<Face>;
+
+node points: mesh.join_points@1 {
+    first <- first_points;
+    second <- second_points;
+    domain = count(first) + count(second);
+}
+node faces: mesh.join_faces@1 {
+    first_points <- first_points;
+    first_faces <- first_faces;
+    second_faces <- second_faces;
+    domain = count(first_faces) + count(second_faces);
+}
+node ends: mesh.join_ends@1 {
+    first_faces <- first_faces;
+    second_faces <- second_faces;
+    domain = 2;
+}
+
+output points <- points.result;
+output faces <- faces.result;
+output ends <- ends.result;
