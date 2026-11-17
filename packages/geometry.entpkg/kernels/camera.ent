@@ -112,6 +112,17 @@ fn lens_distance(l: Lens, dir: Vec3, depth: Float, near: Float, far: Float) -> F
     return ahead / max(dot(dir, l.ahead), 0.000001);
 }
 
+/// How wide in the world one pixel of a picture `height` pixels tall is at `distance` from the lens.
+fn lens_pixel(l: Lens, distance: Float, height: Float) -> Float {
+    return max(distance, 0.0) / max(l.focal * height, 0.000001);
+}
+
+/// How wide across a surface of unit `normal` one pixel of a picture `height` pixels tall reaches along unit ray `dir` at
+/// `distance` (widened up to sixteenfold at grazing angles, as `texture`'s `pix` takes).
+fn lens_footprint(l: Lens, dir: Vec3, normal: Vec3, distance: Float, height: Float) -> Float {
+    return lens_pixel(l, distance, height) / max(abs(dot(dir, normal)), 0.0625);
+}
+
 /// A lens at `eye` looking at `target`, the world's up kept up.
 fn lens_looking(eye: Vec3, target: Vec3, focal: Float) -> Lens {
     let ahead = normalize(target - eye);

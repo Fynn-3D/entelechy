@@ -18,8 +18,9 @@ use "geometry.entpkg";
   world, the clip space a rasterizer takes and the picture; a pinhole
   lens (`Lens`): the ray through a pixel (`ray`), where a point lands
   (`project`), its clip coordinates and depth back to distance
-  (`lens_clip`, `lens_distance`), a lens orbiting a point
-  (`lens_orbiting`).
+  (`lens_clip`, `lens_distance`), how wide a pixel is in the world and
+  across a surface (`lens_pixel`, `lens_footprint`), and a lens orbiting
+  a point (`lens_orbiting`).
 - `kernels/curve.ent` — Curves through control points as the weights of
   four points, for points of any type: a uniform Catmull-Rom curve and a
   cubic Bezier curve, and their slopes.

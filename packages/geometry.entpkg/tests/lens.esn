@@ -8,7 +8,7 @@ use "../kernels/";
 node probe: kernel {
     requires { field.write; }
     output result: Rows<Vec4>;
-    domain = 8;
+    domain = 9;
     compute {
         let l = lens_orbiting(vec3(0.0, 1.0, 0.0), 0.0, 0.0, 5.0, 1.3);
         let ext = vec2(200.0, 100.0);
@@ -26,9 +26,16 @@ node probe: kernel {
             else if k == 6 {
                 let lo = lens_looking(vec3(0.0, 1.0, 5.0), vec3(0.0, 1.0, 0.0), 1.3);
                 vec4(length(lo.ahead - l.ahead) + length(lo.right - l.right) + length(lo.up - l.up), length(lo.eye - l.eye), lo.focal, 0.0)
-            } else {
+            } else if k == 7 {
                 let n = normalize(vec3(1.0, 1.0, 1.0));
                 vec4(dot(tangent_of(vec3(0.0, 1.0, 0.0)), vec3(0.0, 1.0, 0.0)), length(tangent_of(vec3(0.0, 1.0, 0.0))), dot(tangent_of(n), n), length(tangent_of(n)))
+            } else {
+                let px = lens_pixel(l, 5.0, ext.y);
+                let dir = vec3(0.0, 0.0, -1.0);
+                let square = lens_footprint(l, dir, vec3(0.0, 0.0, 1.0), 5.0, ext.y);
+                let slant = lens_footprint(l, dir, vec3(0.8660254, 0.0, 0.5), 5.0, ext.y);
+                let edge = lens_footprint(l, dir, vec3(1.0, 0.0, 0.0), 5.0, ext.y);
+                vec4(px * 26.0, square / px, slant / px, edge / px)
             };
     }
 }
