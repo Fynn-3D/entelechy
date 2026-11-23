@@ -82,6 +82,17 @@ fn runner_executes_compiled_bundle_and_trailer_file() {
         )
         .expect("export macOS .app");
 
+        let verify = Command::new("/usr/bin/codesign")
+            .args(["--verify", "--deep", "--strict"])
+            .arg(&app_dir)
+            .output()
+            .expect("codesign runs");
+        assert!(
+            verify.status.success(),
+            "exported .app failed strict codesign: {}",
+            String::from_utf8_lossy(&verify.stderr)
+        );
+
         let app_exe = app_dir.join("Contents/MacOS/NativeAnt");
         let app_run = Command::new(&app_exe)
             .args(["--frames", "3"])

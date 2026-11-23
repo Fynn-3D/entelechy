@@ -290,6 +290,22 @@ pub fn macos_app(scene: &Path, out: &Path, opts: &Options<'_>) -> Result<MadeApp
     let res_out = resources_dir.join("app.entapp");
     std::fs::write(&res_out, &app_bytes).map_err(|e| format!("{}: {e}", res_out.display()))?;
 
+    #[cfg(target_os = "macos")]
+    if runner_bytes.len() >= 4096 && Path::new("/usr/bin/codesign").is_file() {
+        let signed = std::process::Command::new("/usr/bin/codesign")
+            .args(["--force", "--deep", "-i", &app_id, "-s", "-"])
+            .arg(out)
+            .output()
+            .map_err(|e| format!("codesign {}: {e}", out.display()))?;
+        if !signed.status.success() {
+            return Err(format!(
+                "codesign {}: {}",
+                out.display(),
+                String::from_utf8_lossy(&signed.stderr).trim()
+            ));
+        }
+    }
+
     Ok(MadeApp {
         modules: compiled.modules,
         inputs: compiled.inputs,
