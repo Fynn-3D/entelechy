@@ -289,7 +289,8 @@ metrics as TrueType, OpenType (CFF) or WOFF (`--name` its family,
 read is written back bit for bit, but a font: its segments come back as
 curves through their ends, within a font unit.
 
-A scene (`.esn`) is exported as one page, `--out <name>.html`: a single
+A scene (`.esn`) is exported as a standalone binary bundle, `--out
+<name>.bundle`, or as one page, `--out <name>.html`: a single
 file that is the Player in a page, Entelechy's slim playback runtime for a
 page, and a compiled binary bundle of the scene's IR, lowered graph, input
 Fields and compact font contours (with no host paths or local save files). It
@@ -298,12 +299,14 @@ where Entelechy for the web is (the directory holding `bridges/web` and
 `target/page`: a web release, or a checkout that has built it as
 [WebAssembly](#webassembly) says; the current directory by default), and
 `--backend` (`gpu` or `jit`) what runs the scene in the page (by default the
-page chooses the GPU when WebGPU is available, else the JIT). `--name` sets
+page chooses the GPU when WebGPU or WebGL 2.0 is available, else the JIT). `--name` sets
 the page's title (otherwise derived from the scene's stem or project folder). `--hold-pointer`
 captures the browser cursor on click and keeps `pointer()` inside the output;
 `--lock-pointer` captures it and steps `pointer()` without bound (Escape
-releases either). The page needs a
-browser with WebGPU for the GPU backend, or runs on WebAssembly JIT alone. A
+releases either). The page uses WebGPU (with JSPI) or synchronous WebGL 2.0 for
+the GPU backend, or runs on WebAssembly JIT alone (`entelechy_bundle_wasm`
+emits each Kernel's position-independent WebAssembly module for hosts that
+precompile static `.wasm` modules). A
 file the scene only reads later, by a name it computes, is not in the page.
 Each `font` node whose `codes` come from static inputs alone keeps only those
 characters; `--chars` and `--chars-file` (each may be given again) name the
