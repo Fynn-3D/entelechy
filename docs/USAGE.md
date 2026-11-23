@@ -313,6 +313,26 @@ characters; `--chars` and `--chars-file` (each may be given again) name the
 characters to keep instead when a scene computes them as it runs, and a
 character not among them is then not drawn.
 
+The same compiled scene is exported as a native desktop application or a
+mobile project:
+
+- `--out <name>.app` writes a macOS application bundle, copying
+  `entelechy-runner` (`--runner <file>`, else beside `entelechy-export`)
+  untouched into `Contents/MacOS/` so its Mach-O linker signature holds, and
+  placing the scene's `Standalone` envelope (`app.entapp`) in
+  `Contents/Resources/`.
+- `--out <name>.exe` (with `--runner <entelechy-runner.exe>`) or `--out
+  <name>.bin` appends the `Standalone` envelope and a 24-byte trailer to a
+  prebuilt Windows PE or Unix `entelechy-runner` binary, producing one
+  executable file with no compiler or sidecar files. `--window <w>x<h>` fixes
+  the initial logical window size; `--app-id` sets a `.app`'s bundle
+  identifier (`run.entelechy.<slug>` by default).
+- `--out <dir>.ios` and `--out <dir>.android` write an Xcode project
+  (`bridges/ios`, Metal + `AVAudioEngine`, no runtime JIT) or an Android NDK
+  `NativeActivity` project (`bridges/android`, `ANativeWindow` + `AAudio`)
+  over `entelechy.h` and `scene.bundle`; `--lib` copies a prebuilt
+  `libentelechy_ffi.a` or `libentelechy_ffi.so` into the project.
+
 ## Creation protocol
 
 ```sh

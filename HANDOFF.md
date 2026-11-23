@@ -26,7 +26,7 @@ Verified surface, as of `main`:
 | Random programs: the JIT bit for bit, the GPU's integers and booleans exactly | `crates/backends/{jit,gpu}/tests/fuzz.rs`, from `entelechy_conformance::random`; `ENTELECHY_FUZZ=<n>` runs more |
 | Mutated documents and protocol requests never crash or hang the front end or a session | `crates/interface/entelechy/tests/hostile.rs` |
 | A session's random life: a success advances by one, a failure changes nothing, the Host does not grow | `crates/interface/session/tests/properties.rs` |
-| Blender 5.2, headless Chrome, Godot 4.6, C ABI | `cargo test --workspace`, each skipped when its tool is absent |
+| Blender 5.2, headless Chrome, Godot 4.6, C ABI, standalone `entelechy-runner` (`.app`, trailer `.exe`/`.bin`, `.ios` and `.android` bridges) | `cargo test --workspace`, each skipped when its tool is absent |
 | A live Blender | its MCP add-on, `127.0.0.1:9876`, `{"type":"execute","code":…,"strict_json":false}` + `\0` |
 
 ## Next
