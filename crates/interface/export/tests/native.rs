@@ -269,3 +269,74 @@ fn ios_and_android_exports_emit_complete_projects_matching_c_abi_header() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn exporter_accepts_precompiled_bundle_for_desktop_and_mobile_targets() {
+    let root = repository().canonicalize().unwrap_or_else(|_| repository());
+    let scene = root.join("examples/ant/scene.esn");
+    let dir = std::env::temp_dir().join(format!("entelechy-bundle-in-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+
+    let bundle_path = dir.join("ant.bundle");
+    let made_bundle = Command::new(exporter())
+        .arg(&scene)
+        .args(["--out"])
+        .arg(&bundle_path)
+        .output()
+        .expect("compile bundle");
+    assert!(made_bundle.status.success());
+    let bundle_bytes = std::fs::read(&bundle_path).expect("bundle bytes");
+
+    let pe_stub = dir.join("pe-runner.exe");
+    std::fs::write(&pe_stub, b"MZ\x90\x00pe-stub").expect("pe stub");
+
+    let exe_out = dir.join("FromBundle.exe");
+    let ok_exe = Command::new(exporter())
+        .arg(&bundle_path)
+        .args(["--runner"])
+        .arg(&pe_stub)
+        .args(["--name", "From Bundle", "--out"])
+        .arg(&exe_out)
+        .output()
+        .expect("exe from bundle");
+    assert!(
+        ok_exe.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ok_exe.stderr)
+    );
+    let unpacked = read_trailer(&exe_out).unwrap().unwrap();
+    assert_eq!(unpacked.title, "From Bundle");
+    assert_eq!(unpacked.bundle, bundle_bytes);
+
+    let entapp_out = dir.join("app.entapp");
+    let ok_entapp = Command::new(exporter())
+        .arg(&bundle_path)
+        .args(["--name", "Envelope App", "--lock-pointer", "--out"])
+        .arg(&entapp_out)
+        .output()
+        .expect("entapp from bundle");
+    assert!(ok_entapp.status.success());
+    let decoded_env =
+        Standalone::decode(&std::fs::read(&entapp_out).unwrap()).expect("valid entapp");
+    assert_eq!(decoded_env.title, "Envelope App");
+    assert_eq!(decoded_env.pointer, PointerMode::Lock);
+    assert_eq!(decoded_env.bundle, bundle_bytes);
+
+    let ios_out = dir.join("FromBundle.ios");
+    let ok_ios = Command::new(exporter())
+        .arg(&bundle_path)
+        .args(["--web"])
+        .arg(&root)
+        .args(["--name", "Bundle iOS", "--out"])
+        .arg(&ios_out)
+        .output()
+        .expect("ios from bundle");
+    assert!(ok_ios.status.success());
+    assert_eq!(
+        std::fs::read(ios_out.join("scene.bundle")).unwrap(),
+        bundle_bytes
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

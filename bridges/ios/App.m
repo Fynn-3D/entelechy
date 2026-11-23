@@ -54,6 +54,8 @@ static void ring_push(AudioRing *ring, const float *words, uint32_t frames, uint
     BOOL _audioStarted;
     CGPoint _lastTouch;
     BOOL _hasTouch;
+    NSArray<NSString *> *_saveSlots;
+    NSString *_saveDir;
 }
 @end
 
@@ -87,8 +89,55 @@ static void ring_push(AudioRing *ring, const float *words, uint32_t frames, uint
         return;
     }
 
+    NSMutableArray<NSString *> *slots = [NSMutableArray array];
+    for (size_t i = 0; ; i++) {
+        const char *raw = entelechy_save_slot(_session, i);
+        if (!raw) break;
+        [slots addObject:[NSString stringWithUTF8String:raw]];
+    }
+    _saveSlots = slots;
+    if (_saveSlots.count > 0) {
+        NSString *support = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
+        NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier] ?: @"run.entelechy.app";
+        _saveDir = [[support stringByAppendingPathComponent:bundleId] stringByAppendingPathComponent:@"saves"];
+        for (NSString *slot in _saveSlots) {
+            NSString *path = [_saveDir stringByAppendingPathComponent:slot];
+            NSData *saved = [NSData dataWithContentsOfFile:path];
+            if (saved.length > 0) {
+                entelechy_save_load(_session, slot.UTF8String, (const uint8_t *)saved.bytes, (size_t)saved.length);
+            }
+        }
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(flushSavesOnBackground)
+                                                     name:UIApplicationWillResignActiveNotification
+                                                   object:nil];
+    }
+
     _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(stepFrame)];
     [_link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+}
+
+- (void)syncSaves {
+    if (!_session || !_saveDir || _saveSlots.count == 0) {
+        return;
+    }
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSUInteger i = 0; i < _saveSlots.count; i++) {
+        size_t len = 0;
+        const uint8_t *bytes = entelechy_save_take(_session, (size_t)i, &len);
+        if (!bytes) continue;
+        NSString *dst = [_saveDir stringByAppendingPathComponent:_saveSlots[i]];
+        NSString *parent = [dst stringByDeletingLastPathComponent];
+        [fm createDirectoryAtPath:parent withIntermediateDirectories:YES attributes:nil error:nil];
+        NSData *payload = [NSData dataWithBytes:bytes length:len];
+        [payload writeToFile:dst atomically:YES];
+    }
+}
+
+- (void)flushSavesOnBackground {
+    if (!_session || _saveSlots.count == 0) return;
+    entelechy_save_flush(_session);
+    [self syncSaves];
 }
 
 - (void)startAudioIfNeeded {
@@ -170,6 +219,7 @@ static void ring_push(AudioRing *ring, const float *words, uint32_t frames, uint
     if (status != 0) {
         return;
     }
+    [self syncSaves];
 
     EntelechyField sound = {0};
     if (entelechy_play_sound(_session, &sound) == 0 && sound.count > 0 && sound.stride > 0) {
@@ -248,9 +298,12 @@ static void ring_push(AudioRing *ring, const float *words, uint32_t frames, uint
 }
 
 - (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
     [_link invalidate];
     [_audioEngine stop];
     if (_session) {
+        entelechy_save_flush(_session);
+        [self syncSaves];
         entelechy_close(_session);
         _session = NULL;
     }

@@ -53,3 +53,4 @@ workspace = true
 
 [dev-dependencies]
 entelechy-export = { path = "../../interface/export" }
+entelechy-formats = { path = "../../interface/formats" }

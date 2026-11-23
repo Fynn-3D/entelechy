@@ -20,7 +20,8 @@ use entelechy_ir::{BinaryOp, MAX_TYPE_DEPTH, Module};
 use entelechy_kernel::FieldData;
 
 pub(super) const MAGIC: &[u8; 16] = b"ENTELECHYBUNDLE\0";
-pub(super) const VERSION: u32 = 1;
+pub(super) const MIN_VERSION: u32 = 1;
+pub(super) const VERSION: u32 = 2;
 pub(super) const MAX_ITEMS: usize = 1 << 20;
 pub(super) const MAX_NESTING: usize = MAX_TYPE_DEPTH + 8;
 
@@ -41,6 +42,49 @@ pub struct Bundle {
     pub feeds: Vec<(String, String)>,
     /// Pre-baked font atlases for each `font` node in the scene.
     pub fonts: Vec<BundledFont>,
+    /// Persistent save files declared by `output ... to "<slot>";`.
+    pub saves: Vec<BundledSave>,
+}
+
+/// One persistent save file declared by a bundled scene (`output <output> <- ... to "<slot>";`)
+/// and any `input <input> = "<slot>" else ...;` bindings that read it back on launch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundledSave {
+    /// Portable relative save key (e.g. `"saves/tally.field"`), holding no host directory.
+    pub slot: String,
+    /// Graph output name written once a frame confirms.
+    pub output: String,
+    /// Scene inputs reading this save file (`(external_name, declared_type_text)`).
+    pub inputs: Vec<(String, Option<String>)>,
+    /// Whether read and written as raw bytes (`Rows<Int>`, 0..=255) rather than a Field format.
+    pub bytes: bool,
+    /// Element number names when `slot` is a `.csv` or `.json` data table.
+    pub columns: Vec<String>,
+}
+
+/// Validates and normalizes a relative save slot path (`"saves/tally.field"`),
+/// rejecting empty names, `..`, leading slashes, drive prefixes, and control bytes.
+pub fn clean_save_slot(raw: &str) -> Result<String, String> {
+    let normalized = raw.replace('\\', "/");
+    if normalized.starts_with('/') || normalized.contains(':') {
+        return Err(format!("save slot `{raw}` must be a relative path"));
+    }
+    let mut parts = Vec::new();
+    for seg in normalized.split('/') {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        if seg == ".." || seg.starts_with('.') || seg.chars().any(|c| c.is_control()) {
+            return Err(format!(
+                "save slot `{raw}` contains disallowed segment `{seg}`"
+            ));
+        }
+        parts.push(seg);
+    }
+    if parts.is_empty() {
+        return Err("save slot path is empty".into());
+    }
+    Ok(parts.join("/"))
 }
 
 /// How a `font` node's atlas is handed to [`crate::Session::bundle_with_fonts`].

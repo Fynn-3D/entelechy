@@ -16,7 +16,10 @@ use entelechy_ir::{
 };
 use entelechy_kernel::FieldData;
 
-use super::{BINARIES, Bundle, BundledAtlas, BundledFont, MAGIC, MAX_ITEMS, MAX_NESTING, VERSION};
+use super::{
+    BINARIES, Bundle, BundledAtlas, BundledFont, BundledSave, MAGIC, MAX_ITEMS, MAX_NESTING,
+    MIN_VERSION, VERSION, clean_save_slot,
+};
 use crate::memory::COPY_LEAST;
 
 impl Bundle {
@@ -74,6 +77,24 @@ impl Bundle {
                 atlas,
             });
         }
+        let saves = if r.version >= 2 {
+            r.list(MAX_ITEMS, |r| {
+                let slot = clean_save_slot(&r.str()?)?;
+                let output = r.str()?;
+                let inputs = r.list(MAX_ITEMS, |r| Ok((r.str()?, r.opt(Reader::str)?)))?;
+                let bytes = r.bool()?;
+                let columns = r.list(MAX_ITEMS, Reader::str)?;
+                Ok(BundledSave {
+                    slot,
+                    output,
+                    inputs,
+                    bytes,
+                    columns,
+                })
+            })?
+        } else {
+            Vec::new()
+        };
         if !r.rest.is_empty() {
             return Err(format!(
                 "bundle has {} trailing byte(s) after its end",
@@ -116,11 +137,13 @@ impl Bundle {
             presented,
             feeds,
             fonts,
+            saves,
         })
     }
 }
 
 struct Reader<'a> {
+    version: u32,
     strings: Vec<String>,
     rest: &'a [u8],
 }
@@ -150,9 +173,9 @@ impl<'a> Reader<'a> {
             .strip_prefix(MAGIC)
             .ok_or_else(|| "not an Entelechy scene bundle".to_owned())?;
         let version = u32::try_from(read_leb(&mut rest)?).map_err(|_| "bad bundle version")?;
-        if version != VERSION {
+        if !(MIN_VERSION..=VERSION).contains(&version) {
             return Err(format!(
-                "bundle format v{version} is not v{VERSION} expected by this runtime"
+                "bundle format v{version} is not v{MIN_VERSION}..=v{VERSION} expected by this runtime"
             ));
         }
         let ir = u32::try_from(read_leb(&mut rest)?).map_err(|_| "bad IR version")?;
@@ -178,7 +201,11 @@ impl<'a> Reader<'a> {
             let text = std::str::from_utf8(raw).map_err(|_| "bundle string is not valid UTF-8")?;
             strings.push(text.to_owned());
         }
-        Ok(Self { strings, rest })
+        Ok(Self {
+            version,
+            strings,
+            rest,
+        })
     }
 
     fn byte(&mut self) -> Result<u8, String> {

@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use entelechy_session::bundle::{PointerMode, Standalone, pack_executable};
 
+use crate::codesign;
 use crate::page::{self, default_title, fill};
 
 /// Options shared across native export targets.
@@ -216,7 +217,7 @@ pub fn macos_app(scene: &Path, out: &Path, opts: &Options<'_>) -> Result<MadeApp
         }
     };
     let runner_path = find_runner(opts.runner, "entelechy-runner")?;
-    let runner_bytes =
+    let mut runner_bytes =
         std::fs::read(&runner_path).map_err(|e| format!("{}: {e}", runner_path.display()))?;
     if !is_macho(&runner_bytes) {
         return Err(format!(
@@ -226,12 +227,30 @@ pub fn macos_app(scene: &Path, out: &Path, opts: &Options<'_>) -> Result<MadeApp
     }
 
     let title = chosen_title(scene, opts.title);
-    let app_id = match opts.app_id {
-        Some(id) => validate_app_id(id)?,
-        None => default_app_id(&title),
+    let presigned_id = codesign::bundle_signing_id(&runner_bytes);
+    let host_codesign = cfg!(target_os = "macos")
+        && runner_bytes.len() >= 4096
+        && Path::new("/usr/bin/codesign").is_file();
+    let requested_id = match opts.app_id {
+        Some(id) => Some(validate_app_id(id)?),
+        None => None,
+    };
+    let use_presigned_seal = match (&presigned_id, &requested_id) {
+        (Some(pre), None) => {
+            let _ = pre;
+            true
+        }
+        (Some(pre), Some(req)) if pre == req => true,
+        (Some(_), Some(_)) => !host_codesign,
+        (None, _) => false,
+    };
+    let app_id = if use_presigned_seal {
+        presigned_id.clone().expect("checked Some above")
+    } else {
+        requested_id.unwrap_or_else(|| default_app_id(&title))
     };
     let exe_name = executable_stem(out, &title);
-    let compiled = page::compile(scene, opts.chars)?;
+    let compiled = page::load_or_compile(scene, opts.chars)?;
     let app = Standalone {
         title: title.clone(),
         backend: backend.to_owned(),
@@ -283,15 +302,30 @@ pub fn macos_app(scene: &Path, out: &Path, opts: &Options<'_>) -> Result<MadeApp
     std::fs::write(&plist_path, plist.as_bytes())
         .map_err(|e| format!("{}: {e}", plist_path.display()))?;
 
+    let res_out = resources_dir.join("app.entapp");
+    std::fs::write(&res_out, &app_bytes).map_err(|e| format!("{}: {e}", res_out.display()))?;
+
+    let mut sealed_in_rust = false;
+    let mut cr_len = 0usize;
+    if use_presigned_seal {
+        let cr_bytes = codesign::code_resources_xml(&app_bytes);
+        if codesign::seal_macho_bundle(&mut runner_bytes, plist.as_bytes(), &cr_bytes) {
+            let sig_dir = contents.join("_CodeSignature");
+            std::fs::create_dir_all(&sig_dir).map_err(|e| format!("{}: {e}", sig_dir.display()))?;
+            let cr_path = sig_dir.join("CodeResources");
+            cr_len = cr_bytes.len();
+            std::fs::write(&cr_path, &cr_bytes)
+                .map_err(|e| format!("{}: {e}", cr_path.display()))?;
+            sealed_in_rust = true;
+        }
+    }
+
     let exe_out = macos_dir.join(&exe_name);
     std::fs::write(&exe_out, &runner_bytes).map_err(|e| format!("{}: {e}", exe_out.display()))?;
     mark_executable(&exe_out)?;
 
-    let res_out = resources_dir.join("app.entapp");
-    std::fs::write(&res_out, &app_bytes).map_err(|e| format!("{}: {e}", res_out.display()))?;
-
     #[cfg(target_os = "macos")]
-    if runner_bytes.len() >= 4096 && Path::new("/usr/bin/codesign").is_file() {
+    if !sealed_in_rust && host_codesign {
         let signed = std::process::Command::new("/usr/bin/codesign")
             .args(["--force", "--deep", "-i", &app_id, "-s", "-"])
             .arg(out)
@@ -305,13 +339,15 @@ pub fn macos_app(scene: &Path, out: &Path, opts: &Options<'_>) -> Result<MadeApp
             ));
         }
     }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (sealed_in_rust, host_codesign);
 
     Ok(MadeApp {
         modules: compiled.modules,
         inputs: compiled.inputs,
         bundle_bytes: compiled.bundle.len(),
         runner_bytes: runner_bytes.len(),
-        total_bytes: runner_bytes.len() + app_bytes.len() + plist.len(),
+        total_bytes: runner_bytes.len() + app_bytes.len() + plist.len() + cr_len,
         fonts: compiled.fonts,
     })
 }
@@ -360,7 +396,7 @@ pub fn packed_executable(
     }
 
     let title = chosen_title(scene, opts.title);
-    let compiled = page::compile(scene, opts.chars)?;
+    let compiled = page::load_or_compile(scene, opts.chars)?;
     let app = Standalone {
         title,
         backend: backend.to_owned(),
@@ -383,6 +419,46 @@ pub fn packed_executable(
         bundle_bytes: compiled.bundle.len(),
         runner_bytes: runner_bytes.len(),
         total_bytes: packed.len(),
+        fonts: compiled.fonts,
+    })
+}
+
+/// Exports `scene` (`.esn` or `.bundle`) as a standalone `.entapp` envelope
+/// (`Standalone::encode`) ready to pair with `entelechy-runner`.
+pub fn standalone_envelope(
+    scene: &Path,
+    out: &Path,
+    opts: &Options<'_>,
+) -> Result<MadeApp, String> {
+    let backend = match opts.backend {
+        None | Some("best") => "best",
+        Some(name @ ("gpu" | "jit" | "cpu")) => name,
+        Some(other) => {
+            return Err(format!(
+                "--backend for .entapp is gpu, jit, cpu or best, not `{other}`"
+            ));
+        }
+    };
+    let title = chosen_title(scene, opts.title);
+    let compiled = page::load_or_compile(scene, opts.chars)?;
+    let app = Standalone {
+        title,
+        backend: backend.to_owned(),
+        pointer: opts.pointer,
+        window: opts.window,
+        bundle: compiled.bundle.clone(),
+    };
+    let bytes = app.encode();
+    if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    std::fs::write(out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
+    Ok(MadeApp {
+        modules: compiled.modules,
+        inputs: compiled.inputs,
+        bundle_bytes: compiled.bundle.len(),
+        runner_bytes: 0,
+        total_bytes: bytes.len(),
         fonts: compiled.fonts,
     })
 }
@@ -449,7 +525,7 @@ pub fn ios_project(scene: &Path, out: &Path, opts: &Options<'_>) -> Result<MadeM
         None => default_app_id(&title),
     };
     let exe_name = executable_stem(out, &title);
-    let compiled = page::compile(scene, opts.chars)?;
+    let compiled = page::load_or_compile(scene, opts.chars)?;
 
     let mut slots = BTreeMap::new();
     slots.insert("title", escape_xml(&title));
@@ -517,7 +593,7 @@ pub fn android_project(scene: &Path, out: &Path, opts: &Options<'_>) -> Result<M
     };
     let target_name = executable_stem(out, &title);
     let lib_name = ascii_slug(&target_name, "entelechy_app");
-    let compiled = page::compile(scene, opts.chars)?;
+    let compiled = page::load_or_compile(scene, opts.chars)?;
 
     let mut slots = BTreeMap::new();
     slots.insert("title", escape_xml(&title));

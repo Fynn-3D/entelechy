@@ -9,11 +9,14 @@
 #include <android/log.h>
 #include <android/native_activity.h>
 #include <android/native_window.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #include "entelechy.h"
@@ -154,6 +157,62 @@ static void drain_input(AppState *app, EntelechySession *session, AInputQueue *q
     }
 }
 
+static void ensure_parent_dirs(char *path) {
+    for (char *p = path + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(path, 0700);
+            *p = '/';
+        }
+    }
+}
+
+static void preload_saves(AppState *app, EntelechySession *session, char **slots, size_t count) {
+    if (!app->activity->internalDataPath || count == 0) return;
+    char path[1024];
+    for (size_t i = 0; i < count; i++) {
+        snprintf(path, sizeof(path), "%s/saves/%s", app->activity->internalDataPath, slots[i]);
+        FILE *fp = fopen(path, "rb");
+        if (!fp) continue;
+        if (fseek(fp, 0, SEEK_END) == 0) {
+            long sz = ftell(fp);
+            if (sz > 0 && fseek(fp, 0, SEEK_SET) == 0) {
+                uint8_t *buf = (uint8_t *)malloc((size_t)sz);
+                if (buf) {
+                    if (fread(buf, 1, (size_t)sz, fp) == (size_t)sz) {
+                        entelechy_save_load(session, slots[i], buf, (size_t)sz);
+                    }
+                    free(buf);
+                }
+            }
+        }
+        fclose(fp);
+    }
+}
+
+static void flush_saves(AppState *app, EntelechySession *session, char **slots, size_t count) {
+    if (!app->activity->internalDataPath || count == 0) return;
+    char path[1024];
+    char tmp[1040];
+    for (size_t i = 0; i < count; i++) {
+        size_t len = 0;
+        const uint8_t *bytes = entelechy_save_take(session, i, &len);
+        if (!bytes) continue;
+        snprintf(path, sizeof(path), "%s/saves/%s", app->activity->internalDataPath, slots[i]);
+        ensure_parent_dirs(path);
+        snprintf(tmp, sizeof(tmp), "%s.writing", path);
+        FILE *fp = fopen(tmp, "wb");
+        if (!fp) continue;
+        bool ok = (len == 0) || (fwrite(bytes, 1, len, fp) == len);
+        fclose(fp);
+        if (ok) {
+            rename(tmp, path);
+        } else {
+            remove(tmp);
+        }
+    }
+}
+
 static void *render_loop(void *arg) {
     AppState *app = (AppState *)arg;
     AAsset *asset = AAssetManager_open(app->activity->assetManager, "scene.bundle", AASSET_MODE_BUFFER);
@@ -177,6 +236,15 @@ static void *render_loop(void *arg) {
         LOGE("cannot open bundle: %s", entelechy_open_error());
         return NULL;
     }
+
+    size_t save_count = 0;
+    char *save_slots[32] = {0};
+    for (; save_count < 32; save_count++) {
+        const char *raw = entelechy_save_slot(session, save_count);
+        if (!raw) break;
+        save_slots[save_count] = strdup(raw);
+    }
+    preload_saves(app, session, save_slots, save_count);
 
     struct timespec sleep_ts = {0, 2 * 1000 * 1000};
     while (true) {
@@ -206,6 +274,7 @@ static void *render_loop(void *arg) {
             entelechy_play_sound_queued(session, ring_queued(&app->ring));
         }
         if (entelechy_play_frame(session, (float)w, (float)h, 1.0f, app->sample_rate) == 0) {
+            flush_saves(app, session, save_slots, save_count);
             EntelechyField sound = {0};
             if (entelechy_play_sound(session, &sound) == 0 && sound.count > 0 && sound.stride > 0) {
                 open_audio_if_needed(app, session);
@@ -235,6 +304,11 @@ static void *render_loop(void *arg) {
         AAudioStream_requestStop(app->audio);
         AAudioStream_close(app->audio);
         app->audio = NULL;
+    }
+    if (save_count > 0) {
+        entelechy_save_flush(session);
+        flush_saves(app, session, save_slots, save_count);
+        for (size_t i = 0; i < save_count; i++) free(save_slots[i]);
     }
     entelechy_close(session);
     return NULL;

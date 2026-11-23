@@ -210,6 +210,8 @@ class SinglePlayer {
     this.present = promising("entelechy_play_present");
     this.pixels = promising("entelechy_play_pixels");
     this.sound = promising("entelechy_play_sound");
+    this.flushSaves =
+      typeof exports.entelechy_save_flush === "function" ? promising("entelechy_save_flush") : null;
     this.encoder = new TextEncoder();
     this.decoder = new TextDecoder();
     this.line = Promise.resolve();
@@ -226,6 +228,9 @@ class SinglePlayer {
     this.heldAt = [0, 0];
     this.swallowedButton = null;
     this.lockFailedOnce = false;
+    this.saveSlots = [];
+    this.savePrefix = `entelechy.save:${location.pathname}:${document.title}:`;
+    this.initSaves();
     this.listen();
   }
 
@@ -397,7 +402,18 @@ class SinglePlayer {
     });
     window.addEventListener("blur", () => this.releaseAll());
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) this.releaseAll();
+      if (document.hidden) {
+        this.releaseAll();
+        if (this.saveSlots.length && this.flushSaves) {
+          this.inTurn(async () => {
+            await this.flushSaves(this.session);
+            this.syncSaves();
+          });
+        }
+      }
+    });
+    window.addEventListener("pagehide", () => {
+      this.syncSaves();
     });
     document.addEventListener("pointerlockchange", () => {
       const locked = document.pointerLockElement === this.canvas;
@@ -529,6 +545,58 @@ class SinglePlayer {
     this.x.entelechy_play_pads(this.session, connected);
   }
 
+  initSaves() {
+    if (typeof this.x.entelechy_save_slot !== "function" || typeof this.x.entelechy_save_load !== "function") {
+      return;
+    }
+    for (let i = 0; ; i++) {
+      const ptr = this.x.entelechy_save_slot(this.session, i);
+      if (!ptr) break;
+      this.saveSlots.push(this.text(ptr));
+    }
+    if (!this.saveSlots.length) return;
+    for (const slot of this.saveSlots) {
+      let b64 = null;
+      try {
+        b64 = globalThis.localStorage ? localStorage.getItem(this.savePrefix + slot) : null;
+      } catch {}
+      if (!b64) continue;
+      try {
+        const raw = atob(b64);
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        this.withText(slot, (slotPtr) =>
+          this.withBytes(bytes, (dataPtr, dataLen) =>
+            this.x.entelechy_save_load(this.session, slotPtr, dataPtr, dataLen)
+          )
+        );
+      } catch {}
+    }
+  }
+
+  syncSaves() {
+    if (!this.saveSlots.length || typeof this.x.entelechy_save_take !== "function") return;
+    const lenPtr = this.x.entelechy_alloc(4);
+    if (!lenPtr) return;
+    try {
+      for (let i = 0; i < this.saveSlots.length; i++) {
+        const dataPtr = this.x.entelechy_save_take(this.session, i, lenPtr);
+        if (!dataPtr) continue;
+        const len = new Uint32Array(this.x.memory.buffer, lenPtr, 1)[0];
+        const bytes = new Uint8Array(this.x.memory.buffer, dataPtr, len);
+        let bin = "";
+        for (let off = 0; off < bytes.length; off += 0x8000) {
+          bin += String.fromCharCode(...bytes.subarray(off, off + 0x8000));
+        }
+        try {
+          if (globalThis.localStorage) localStorage.setItem(this.savePrefix + this.saveSlots[i], btoa(bin));
+        } catch {}
+      }
+    } finally {
+      this.x.entelechy_free(lenPtr, 4);
+    }
+  }
+
   say() {
     const said = this.text(this.x.entelechy_play_said(this.session));
     for (const line of said.split("\n").filter(Boolean)) {
@@ -554,6 +622,7 @@ class SinglePlayer {
     const framed = await this.frame(this.session, this.canvas.width, this.canvas.height, scale, rate);
     this.say();
     if (framed === 0) {
+      this.syncSaves();
       await this.play();
       await this.show();
       wear(this.canvas, this.pointerLook());

@@ -27,11 +27,13 @@ const USAGE: &str = "\
 usage:
   entelechy-runner [<file.bundle|file.entapp>] [--backend gpu|jit|best]
                    [--window <w>x<h>] [--scale <n>] [--no-audio]
-                   [--hold-pointer | --lock-pointer] [--frames <n>]
+                   [--hold-pointer | --lock-pointer] [--save-dir <dir>]
+                   [--frames <n>]
       Run a compiled Entelechy scene bundle as a standalone native application.
       With no file argument, reads the application appended to this executable
-      or bundled in ../Resources/app.entapp (macOS .app). --frames <n> steps n
-      frames headlessly and exits, for verifying an exported application.";
+      or bundled in ../Resources/app.entapp (macOS .app). Persistent scene saves
+      are stored in the user's application support folder (or --save-dir <dir>).
+      --frames <n> steps n frames headlessly and exits.";
 
 struct RunnerArgs {
     file: Option<PathBuf>,
@@ -40,6 +42,7 @@ struct RunnerArgs {
     scale: u32,
     no_audio: bool,
     pointer: Option<PointerMode>,
+    save_dir: Option<PathBuf>,
     frames: Option<u32>,
 }
 
@@ -51,6 +54,7 @@ fn parse_args(args: &[String]) -> Result<RunnerArgs, String> {
         scale: 2,
         no_audio: false,
         pointer: None,
+        save_dir: None,
         frames: None,
     };
     let mut iter = args.iter();
@@ -79,6 +83,11 @@ fn parse_args(args: &[String]) -> Result<RunnerArgs, String> {
             "--no-audio" => parsed.no_audio = true,
             "--hold-pointer" => parsed.pointer = Some(PointerMode::Hold),
             "--lock-pointer" => parsed.pointer = Some(PointerMode::Lock),
+            "--save-dir" => {
+                parsed.save_dir = Some(PathBuf::from(
+                    iter.next().ok_or("--save-dir needs a directory")?,
+                ));
+            }
             "--frames" => {
                 parsed.frames = Some(
                     iter.next()
@@ -163,6 +172,75 @@ fn locate_embedded() -> Result<Standalone, String> {
     ))
 }
 
+fn save_slug(title: &str) -> String {
+    let mut out = String::new();
+    let mut prev_sep = false;
+    for ch in title.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            prev_sep = false;
+        } else if !out.is_empty() && !prev_sep {
+            out.push('-');
+            prev_sep = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() { "app".into() } else { out }
+}
+
+fn default_save_dir(title: &str) -> Option<PathBuf> {
+    let slug = save_slug(title);
+    if cfg!(target_os = "macos") {
+        let home = std::env::var_os("HOME")?;
+        return Some(
+            PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("Entelechy")
+                .join(slug)
+                .join("saves"),
+        );
+    }
+    if cfg!(target_os = "windows") {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            return Some(
+                PathBuf::from(appdata)
+                    .join("Entelechy")
+                    .join(slug)
+                    .join("saves"),
+            );
+        }
+        let profile = std::env::var_os("USERPROFILE")?;
+        return Some(
+            PathBuf::from(profile)
+                .join("AppData")
+                .join("Roaming")
+                .join("Entelechy")
+                .join(slug)
+                .join("saves"),
+        );
+    }
+    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
+        return Some(
+            PathBuf::from(xdg)
+                .join("entelechy")
+                .join(slug)
+                .join("saves"),
+        );
+    }
+    let home = std::env::var_os("HOME")?;
+    Some(
+        PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("entelechy")
+            .join(slug)
+            .join("saves"),
+    )
+}
+
 struct AppHooks {
     title: String,
 }
@@ -227,6 +305,23 @@ fn main() -> ExitCode {
         }
     };
     let mut session = loaded.session;
+    let title = if app.title.is_empty() {
+        session
+            .graph()
+            .map(|g| g.name.clone())
+            .unwrap_or_else(|| "Entelechy".into())
+    } else {
+        app.title.clone()
+    };
+    if !session.save_slots().is_empty()
+        && let Some(dir) = args.save_dir.clone().or_else(|| default_save_dir(&title))
+        && let Err(why) = session.allow_bundle_saves(&dir)
+    {
+        eprintln!(
+            "warning: cannot configure saves in {}: {why}",
+            dir.display()
+        );
+    }
     session.give_clipboard(Box::new(SystemClipboard));
     session.set_background(true);
 
@@ -263,7 +358,7 @@ fn main() -> ExitCode {
         }
         println!(
             "{}: ran {} frame(s) on {} ({}x{})",
-            app.title,
+            title,
             count.max(1),
             session.runtime().backend_name(),
             size.0,
@@ -278,14 +373,6 @@ fn main() -> ExitCode {
         requested: window,
         pointer_mode: args.pointer.unwrap_or(app.pointer),
         audio_allowed: !args.no_audio,
-    };
-    let title = if app.title.is_empty() {
-        session
-            .graph()
-            .map(|g| g.name.clone())
-            .unwrap_or_else(|| "Entelechy".into())
-    } else {
-        app.title
     };
     let mut runner = WindowRunner::new(
         session,

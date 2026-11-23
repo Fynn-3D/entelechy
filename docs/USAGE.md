@@ -313,20 +313,24 @@ characters; `--chars` and `--chars-file` (each may be given again) name the
 characters to keep instead when a scene computes them as it runs, and a
 character not among them is then not drawn.
 
-The same compiled scene is exported as a native desktop application or a
-mobile project:
+The same scene (`.esn`) or precompiled bundle (`.bundle`) is exported as a
+native desktop application or a mobile project, with persistent scene saves
+(`output ... to "<slot>";` paired with `input ... = "<slot>" else ...;`)
+carried in the bundle and stored automatically by each host:
 
-- `--out <name>.app` writes a macOS application bundle, copying
-  `entelechy-runner` (`--runner <file>`, else beside `entelechy-export`)
-  untouched into `Contents/MacOS/` so its Mach-O linker signature holds, and
-  placing the scene's `Standalone` envelope (`app.entapp`) in
-  `Contents/Resources/`.
+- `--out <name>.app` writes a macOS application bundle, placing `app.entapp` in
+  `Contents/Resources/` and sealing `Contents/_CodeSignature/CodeResources` and
+  the Mach-O `entelechy-runner` (`--runner <file>`, else beside
+  `entelechy-export`) so Gatekeeper's strict bundle signature check holds even
+  when packed outside macOS (including WASI).
 - `--out <name>.exe` (with `--runner <entelechy-runner.exe>`) or `--out
   <name>.bin` appends the `Standalone` envelope and a 24-byte trailer to a
   prebuilt Windows PE or Unix `entelechy-runner` binary, producing one
-  executable file with no compiler or sidecar files. `--window <w>x<h>` fixes
-  the initial logical window size; `--app-id` sets a `.app`'s bundle
-  identifier (`run.entelechy.<slug>` by default).
+  executable file with no compiler or sidecar files (`--out <name>.entapp`
+  writes the `Standalone` envelope on its own). `--window <w>x<h>` fixes the
+  initial logical window size; `--app-id` sets a `.app`'s bundle identifier
+  (`run.entelechy.<slug>` by default); `entelechy-runner --save-dir <dir>`
+  overrides the user save folder.
 - `--out <dir>.ios` and `--out <dir>.android` write an Xcode project
   (`bridges/ios`, Metal + `AVAudioEngine`, no runtime JIT) or an Android NDK
   `NativeActivity` project (`bridges/android`, `ANativeWindow` + `AAudio`)

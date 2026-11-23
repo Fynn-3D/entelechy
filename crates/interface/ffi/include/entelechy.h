@@ -218,6 +218,22 @@ int entelechy_play_preparing(const EntelechySession *session);
  * Kernels still waiting, as entelechy_play_preparing counts them; -1 on
  * failure. */
 int entelechy_play_turn(EntelechySession *session);
+/* The `index`-th relative save slot path declared by a bundled scene
+ * (`output ... to "<slot>";`), valid until the next call on `session`, or NULL
+ * once `index` reaches the slot count (or on a document-backed session). */
+const char *entelechy_save_slot(EntelechySession *session, size_t index);
+/* Loads `len` bytes previously saved for `slot` into a bundled session's
+ * matching `input ... else` bindings. Returns 0, or -1 with entelechy_error()
+ * set on failure. */
+int entelechy_save_load(EntelechySession *session, const char *slot, const uint8_t *data, size_t len);
+/* Confirms the frame in flight so any pending save output is ready for
+ * entelechy_save_take. Returns 0, or -1 with entelechy_error() set. */
+int entelechy_save_flush(EntelechySession *session);
+/* Takes the latest confirmed bytes written to the `index`-th declared save slot
+ * since the last call, writing the byte count to `*out_len` and returning the
+ * bytes (valid until the next call on `session`), or NULL with `*out_len` set
+ * to 0 when that slot has not changed. */
+const uint8_t *entelechy_save_take(EntelechySession *session, size_t index, size_t *out_len);
 /* Room for `size` bytes in Entelechy's memory, for a caller that shares no
  * allocator with it (a page, where Entelechy is WebAssembly) to write a
  * string or a file into before a call; NULL when there is none. */

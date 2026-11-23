@@ -480,7 +480,10 @@ impl<H: WindowHooks> ApplicationHandler for WindowRunner<H> {
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                let _ = self.confirm();
+                event_loop.exit();
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x, position.y);
                 if self.held.is_none() && self.pointer_mode != PointerMode::Lock {

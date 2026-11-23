@@ -175,6 +175,9 @@ struct Held {
     /// The samples the host's sound device holds, as it last said
     /// (`entelechy_play_sound_queued`), for the next frame's `queued()`.
     queued: u32,
+    /// Scratch buffers for `entelechy_save_slot` and `entelechy_save_take`.
+    save_slot: CString,
+    save_bytes: Vec<u8>,
 }
 
 mod play;
@@ -495,8 +498,116 @@ fn new_session(
             pointer_look: None,
             pointer_rgba: Vec::new(),
             queued: 0,
+            save_slot: CString::default(),
+            save_bytes: Vec::new(),
         }),
     }))
+}
+
+/// Returns the `index`-th relative save slot path declared by a bundled scene,
+/// or NULL once `index` reaches the slot count.
+///
+/// # Safety
+/// `session` is NULL or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_save_slot(
+    session: *mut EntelechySession,
+    index: usize,
+) -> *const c_char {
+    let Some(mut s) = (unsafe { enter(session) }) else {
+        return std::ptr::null();
+    };
+    let slot = s.session.save_slots().get(index).map(|v| (*v).to_owned());
+    match slot {
+        Some(name) => {
+            s.save_slot = c_string(&name);
+            s.save_slot.as_ptr()
+        }
+        None => std::ptr::null(),
+    }
+}
+
+/// Loads `len` bytes previously saved for `slot` into a bundled session.
+///
+/// # Safety
+/// `session` is a live session; `slot` is a NUL-terminated string; `data`
+/// points to `len` bytes (or may be NULL when `len` is 0).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_save_load(
+    session: *mut EntelechySession,
+    slot: *const c_char,
+    data: *const u8,
+    len: usize,
+) -> c_int {
+    let (Some(mut s), Some(slot)) = (unsafe { enter(session) }, unsafe { text(slot) }) else {
+        return -1;
+    };
+    if data.is_null() && len > 0 {
+        return s.fail("entelechy_save_load needs data bytes");
+    }
+    let slot = slot.to_owned();
+    let bytes = if len == 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(data, len) }
+    };
+    guarded(&mut s, |s| {
+        s.clear();
+        match s.session.load_save(&slot, bytes) {
+            Ok(()) => 0,
+            Err(why) => s.fail(why),
+        }
+    })
+}
+
+/// Confirms the frame in flight so any pending save output is ready to take.
+///
+/// # Safety
+/// `session` is NULL or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_save_flush(session: *mut EntelechySession) -> c_int {
+    let Some(mut s) = (unsafe { enter(session) }) else {
+        return -1;
+    };
+    guarded(&mut s, |s| {
+        s.clear();
+        match s.session.confirm() {
+            Ok(()) => 0,
+            Err(error) => {
+                let told = s.session.told(&error);
+                s.fail(told)
+            }
+        }
+    })
+}
+
+/// Takes the latest confirmed bytes written to the `index`-th declared save
+/// slot since the last call, or NULL when unchanged.
+///
+/// # Safety
+/// `session` is NULL or a live session; `out_len` is a valid writable `usize`
+/// pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_save_take(
+    session: *mut EntelechySession,
+    index: usize,
+    out_len: *mut usize,
+) -> *const u8 {
+    if out_len.is_null() {
+        return std::ptr::null();
+    }
+    unsafe { *out_len = 0 };
+    let Some(mut s) = (unsafe { enter(session) }) else {
+        return std::ptr::null();
+    };
+    match s.session.take_dirty_save(index) {
+        Some(bytes) => {
+            s.save_bytes = bytes;
+            unsafe { *out_len = s.save_bytes.len() };
+            s.save_bytes.as_ptr()
+        }
+        None => std::ptr::null(),
+    }
 }
 
 /// Compiles the `index`-th static, position-independent WebAssembly Kernel
@@ -1413,6 +1524,95 @@ mod tests {
         let words = unsafe { std::slice::from_raw_parts(a.words, a.count as usize) };
         assert!(words.iter().all(|word| *word == 1), "{:?}", &words[..8]);
         unsafe { entelechy_close(session) };
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(feature = "full")]
+    #[test]
+    fn bundled_saves_round_trip_through_c_abi() {
+        let dir = std::env::temp_dir().join(format!("entelechy-ffi-saves-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let scene_path = dir.join("scene.esn");
+        std::fs::write(
+            &scene_path,
+            "kernel s.fresh@1 { requires { field.write; } output result: Rows<Int>; compute { return 5; } }\n\
+             kernel s.step@1 { requires { field.read; field.write; } input last: Rows<Int>; output result: Rows<Int>; compute { return at(last, 0) + 1; } }\n\
+             kernel s.pic@1 { requires { field.read; field.write; } input v: Rows<Int>; output result: Image; compute { return vec4(float(at(v, 0)) / 100.0, 0.0, 0.0, 1.0); } }\n\
+             input saved: Rows<Int> = \"save.field\" else fresh.result;\n\
+             node fresh: s.fresh@1 { domain = 1; }\n\
+             node step: s.step@1 { last <~ step.result from saved; domain = 1; }\n\
+             node pic: s.pic@1 { v <- step.result; domain = vec2(2, 2); }\n\
+             output picture <- pic.result;\n\
+             output kept <- step.result to \"save.field\";\n",
+        )
+        .unwrap();
+
+        let built = entelechy_session::Session::build(
+            "cpu",
+            entelechy_session::Limits::default(),
+            entelechy_session::Wait::blocking(),
+        )
+        .unwrap();
+        let mut docs = entelechy_session::Session::open_with(&scene_path, None, built.runtime);
+        docs.start_from_nothing_saved();
+        docs.sync();
+        let bundle_bytes = docs
+            .bundle_with_fonts(|_, _, _| unreachable!())
+            .unwrap()
+            .encode();
+
+        let jit = CString::new("jit").unwrap();
+        let s1 = unsafe {
+            entelechy_open_bundle(bundle_bytes.as_ptr(), bundle_bytes.len(), jit.as_ptr())
+        };
+        assert!(!s1.is_null());
+        let slot_ptr = unsafe { entelechy_save_slot(s1, 0) };
+        assert!(!slot_ptr.is_null());
+        let slot_name = unsafe { CStr::from_ptr(slot_ptr) }
+            .to_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(slot_name, "save.field");
+        assert!(unsafe { entelechy_save_slot(s1, 1) }.is_null());
+
+        assert_eq!(unsafe { entelechy_play_frame(s1, 16.0, 16.0, 1.0, 0.0) }, 0);
+        assert_eq!(unsafe { entelechy_save_flush(s1) }, 0);
+        let mut save_len = 0usize;
+        let save_ptr = unsafe { entelechy_save_take(s1, 0, &mut save_len) };
+        assert!(!save_ptr.is_null() && save_len > 0);
+        let saved = unsafe { std::slice::from_raw_parts(save_ptr, save_len) }.to_vec();
+        unsafe { entelechy_close(s1) };
+
+        let s2 = unsafe {
+            entelechy_open_bundle(bundle_bytes.as_ptr(), bundle_bytes.len(), jit.as_ptr())
+        };
+        assert!(!s2.is_null());
+        let slot_c = CString::new("save.field").unwrap();
+        assert_eq!(
+            unsafe { entelechy_save_load(s2, slot_c.as_ptr(), saved.as_ptr(), saved.len()) },
+            0
+        );
+        assert_eq!(unsafe { entelechy_play_frame(s2, 16.0, 16.0, 1.0, 0.0) }, 0);
+        let mut out = EntelechyField {
+            words: std::ptr::null(),
+            width: 0,
+            height: 0,
+            depth: 0,
+            count: 0,
+            stride: 0,
+            shape: 0,
+            pixels: 0,
+            schema: std::ptr::null(),
+        };
+        let kept_c = CString::new("kept").unwrap();
+        assert_eq!(
+            unsafe { entelechy_output(s2, kept_c.as_ptr(), &mut out) },
+            0
+        );
+        assert_eq!(unsafe { *out.words } as i32, 7);
+        unsafe { entelechy_close(s2) };
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

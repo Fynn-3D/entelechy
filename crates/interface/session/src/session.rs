@@ -18,6 +18,7 @@ mod bundled;
 mod docs;
 #[cfg(feature = "documents")]
 mod inspect;
+mod saves;
 #[cfg(feature = "documents")]
 mod time;
 
@@ -702,6 +703,7 @@ impl Session {
         self.tally();
         #[cfg(feature = "documents")]
         self.write_confirmed();
+        self.write_bundled_confirmed();
         confirmed
     }
 
@@ -731,7 +733,6 @@ impl Session {
         self.hold_progress();
         self.repin();
         self.last_context = *context;
-        #[cfg(feature = "documents")]
         self.await_written();
         let graph = self.backing.shared_graph().cloned().ok_or_else(no_scene)?;
         let evaluated = self.evaluator.evaluate(
@@ -804,6 +805,8 @@ impl Session {
                     report,
                     &mut self.runtime,
                 );
+                self.ask_bundled_saves(&report.outputs);
+                self.write_bundled_confirmed();
             }
         }
     }
@@ -1012,20 +1015,61 @@ impl Session {
         for node in self.fed_sources() {
             self.evaluator.pin(node);
         }
+        for node in self.written_sources() {
+            self.evaluator.pin(node);
+        }
         #[cfg(feature = "documents")]
-        {
-            for node in self.written_sources() {
-                self.evaluator.pin(node);
-            }
-            if let Backing::Documents(docs) = &self.backing {
-                let rows = docs.scene.times_rows();
-                for (row, _) in rows {
-                    let source = entelechy_graph::NodeId(row.source.0.as_str().into());
-                    for node in self.pinned_by(&source) {
-                        self.evaluator.pin(node);
-                    }
+        if let Backing::Documents(docs) = &self.backing {
+            let rows = docs.scene.times_rows();
+            for (row, _) in rows {
+                let source = entelechy_graph::NodeId(row.source.0.as_str().into());
+                for node in self.pinned_by(&source) {
+                    self.evaluator.pin(node);
                 }
             }
+        }
+    }
+
+    pub(super) fn await_written(&mut self) {
+        match &self.backing {
+            #[cfg(feature = "documents")]
+            Backing::Documents(docs) => {
+                let writes = &docs.scene.files().writes;
+                self.evaluator
+                    .await_outputs(writes.iter().map(|write| write.output.as_str()));
+            }
+            Backing::Bundled(b) => {
+                self.evaluator
+                    .await_outputs(b.saves.iter().map(|save| save.output.as_str()));
+            }
+        }
+    }
+
+    pub(super) fn written_sources(&self) -> Vec<entelechy_graph::NodeId> {
+        let Some(graph) = self.graph() else {
+            return Vec::new();
+        };
+        let resolve =
+            |output_name: &str| match graph.outputs.iter().find(|(name, _)| name == output_name)? {
+                (_, entelechy_graph::Source::Node { node, port }) => {
+                    Some(self.producer(node, port).0)
+                }
+                (_, entelechy_graph::Source::External(_)) => None,
+            };
+        match &self.backing {
+            #[cfg(feature = "documents")]
+            Backing::Documents(docs) => docs
+                .scene
+                .files()
+                .writes
+                .iter()
+                .filter_map(|write| resolve(&write.output))
+                .collect(),
+            Backing::Bundled(b) => b
+                .saves
+                .iter()
+                .filter_map(|save| resolve(&save.output))
+                .collect(),
         }
     }
 

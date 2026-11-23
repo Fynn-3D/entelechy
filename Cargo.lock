@@ -1136,6 +1136,7 @@ dependencies = [
  "arboard",
  "cpal",
  "entelechy-export",
+ "entelechy-formats",
  "entelechy-gpu",
  "entelechy-graph",
  "entelechy-kernel",

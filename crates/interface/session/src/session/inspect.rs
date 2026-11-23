@@ -123,14 +123,6 @@ impl Session {
         u32::try_from(word as i32).map_err(|_| format!("it holds {}, less than 0", word as i32))
     }
 
-    pub(super) fn await_written(&mut self) {
-        if let Backing::Documents(docs) = &self.backing {
-            let writes = &docs.scene.files().writes;
-            self.evaluator
-                .await_outputs(writes.iter().map(|write| write.output.as_str()));
-        }
-    }
-
     pub(super) fn write_confirmed(&mut self) {
         let writes = match &self.backing {
             Backing::Documents(docs) => docs.scene.files().writes.clone(),
@@ -255,32 +247,6 @@ impl Session {
             );
         }
         Ok(())
-    }
-
-    pub(super) fn written_sources(&self) -> Vec<entelechy_graph::NodeId> {
-        let Backing::Documents(docs) = &self.backing else {
-            return Vec::new();
-        };
-        let Some(graph) = docs.scene.graph() else {
-            return Vec::new();
-        };
-        docs.scene
-            .files()
-            .writes
-            .iter()
-            .filter_map(|write| {
-                match graph
-                    .outputs
-                    .iter()
-                    .find(|(name, _)| name == &write.output)?
-                {
-                    (_, entelechy_graph::Source::Node { node, port }) => {
-                        Some(self.producer(node, port).0)
-                    }
-                    (_, entelechy_graph::Source::External(_)) => None,
-                }
-            })
-            .collect()
     }
 
     pub(super) fn feed_field_nodes(&mut self) {

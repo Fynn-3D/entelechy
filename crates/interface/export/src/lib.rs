@@ -3,7 +3,9 @@
 //! that plays it. Sounds, scores and pictures are written by
 //! `entelechy_formats::encode`.
 
+pub mod codesign;
 pub mod font;
 pub mod gltf;
 pub mod native;
 pub mod page;
+pub mod sha;

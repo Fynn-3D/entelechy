@@ -3,18 +3,23 @@
 //! builds a [`Bundle`] from a document-backed [`Session`] at export time.
 
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(feature = "documents")]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use entelechy_documents::store::Store;
 use entelechy_graph::{Binding, Graph, Source};
 use entelechy_kernel::{
     Domain, Expect, FieldData, Handle, Host, KernelId, Runtime, Scalar, Schema, Ticket, Value,
 };
 
+use super::saves::BundledSaveState;
 use super::{BEST, Backing, Session, TURN};
 use crate::Limits;
+use crate::bundle::{Bundle, BundledFont, BundledSave, glyphs_from_atlas};
 #[cfg(feature = "documents")]
-use crate::bundle::BundledAtlas;
-use crate::bundle::{Bundle, BundledFont, glyphs_from_atlas};
+use crate::bundle::{BundledAtlas, clean_save_slot};
 use crate::memory::COPY_LEAST;
 
 /// Runtime state of a session opened from a [`Bundle`].
@@ -26,11 +31,15 @@ pub(crate) struct BundledScene {
     pub(super) presented: Vec<(String, String)>,
     pub(super) feeds: Vec<(String, String)>,
     pub(super) fonts: Vec<BundledFontState>,
+    pub(super) saves: Vec<BundledSave>,
+    pub(super) save_state: BTreeMap<String, BundledSaveState>,
+    pub(super) dirty_saves: BTreeMap<String, Vec<u8>>,
+    pub(super) save_store: Option<(Arc<dyn Store>, PathBuf)>,
     pub(super) said: Vec<String>,
 }
 
 pub(super) struct PendingBundle {
-    graph: Graph,
+    pub(super) graph: Graph,
     tickets: Vec<Ticket>,
 }
 
@@ -108,6 +117,7 @@ impl Session {
             presented,
             feeds,
             fonts,
+            saves,
         } = bundle;
         let mut validated = Vec::with_capacity(modules.len());
         for module in modules {
@@ -167,7 +177,7 @@ impl Session {
                 }
             }
             let mut session = Self::start_bundle(
-                runtime, &validated, graph, params, inputs, presented, feeds, fonts, turns,
+                runtime, &validated, graph, params, inputs, presented, feeds, fonts, saves, turns,
             )?;
             let said = session.take_bundle_said();
             return Ok(crate::LoadedBundle {
@@ -194,6 +204,7 @@ impl Session {
         presented: Vec<(String, String)>,
         feeds: Vec<(String, String)>,
         fonts: Vec<BundledFont>,
+        saves: Vec<BundledSave>,
         turns: bool,
     ) -> Result<Self, String> {
         let fonts: Vec<BundledFontState> = fonts
@@ -272,6 +283,10 @@ impl Session {
                 presented,
                 feeds,
                 fonts,
+                saves,
+                save_state: BTreeMap::new(),
+                dirty_saves: BTreeMap::new(),
+                save_store: None,
                 said: Vec::new(),
             })),
         );
@@ -574,6 +589,12 @@ impl Session {
         if !files.file_nodes.is_empty() || !files.field_nodes.is_empty() {
             return Err("a scene with dynamic `files` or `fields` directory nodes cannot be exported as a single-file bundle".to_owned());
         }
+        if files.writes.iter().any(|w| w.files) {
+            return Err(
+                "a scene with a dynamic `to files` directory output cannot be exported as a single-file bundle"
+                    .to_owned(),
+            );
+        }
 
         let static_chars = self.static_font_chars(&graph, &files);
 
@@ -625,6 +646,74 @@ impl Session {
             .map(|feed| feed.input.clone())
             .chain(graph.texts.iter().map(|(name, _)| name.clone()))
             .collect();
+
+        let store = Arc::clone(self.backing.docs().scene.store());
+        let one_path = |p: &Path| {
+            let mut existing = store.whole(p);
+            let mut rest = Vec::new();
+            while store.kind(&existing).is_none() {
+                let (Some(up), Some(name)) = (existing.parent(), existing.file_name()) else {
+                    break;
+                };
+                rest.push(name.to_owned());
+                existing = up.to_path_buf();
+            }
+            let mut at = store.canonical(&existing).unwrap_or(existing);
+            for name in rest.iter().rev() {
+                at.push(name);
+            }
+            at
+        };
+        let scene_dir = self
+            .backing
+            .docs()
+            .scene
+            .root()
+            .parent()
+            .map(&one_path)
+            .unwrap_or_default();
+
+        let mut saves = Vec::with_capacity(files.writes.len());
+        for write in &files.writes {
+            let resolved_write = one_path(&write.path);
+            let raw_slot = resolved_write
+                .strip_prefix(&scene_dir)
+                .ok()
+                .and_then(|rel| rel.to_str().map(str::to_owned))
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    write
+                        .path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(str::to_owned)
+                })
+                .ok_or_else(|| {
+                    format!("output `{}` writes to an invalid save path", write.output)
+                })?;
+            let slot = clean_save_slot(&raw_slot)?;
+            let mut save_inputs = Vec::new();
+            for asset in &files.assets {
+                if one_path(&asset.path) == resolved_write {
+                    excluded.insert(asset.name.clone());
+                    save_inputs.push((asset.name.clone(), Some(asset.ty.clone())));
+                }
+            }
+            let ext = entelechy_formats::extension(Path::new(&slot));
+            let columns = if !write.bytes && entelechy_formats::table::is_table(&ext) {
+                let out_id = entelechy_graph::NodeId(write.output.clone().into());
+                self.element_names(&out_id, "result")?
+            } else {
+                Vec::new()
+            };
+            saves.push(BundledSave {
+                slot,
+                output: write.output.clone(),
+                inputs: save_inputs,
+                bytes: write.bytes,
+                columns,
+            });
+        }
 
         let mut fonts: Vec<BundledFont> = Vec::with_capacity(files.fonts.len());
         for font in &files.fonts {
@@ -698,6 +787,7 @@ impl Session {
             presented,
             feeds,
             fonts,
+            saves,
         })
     }
 

@@ -46,23 +46,25 @@ usage:
       To .bundle: a scene (.esn) compiled into one standalone binary bundle
       (its validated IR modules, lowered Graph, baked Field inputs and compact
       font atlases, subsetted by --chars / --chars-file as for .html).
-      To .html: a scene (.esn) as one page that plays it, opened from the
-      disk with nothing beside it: the Player in a page, Entelechy's bundle
-      runtime, and the scene compiled into one binary bundle. --web is where
-      Entelechy for the web is (the directory holding bridges/web and
+      To .html: a scene (.esn) or precompiled bundle (.bundle) as one page that
+      plays it, opened from the disk with nothing beside it: the Player in a
+      page, Entelechy's bundle runtime, and the scene's binary bundle. --web is
+      where Entelechy for the web is (the directory holding bridges/web and
       target/page; the current directory by default).
-      To .app, .exe or .bin: a scene (.esn) packed with a prebuilt
-      `entelechy-runner` binary (--runner <file>, else beside entelechy-export)
-      into a standalone native desktop application: a macOS .app bundle
-      (preserving the Mach-O runner's linker signature), a single-file Windows
-      .exe, or a single-file Unix .bin. --name sets the application title,
-      --app-id the bundle identifier (`run.entelechy.<slug>` by default), and
-      --window <w>x<h> the initial logical window size.
-      To .ios or .android: a scene (.esn) exported as a self-contained Xcode
-      project directory (.ios) or Android NDK NativeActivity project directory
-      (.android) over `entelechy.h` and `scene.bundle`, using `bridges/ios` or
-      `bridges/android` under --web (current directory by default); --lib
-      copies a prebuilt `libentelechy_ffi.a` or `libentelechy_ffi.so` into it.";
+      To .app, .exe, .bin or .entapp: a scene (.esn) or bundle (.bundle) packed
+      with a prebuilt `entelechy-runner` binary (--runner <file>, else beside
+      entelechy-export) into a standalone native desktop application: a macOS
+      .app bundle (sealing the Mach-O signature and CodeResources), a
+      single-file Windows .exe, a single-file Unix .bin, or a standalone
+      .entapp envelope. --name sets the application title, --app-id the bundle
+      identifier (`run.entelechy.<slug>` by default), and --window <w>x<h> the
+      initial logical window size.
+      To .ios or .android: a scene (.esn) or bundle (.bundle) exported as a
+      self-contained Xcode project directory (.ios) or Android NDK
+      NativeActivity project directory (.android) over `entelechy.h` and
+      `scene.bundle`, using `bridges/ios` or `bridges/android` under --web
+      (current directory by default); --lib copies a prebuilt
+      `libentelechy_ffi.a` or `libentelechy_ffi.so` into it.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -118,6 +120,26 @@ fn require_single_scene<'a>(inputs: &'a [PathBuf], what: &str) -> Result<&'a Pat
     if ext != "esn" {
         return Err(format!(
             "{}: {what} is made of a scene (.esn)",
+            scene.display()
+        ));
+    }
+    Ok(scene.as_path())
+}
+
+fn require_scene_or_bundle<'a>(inputs: &'a [PathBuf], what: &str) -> Result<&'a Path, String> {
+    let [scene] = inputs else {
+        return Err(format!(
+            "{what} is made of one scene (.esn) or bundle (.bundle)"
+        ));
+    };
+    let ext = scene
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if !matches!(ext.as_str(), "esn" | "bundle") {
+        return Err(format!(
+            "{}: {what} is made of a scene (.esn) or compiled bundle (.bundle)",
             scene.display()
         ));
     }
@@ -228,7 +250,7 @@ fn export(args: &[String]) -> Result<String, String> {
     let ext = extension(&out);
     let is_scene_app = matches!(
         ext.as_str(),
-        "html" | "app" | "exe" | "bin" | "ios" | "android"
+        "html" | "app" | "exe" | "bin" | "entapp" | "ios" | "android"
     );
     if family.is_some() && !matches!(ext.as_str(), "ttf" | "otf" | "woff") && !is_scene_app {
         return Err("--name is for a font, a page, or an application".into());
@@ -259,8 +281,8 @@ fn export(args: &[String]) -> Result<String, String> {
     if app_id.is_some() && !matches!(ext.as_str(), "app" | "ios" | "android") {
         return Err("--app-id is for .app, .ios, or .android".into());
     }
-    if window.is_some() && !matches!(ext.as_str(), "app" | "exe" | "bin") {
-        return Err("--window is for a desktop application (.app, .exe, .bin)".into());
+    if window.is_some() && !matches!(ext.as_str(), "app" | "exe" | "bin" | "entapp") {
+        return Err("--window is for a desktop application (.app, .exe, .bin, .entapp)".into());
     }
 
     let native_opts = native::Options {
@@ -292,7 +314,7 @@ fn export(args: &[String]) -> Result<String, String> {
             Ok(said)
         }
         "html" => {
-            let scene = require_single_scene(&inputs, "a page")?;
+            let scene = require_scene_or_bundle(&inputs, "a page")?;
             let made = page::page_with_options(
                 scene,
                 web.as_deref().unwrap_or(Path::new(".")),
@@ -315,7 +337,7 @@ fn export(args: &[String]) -> Result<String, String> {
             Ok(said)
         }
         "app" => {
-            let scene = require_single_scene(&inputs, "a macOS .app")?;
+            let scene = require_scene_or_bundle(&inputs, "a macOS .app")?;
             let made = native::macos_app(scene, &out, &native_opts)?;
             let mut said = format!(
                 "{}: {} bytes ({} Kernel(s), {} input(s), bundle {} bytes, runner {} bytes)",
@@ -330,7 +352,7 @@ fn export(args: &[String]) -> Result<String, String> {
             Ok(said)
         }
         "exe" => {
-            let scene = require_single_scene(&inputs, "a Windows .exe")?;
+            let scene = require_scene_or_bundle(&inputs, "a Windows .exe")?;
             let made =
                 native::packed_executable(scene, &out, native::ExeKind::WindowsPe, &native_opts)?;
             let mut said = format!(
@@ -346,7 +368,7 @@ fn export(args: &[String]) -> Result<String, String> {
             Ok(said)
         }
         "bin" => {
-            let scene = require_single_scene(&inputs, "a standalone binary")?;
+            let scene = require_scene_or_bundle(&inputs, "a standalone binary")?;
             let made =
                 native::packed_executable(scene, &out, native::ExeKind::UnixBin, &native_opts)?;
             let mut said = format!(
@@ -361,8 +383,22 @@ fn export(args: &[String]) -> Result<String, String> {
             append_fonts(&mut said, &made.fonts);
             Ok(said)
         }
+        "entapp" => {
+            let scene = require_scene_or_bundle(&inputs, "a standalone envelope")?;
+            let made = native::standalone_envelope(scene, &out, &native_opts)?;
+            let mut said = format!(
+                "{}: {} bytes ({} Kernel(s), {} input(s), bundle {} bytes)",
+                out.display(),
+                made.total_bytes,
+                made.modules,
+                made.inputs,
+                made.bundle_bytes
+            );
+            append_fonts(&mut said, &made.fonts);
+            Ok(said)
+        }
         "ios" => {
-            let scene = require_single_scene(&inputs, "an iOS project")?;
+            let scene = require_scene_or_bundle(&inputs, "an iOS project")?;
             let made = native::ios_project(scene, &out, &native_opts)?;
             let mut said = format!(
                 "{}: Xcode project ({} Kernel(s), {} input(s), bundle {} bytes{})",
@@ -380,7 +416,7 @@ fn export(args: &[String]) -> Result<String, String> {
             Ok(said)
         }
         "android" => {
-            let scene = require_single_scene(&inputs, "an Android project")?;
+            let scene = require_scene_or_bundle(&inputs, "an Android project")?;
             let made = native::android_project(scene, &out, &native_opts)?;
             let mut said = format!(
                 "{}: Android NDK project ({} Kernel(s), {} input(s), bundle {} bytes{})",

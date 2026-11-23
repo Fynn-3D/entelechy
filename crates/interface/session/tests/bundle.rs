@@ -242,3 +242,93 @@ fn voxel_example_bundles_and_renders_identically_on_jit() {
         output_words(&mut docs, "result")
     );
 }
+
+#[test]
+fn v1_bundle_stream_still_decodes_and_bundled_saves_round_trip_across_sessions() {
+    let dir = scratch("saves");
+    std::fs::create_dir_all(&dir).unwrap();
+    let scene_path = dir.join("scene.esn");
+    std::fs::write(
+        &scene_path,
+        "kernel s.fresh@1 { requires { field.write; } output result: Rows<Int>; compute { return 10; } }\n\
+         kernel s.bump@1 {\n\
+           requires { field.read; field.write; }\n\
+           input last: Rows<Int>;\n\
+           output result: Rows<Int>;\n\
+           compute { return at(last, 0) + 1; }\n\
+         }\n\
+         input saved: Rows<Int> = \"saves/tally.field\" else fresh.result;\n\
+         node fresh: s.fresh@1 { domain = 1; }\n\
+         node step: s.bump@1 { last <~ step.result from saved; domain = 1; }\n\
+         output result <- step.result;\n\
+         output kept <- step.result to \"saves/tally.field\";\n",
+    )
+    .unwrap();
+
+    let built = Session::build("cpu", Limits::default(), Wait::blocking()).unwrap();
+    let mut doc_session = Session::open_with(&scene_path, None, built.runtime);
+    doc_session.start_from_nothing_saved();
+    doc_session.sync();
+    let bundle = doc_session
+        .bundle_with_fonts(|_, _, _| unreachable!("no fonts"))
+        .unwrap();
+    assert_eq!(bundle.saves.len(), 1);
+    assert_eq!(bundle.saves[0].slot, "saves/tally.field");
+    assert_eq!(bundle.saves[0].output, "kept");
+    assert_eq!(bundle.inputs.len(), 0);
+
+    let encoded_v2 = bundle.encode();
+    let decoded = Bundle::decode(&encoded_v2).expect("v2 bundle decodes");
+    assert_eq!(decoded.saves, bundle.saves);
+
+    // Synthesize a legacy v1 stream (version byte 1 at offset 16, no trailing `saves` list).
+    let mut no_saves = bundle.clone();
+    no_saves.saves.clear();
+    let mut legacy_v1 = no_saves.encode();
+    assert_eq!(legacy_v1[16], 2);
+    legacy_v1[16] = 1;
+    assert_eq!(
+        *legacy_v1.last().unwrap(),
+        0,
+        "empty saves list is 1 zero byte"
+    );
+    legacy_v1.pop();
+    let decoded_v1 = Bundle::decode(&legacy_v1).expect("legacy v1 bundle decodes");
+    assert!(decoded_v1.saves.is_empty());
+
+    // First bundled session starts from fallback (10 -> 11 -> 12) and emits dirty save bytes.
+    let mut run1 = Session::open_bundle(
+        decoded.clone(),
+        "jit",
+        Limits::default(),
+        Wait::blocking(),
+        false,
+    )
+    .unwrap()
+    .session;
+    assert_eq!(run1.save_slots(), vec!["saves/tally.field"]);
+    run1.evaluate(&Context::default()).unwrap();
+    run1.confirm().unwrap();
+    assert_eq!(output_words(&mut run1, "result"), vec![11]);
+    run1.evaluate(&Context::default()).unwrap();
+    run1.confirm().unwrap();
+    assert_eq!(output_words(&mut run1, "result"), vec![12]);
+    let saved_bytes = run1
+        .take_dirty_save(0)
+        .expect("confirmed frame produced save bytes");
+    assert!(
+        run1.take_dirty_save(0).is_none(),
+        "taken once until next change"
+    );
+
+    // Second bundled session preloads `saved_bytes` and continues from 12 -> 13!
+    let mut run2 = Session::open_bundle(decoded, "jit", Limits::default(), Wait::blocking(), false)
+        .unwrap()
+        .session;
+    run2.load_save("saves/tally.field", &saved_bytes).unwrap();
+    run2.evaluate(&Context::default()).unwrap();
+    run2.confirm().unwrap();
+    assert_eq!(output_words(&mut run2, "result"), vec![13]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

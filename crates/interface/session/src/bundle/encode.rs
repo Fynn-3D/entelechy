@@ -68,6 +68,16 @@ impl Bundle {
                 }
             }
         }
+        w.list(&self.saves, |w, save| {
+            w.str(&save.slot);
+            w.str(&save.output);
+            w.list(&save.inputs, |w, (inp, ty)| {
+                w.str(inp);
+                w.opt(ty.as_ref(), |w, ty| w.str(ty));
+            });
+            w.bool(save.bytes);
+            w.list(&save.columns, |w, col| w.str(col));
+        });
         w.finish()
     }
 }

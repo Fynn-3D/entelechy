@@ -16,7 +16,7 @@ use std::sync::Arc;
 use entelechy_formats::base122::base122;
 use entelechy_formats::deflate::zlib_tight;
 use entelechy_formats::font::CompactFont;
-use entelechy_session::bundle::BundledAtlas;
+use entelechy_session::bundle::{Bundle, BundledAtlas};
 use entelechy_session::{Event, Limits, Session, SessionOptions, Wait};
 
 /// A scene compiled into its binary [`Bundle`](entelechy_session::bundle::Bundle)
@@ -89,6 +89,33 @@ pub fn compile(scene: &Path, chars: Option<&str>) -> Result<Compiled, String> {
         inputs,
         fonts,
     })
+}
+
+/// Reads an already-compiled `.bundle` (`ENTELECHYBUNDLE`) or compiles a `.esn`
+/// scene document into a [`Compiled`] bundle.
+pub fn load_or_compile(input: &Path, chars: Option<&str>) -> Result<Compiled, String> {
+    let ext = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if ext == "bundle" {
+        if chars.is_some() {
+            return Err(
+                "--chars subsets font nodes while compiling a .esn scene, not a precompiled .bundle"
+                    .into(),
+            );
+        }
+        let bytes = std::fs::read(input).map_err(|e| format!("{}: {e}", input.display()))?;
+        let decoded = Bundle::decode(&bytes).map_err(|e| format!("{}: {e}", input.display()))?;
+        return Ok(Compiled {
+            bundle: bytes,
+            modules: decoded.modules.len(),
+            inputs: decoded.inputs.len(),
+            fonts: Vec::new(),
+        });
+    }
+    compile(input, chars)
 }
 
 /// Bytes as the page carries what is large: a zlib stream in UTF-8 base122,
@@ -233,7 +260,7 @@ pub fn page_with_options(
         Some("cpu") => return Err("a page runs on gpu or jit, not cpu".into()),
         Some(other) => return Err(format!("--backend for a page is gpu or jit, not `{other}`")),
     };
-    let compiled = compile(scene, chars)?;
+    let compiled = load_or_compile(scene, chars)?;
     let bridge = web.join("bridges").join("web");
     let built = web.join("target").join("page");
     let read = |path: PathBuf| {

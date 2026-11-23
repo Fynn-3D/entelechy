@@ -23,6 +23,7 @@ pub struct Stamp(Seen);
 impl Stamp {
     /// The file's length in bytes, where the stamp holds it (a file on
     /// disk's does).
+    #[cfg(feature = "documents")]
     pub(crate) fn length(&self) -> Option<u64> {
         match self.0 {
             Seen::Disk(_, length) => Some(length),
@@ -163,6 +164,7 @@ pub trait Store: Send + Sync {
         &[]
     }
     /// Where the store keeps documents it has parsed, if it keeps them.
+    #[cfg(feature = "documents")]
     fn parsed(&self) -> Option<&Parsed> {
         None
     }
@@ -184,6 +186,7 @@ pub trait Store: Send + Sync {
 /// Documents parsed once per stamp: a document read again unchanged is
 /// not parsed again; and what is worked out of them once, by content,
 /// for every session reading through the store.
+#[cfg(feature = "documents")]
 #[derive(Clone, Debug, Default)]
 pub struct Parsed {
     documents: std::sync::Arc<Mutex<BTreeMap<PathBuf, ParsedAt>>>,
@@ -210,11 +213,13 @@ pub struct Parsed {
 }
 
 /// A document as parsed, and the stamp of the text it was parsed from.
+#[cfg(feature = "documents")]
 type ParsedAt = (Stamp, std::sync::Arc<entelechy_language::Document>);
 
 impl dyn Store + '_ {
     /// The document at `path`, parsed; an error names the path. A store
     /// that keeps parsed documents parses a file once per stamp.
+    #[cfg(feature = "documents")]
     pub fn document(
         &self,
         path: &Path,
@@ -299,6 +304,7 @@ pub(crate) fn folded(path: &Path) -> PathBuf {
 #[derive(Clone, Debug, Default)]
 pub struct Disk {
     packages: Vec<PathBuf>,
+    #[cfg(feature = "documents")]
     parsed: Parsed,
     /// What a sync found of each path, while one runs.
     found: std::sync::Arc<Mutex<Option<Found>>>,
@@ -355,6 +361,7 @@ impl Disk {
     pub fn with_packages(packages: Vec<PathBuf>) -> Self {
         Self {
             packages,
+            #[cfg(feature = "documents")]
             parsed: Parsed::default(),
             found: Default::default(),
             runs: Default::default(),
@@ -372,6 +379,7 @@ impl Store for Disk {
         true
     }
 
+    #[cfg(feature = "documents")]
     fn parsed(&self) -> Option<&Parsed> {
         Some(&self.parsed)
     }
@@ -607,6 +615,7 @@ impl Disk {
 #[derive(Debug, Default)]
 pub struct Memory {
     held: Mutex<Held>,
+    #[cfg(feature = "documents")]
     parsed: Parsed,
     /// Where the files kept elsewhere are read from.
     fetch: Option<Fetch>,
@@ -949,6 +958,7 @@ impl Store for Kept {
         self.base.packages()
     }
 
+    #[cfg(feature = "documents")]
     fn parsed(&self) -> Option<&Parsed> {
         self.base.parsed()
     }
@@ -972,12 +982,14 @@ impl Store for Kept {
 /// make included), everything else as `base` has it. What a compose of
 /// several documents is checked against before any reaches `base`;
 /// nothing is written through it.
+#[cfg(feature = "documents")]
 pub struct Overlay<'a> {
     base: &'a dyn Store,
     /// Each text by where its path lands ([`Overlay::landed`]).
     texts: BTreeMap<PathBuf, (Vec<u8>, u64)>,
 }
 
+#[cfg(feature = "documents")]
 impl<'a> Overlay<'a> {
     /// `base` seen through `texts`.
     pub fn new(base: &'a dyn Store, texts: &[(PathBuf, String)]) -> Self {
@@ -1003,6 +1015,7 @@ impl<'a> Overlay<'a> {
     }
 }
 
+#[cfg(feature = "documents")]
 impl Store for Overlay<'_> {
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
         match self.held(path) {
@@ -1096,6 +1109,7 @@ impl Store for Overlay<'_> {
 }
 
 impl Store for Memory {
+    #[cfg(feature = "documents")]
     fn parsed(&self) -> Option<&Parsed> {
         Some(&self.parsed)
     }
@@ -1427,7 +1441,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "documents"))]
 mod parsed_tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
