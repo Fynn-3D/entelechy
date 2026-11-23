@@ -105,7 +105,7 @@ pub(crate) fn build(device: &wgpu::Device, wait: Wait) -> Result<SamePipeline, S
     })
 }
 
-impl GpuBackend {
+impl WgpuBackend {
     /// Whether the first `byte_len` bytes of two device buffers are equal.
     pub(crate) fn same_buffers(
         &self,

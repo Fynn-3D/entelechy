@@ -8,29 +8,49 @@
 
 use std::any::Any;
 
-use crate::{DeviceImage, GpuBackend};
+use crate::{DeviceImage, Driver, GpuBackend, WgpuBackend};
 
-/// The GPU device as a window reaches it: taken from a backend before the
-/// backend goes to a runtime, sharing its device, so an interface draws
-/// what the backend left resident; the runtime knows only a `Backend`.
 #[derive(Clone)]
-pub struct Display {
+pub(crate) struct WgpuDisplay {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
 }
 
-impl GpuBackend {
-    /// A display on this backend's device, for presenting what it leaves
-    /// resident.
-    pub fn display(&self) -> Display {
+#[derive(Clone)]
+enum DisplayDriver {
+    Wgpu(WgpuDisplay),
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    WebGl(crate::webgl::WebGlDisplay),
+}
+
+/// The GPU device as a window reaches it: taken from a backend before the
+/// backend goes to a runtime, sharing its device, so an interface draws
+/// what the backend left resident; the runtime knows only a `Backend`.
+#[derive(Clone)]
+pub struct Display(DisplayDriver);
+
+impl WgpuBackend {
+    pub(crate) fn wgpu_display(&self) -> WgpuDisplay {
         let (instance, adapter, device, queue) = self.parts();
-        Display {
+        WgpuDisplay {
             instance: instance.clone(),
             adapter: adapter.clone(),
             device: device.clone(),
             queue: queue.clone(),
+        }
+    }
+}
+
+impl GpuBackend {
+    /// A display on this backend's device, for presenting what it leaves
+    /// resident.
+    pub fn display(&self) -> Display {
+        match &self.0 {
+            Driver::Wgpu(b) => Display(DisplayDriver::Wgpu(b.wgpu_display())),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(b) => Display(DisplayDriver::WebGl(b.display())),
         }
     }
 }
@@ -104,14 +124,22 @@ pub struct Overlay<'a> {
     pub height: u32,
 }
 
-/// A window surface a [`Display`] draws resident images into.
-pub struct Presenter {
+struct WgpuPresenter {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     srgb: bool,
 }
+
+enum PresenterDriver {
+    Wgpu(WgpuPresenter),
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    WebGl(crate::webgl::WebGlPresenter),
+}
+
+/// A window surface a [`Display`] draws resident images into.
+pub struct Presenter(PresenterDriver);
 
 impl Display {
     /// Configures a surface on `target` (a window handle the backend may
@@ -122,6 +150,87 @@ impl Display {
         width: u32,
         height: u32,
     ) -> Result<Presenter, String> {
+        match &self.0 {
+            DisplayDriver::Wgpu(d) => d
+                .presenter(target, width, height)
+                .map(PresenterDriver::Wgpu)
+                .map(Presenter),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            DisplayDriver::WebGl(_) => {
+                let _ = (target, width, height);
+                Err("WebGL2 presents by canvas name through `webgl_presenter`".to_string())
+            }
+        }
+    }
+
+    /// Queries the pixel extent of a named canvas when this display drives
+    /// WebGL2 (`None` when driving `wgpu`).
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    pub fn webgl_canvas_size(&self, canvas: &str) -> Result<Option<(u32, u32)>, String> {
+        match &self.0 {
+            DisplayDriver::Wgpu(_) => Ok(None),
+            DisplayDriver::WebGl(d) => d.canvas_size(canvas).map(Some),
+        }
+    }
+
+    /// Binds a named canvas for zero-copy WebGL2 presentation (`None` when
+    /// driving `wgpu`).
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    pub fn webgl_presenter(&self, canvas: &str) -> Option<Presenter> {
+        match &self.0 {
+            DisplayDriver::Wgpu(_) => None,
+            DisplayDriver::WebGl(d) => Some(Presenter(PresenterDriver::WebGl(d.presenter(canvas)))),
+        }
+    }
+
+    /// Draws a resident image (`device`, the Host's resident object) into the
+    /// surface, with `overlay` over its top-left corner. Returns where the
+    /// image was placed, or `None` when the window takes no frame now
+    /// (occluded, or the surface timed out). Nothing is read back.
+    #[allow(clippy::too_many_arguments)]
+    pub fn present(
+        &self,
+        presenter: &mut Presenter,
+        device: &(dyn Any + Send + Sync),
+        width: u32,
+        height: u32,
+        window_width: u32,
+        window_height: u32,
+        overlay: Option<Overlay<'_>>,
+    ) -> Result<Option<Placement>, String> {
+        match (&self.0, &mut presenter.0) {
+            (DisplayDriver::Wgpu(d), PresenterDriver::Wgpu(p)) => d.present(
+                p,
+                device,
+                width,
+                height,
+                window_width,
+                window_height,
+                overlay,
+            ),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            (DisplayDriver::WebGl(d), PresenterDriver::WebGl(p)) => d.present(
+                p,
+                device,
+                width,
+                height,
+                window_width,
+                window_height,
+                overlay,
+            ),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            _ => Err("presenter belongs to a different GPU driver".to_string()),
+        }
+    }
+}
+
+impl WgpuDisplay {
+    fn presenter(
+        &self,
+        target: impl Into<wgpu::SurfaceTarget<'static>>,
+        width: u32,
+        height: u32,
+    ) -> Result<WgpuPresenter, String> {
         let (instance, adapter, device) = (&self.instance, &self.adapter, &self.device);
         let surface = instance
             .create_surface(target)
@@ -208,7 +317,7 @@ impl Display {
             multiview_mask: None,
             cache: None,
         });
-        Ok(Presenter {
+        Ok(WgpuPresenter {
             surface,
             config,
             pipeline,
@@ -217,14 +326,10 @@ impl Display {
         })
     }
 
-    /// Draws a resident image (`device`, the Host's resident object) into the
-    /// surface, with `overlay` over its top-left corner. Returns where the
-    /// image was placed, or `None` when the window takes no frame now
-    /// (occluded, or the surface timed out). Nothing is read back.
     #[allow(clippy::too_many_arguments)]
-    pub fn present(
+    fn present(
         &self,
-        presenter: &mut Presenter,
+        presenter: &mut WgpuPresenter,
         device: &(dyn Any + Send + Sync),
         width: u32,
         height: u32,
@@ -381,7 +486,7 @@ mod tests {
             eprintln!("skipping: no gpu");
             return;
         };
-        let (_, _, device, _) = gpu.parts();
+        let device = gpu.device();
         let guard = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let _ = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("entelechy blit"),

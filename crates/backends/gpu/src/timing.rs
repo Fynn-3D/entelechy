@@ -51,7 +51,7 @@ impl Timing {
     }
 }
 
-impl GpuBackend {
+impl WgpuBackend {
     /// Whether executions wait for the device; see
     /// [`Backend::set_measured`].
     pub fn measured(&self) -> bool {

@@ -469,7 +469,7 @@ pub(crate) fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLay
     }
 }
 
-impl GpuBackend {
+impl WgpuBackend {
     /// Why this device does not run `module`, if it does not: more
     /// buffers than it binds at once, a `Double` it has no arithmetic for,
     /// or a `Long` where the device has none or the mode folds words it

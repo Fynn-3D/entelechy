@@ -3,7 +3,7 @@
 
 use super::*;
 
-impl GpuBackend {
+impl WgpuBackend {
     /// The whole of a repeated run: staged once, then its times in one
     /// pass of one command buffer, two buffers taking turns.
     pub(crate) fn repeated(

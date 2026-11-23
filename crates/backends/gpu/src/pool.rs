@@ -297,7 +297,7 @@ impl Drop for DeviceImage {
     }
 }
 
-impl GpuBackend {
+impl WgpuBackend {
     /// The pile of released Fields' buffers, for the parts of the backend that
     /// make their own outputs.
     pub(crate) fn spare(&self) -> Spare {

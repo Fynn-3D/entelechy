@@ -21,7 +21,7 @@ pub(crate) struct StageScratch {
     upload: Vec<u8>,
 }
 
-impl GpuBackend {
+impl WgpuBackend {
     /// Writes `words` to `buffer` from word `at` on, queued for the next
     /// submission; the queue copies each piece as it is written.
     pub(crate) fn write_words(&self, buffer: &wgpu::Buffer, at: usize, words: &[u32]) {
@@ -201,7 +201,7 @@ pub(crate) fn adopt_outputs(
     Ok(outputs)
 }
 
-impl GpuBackend {
+impl WgpuBackend {
     pub(crate) fn bind_input(
         &self,
         scope: &mut Scope<'_>,

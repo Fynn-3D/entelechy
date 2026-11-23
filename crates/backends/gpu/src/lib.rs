@@ -1,15 +1,16 @@
 #![warn(missing_docs)]
 //! GPU backend.
 //!
-//! Emits WGSL from validated IR at preparation and runs each execution
-//! through wgpu. The Host owns images and their pixels stay resident on
-//! the device: a resident input binds directly, a Host input uploads once
-//! and stays resident, and outputs are adopted as resident images. Pixels
-//! return only through [`Backend::download`]. Semantics match the CPU
-//! backend up to floating-point rounding; integer failures are reported
-//! as the CPU reports them.
+//! Emits WGSL (or `#version 300 es` GLSL for a WebGL2 page) from validated IR
+//! at preparation and runs each execution on the device. The Host owns images
+//! and their pixels stay resident on the device: a resident input binds
+//! directly, a Host input uploads once and stays resident, and outputs are
+//! adopted as resident images. Pixels return only through [`Backend::download`].
+//! Semantics match the CPU backend up to floating-point rounding; integer
+//! failures are reported as the CPU reports them.
 
 mod failure;
+pub mod glsl;
 mod later;
 mod modes;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
@@ -22,6 +23,8 @@ mod same;
 mod stage;
 mod timing;
 mod wait;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+mod webgl;
 pub mod wgsl;
 
 pub use wait::Wait;
@@ -62,7 +65,7 @@ impl fmt::Display for GpuError {
 impl std::error::Error for GpuError {}
 
 /// A wgpu device with a compute-only contract.
-pub struct GpuBackend {
+pub(crate) struct WgpuBackend {
     /// How to wait for the device: block, or give the page turns.
     wait: Wait,
     /// The time callers have spent blocked on the device's work.
@@ -153,13 +156,13 @@ pub(crate) fn told(heard: &Mutex<Vec<String>>, error: String) -> String {
     }
 }
 
-impl fmt::Debug for GpuBackend {
+impl fmt::Debug for WgpuBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "GpuBackend({})", self.adapter_name)
     }
 }
 
-impl GpuBackend {
+impl WgpuBackend {
     /// The bytes a workgroup of this device holds at once: what a group's
     /// exchanges may take.
     pub fn workgroup_memory(&self) -> u32 {
@@ -175,19 +178,6 @@ impl GpuBackend {
         self.spare.bury();
         self.targets.bury();
         submission
-    }
-
-    /// Opens the default adapter, blocking to wait for the device. Where
-    /// Entelechy is WebAssembly nothing blocks: a page opens it with
-    /// [`GpuBackend::with_wait`].
-    pub fn new() -> Result<Self, GpuError> {
-        if cfg!(target_arch = "wasm32") {
-            return Err(GpuError(
-                "a page's device is waited for by giving the page turns; open it with a Wait"
-                    .into(),
-            ));
-        }
-        Self::with_wait(Wait::blocking())
     }
 
     /// Opens the fastest adapter, waiting for the device as `wait` says.
@@ -360,7 +350,7 @@ impl GpuBackend {
     }
 }
 
-impl Backend for GpuBackend {
+impl Backend for WgpuBackend {
     fn name(&self) -> &'static str {
         "gpu"
     }
@@ -908,5 +898,321 @@ impl Backend for GpuBackend {
 
     fn waited(&self) -> std::time::Duration {
         self.spent.total()
+    }
+}
+
+pub(crate) enum Driver {
+    Wgpu(Box<WgpuBackend>),
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    WebGl(Box<webgl::WebGlBackend>),
+}
+
+/// A GPU execution backend: `wgpu` compute where offered, or WebGL2 fragment
+/// passes in a page or mini-game without WebGPU + JSPI.
+pub struct GpuBackend(pub(crate) Driver);
+
+impl fmt::Debug for GpuBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "GpuBackend({})", self.adapter_name())
+    }
+}
+
+impl GpuBackend {
+    fn inner(&self) -> &dyn Backend {
+        match &self.0 {
+            Driver::Wgpu(b) => b.as_ref(),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(b) => b.as_ref(),
+        }
+    }
+
+    /// Opens the default adapter, blocking to wait for the device. Where
+    /// Entelechy is WebAssembly nothing blocks: a page opens it with
+    /// [`GpuBackend::with_wait`].
+    pub fn new() -> Result<Self, GpuError> {
+        if cfg!(target_arch = "wasm32") {
+            return Err(GpuError(
+                "a page's device is waited for by giving the page turns; open it with a Wait"
+                    .into(),
+            ));
+        }
+        Self::with_wait(Wait::blocking())
+    }
+
+    /// Opens the fastest available GPU driver, waiting for the device as
+    /// `wait` says. On `wasm32-unknown-unknown`, opens WebGPU when JSPI is
+    /// present (unless `entelechy_webgl_only` is set) and falls back to
+    /// synchronous WebGL2 when `globalThis.entelechy_webgl` is provided.
+    pub fn with_wait(wait: Wait) -> Result<Self, GpuError> {
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        {
+            if webgl::prefer_webgl() {
+                return webgl::WebGlBackend::open().map(|b| Self(Driver::WebGl(Box::new(b))));
+            }
+            if webgl::can_park_webgpu() {
+                match WgpuBackend::with_wait(wait) {
+                    Ok(b) => return Ok(Self(Driver::Wgpu(Box::new(b)))),
+                    Err(wgpu_err) => {
+                        return webgl::WebGlBackend::open()
+                            .map(|b| Self(Driver::WebGl(Box::new(b))))
+                            .map_err(|_| wgpu_err);
+                    }
+                }
+            }
+            webgl::WebGlBackend::open().map(|b| Self(Driver::WebGl(Box::new(b))))
+        }
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        {
+            WgpuBackend::with_wait(wait).map(|b| Self(Driver::Wgpu(Box::new(b))))
+        }
+    }
+
+    /// The bytes a workgroup of this device holds at once: what a group's
+    /// exchanges may take. Zero on WebGL2, which runs no workgroup Kernels.
+    pub fn workgroup_memory(&self) -> u32 {
+        match &self.0 {
+            Driver::Wgpu(b) => b.workgroup_memory(),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(_) => 0,
+        }
+    }
+
+    /// This backend computing every `Long` as a pair of 32-bit words, as on
+    /// a device without 64-bit integers.
+    pub fn with_long_pairs(self) -> Self {
+        match self.0 {
+            Driver::Wgpu(b) => Self(Driver::Wgpu(Box::new((*b).with_long_pairs()))),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(b) => Self(Driver::WebGl(b)),
+        }
+    }
+
+    /// This backend drawing triangles a vertex pulled at a time, as on a
+    /// device whose fragments do not know their primitive.
+    pub fn with_pulled_vertices(self) -> Self {
+        match self.0 {
+            Driver::Wgpu(b) => Self(Driver::Wgpu(Box::new((*b).with_pulled_vertices()))),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(b) => Self(Driver::WebGl(b)),
+        }
+    }
+
+    /// The adapter's name, for diagnostics.
+    pub fn adapter_name(&self) -> &str {
+        match &self.0 {
+            Driver::Wgpu(b) => b.adapter_name(),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(b) => b.adapter_name(),
+        }
+    }
+
+    /// The wgpu device, for interfaces and tests that speak wgpu directly.
+    pub fn device(&self) -> &wgpu::Device {
+        match &self.0 {
+            Driver::Wgpu(b) => b.device(),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(_) => panic!("WebGL2 backend has no wgpu::Device"),
+        }
+    }
+
+    /// Whether executions wait for the device; see [`Backend::set_measured`].
+    pub fn measured(&self) -> bool {
+        match &self.0 {
+            Driver::Wgpu(b) => b.measured(),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(b) => b.measured(),
+        }
+    }
+
+    /// The device time of the last measured execution; `None` when nothing
+    /// was measured. Taken once.
+    pub fn last_device_time(&self) -> Option<std::time::Duration> {
+        self.inner().last_device_time()
+    }
+
+    /// The cost of a measured execution's wait with nothing to wait for.
+    pub fn wait_floor(&self) -> std::time::Duration {
+        match &self.0 {
+            Driver::Wgpu(b) => b.wait_floor(),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(_) => std::time::Duration::ZERO,
+        }
+    }
+
+    /// Whether the device's own clock has answered a measured execution.
+    pub fn device_clock_answered(&self) -> bool {
+        match &self.0 {
+            Driver::Wgpu(b) => b.device_clock_answered(),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(_) => false,
+        }
+    }
+}
+
+impl Backend for GpuBackend {
+    fn name(&self) -> &'static str {
+        self.inner().name()
+    }
+
+    fn declines(&self, module: &Validated) -> Option<String> {
+        self.inner().declines(module)
+    }
+
+    fn repeats_exactly(&self) -> bool {
+        self.inner().repeats_exactly()
+    }
+
+    fn uploaded(&self) -> u64 {
+        self.inner().uploaded()
+    }
+
+    fn upload(&self, handle: Handle, scope: &mut Scope<'_>) -> Result<bool, ExecutionError> {
+        self.inner().upload(handle, scope)
+    }
+
+    fn join(
+        &self,
+        parts: &[(Handle, std::ops::Range<usize>)],
+        schema: &entelechy_abi::Schema,
+        domain: entelechy_abi::Domain,
+        scope: &mut Scope<'_>,
+    ) -> Result<Option<Handle>, ExecutionError> {
+        self.inner().join(parts, schema, domain, scope)
+    }
+
+    fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
+        self.inner().prepare(module)
+    }
+
+    fn finish(&self, prepared: &dyn Prepared) {
+        self.inner().finish(prepared);
+    }
+
+    fn finished(&self, prepared: &dyn Prepared) -> bool {
+        self.inner().finished(prepared)
+    }
+
+    fn execute(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<Vec<Handle>, ExecutionError> {
+        self.inner().execute(prepared, module, invocation, scope)
+    }
+
+    fn execute_checked(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<entelechy_rules::backend::Checked, ExecutionError> {
+        self.inner()
+            .execute_checked(prepared, module, invocation, scope)
+    }
+
+    fn execute_native(
+        &self,
+        op: NativeOp,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+    ) -> Result<Vec<Handle>, ExecutionError> {
+        self.inner().execute_native(op, invocation, scope)
+    }
+
+    fn last_device_time(&self) -> Option<std::time::Duration> {
+        self.inner().last_device_time()
+    }
+
+    fn measurement_floor(&self) -> std::time::Duration {
+        self.inner().measurement_floor()
+    }
+
+    fn set_measured(&self, on: bool) {
+        self.inner().set_measured(on);
+    }
+
+    fn measures_the_device(&self) -> bool {
+        self.inner().measures_the_device()
+    }
+
+    fn set_clocked(&self, on: bool) {
+        self.inner().set_clocked(on);
+    }
+
+    fn clock_mark(&self) -> usize {
+        self.inner().clock_mark()
+    }
+
+    fn end_frame(&self) -> Option<u64> {
+        self.inner().end_frame()
+    }
+
+    fn clocked_frame(&self) -> Option<entelechy_rules::ClockedFrame> {
+        self.inner().clocked_frame()
+    }
+
+    fn evaluation_begun(&self) {
+        self.inner().evaluation_begun();
+    }
+
+    fn memory(&self) -> Vec<(&'static str, u64)> {
+        self.inner().memory()
+    }
+
+    fn execute_repeated(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+        repeat: u32,
+        chain: (usize, usize),
+    ) -> Option<Result<Vec<Handle>, ExecutionError>> {
+        self.inner()
+            .execute_repeated(prepared, module, invocation, scope, repeat, chain)
+    }
+
+    fn settle_device(&self) {
+        self.inner().settle_device();
+    }
+
+    fn submitted(&self) -> Option<Box<dyn Check>> {
+        self.inner().submitted()
+    }
+
+    fn has_device(&self) -> bool {
+        self.inner().has_device()
+    }
+
+    fn download(
+        &self,
+        device: &(dyn Any + Send + Sync),
+        byte_len: usize,
+    ) -> Result<Vec<u32>, String> {
+        self.inner().download(device, byte_len)
+    }
+
+    fn download_later(
+        &self,
+        device: &(dyn Any + Send + Sync),
+        byte_len: usize,
+    ) -> Result<Box<dyn entelechy_rules::Downloading>, String> {
+        self.inner().download_later(device, byte_len)
+    }
+
+    fn same_resident(
+        &self,
+        a: &(dyn Any + Send + Sync),
+        b: &(dyn Any + Send + Sync),
+        byte_len: usize,
+    ) -> Result<bool, String> {
+        self.inner().same_resident(a, b, byte_len)
+    }
+
+    fn waited(&self) -> std::time::Duration {
+        self.inner().waited()
     }
 }

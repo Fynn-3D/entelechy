@@ -280,7 +280,7 @@ pub(crate) fn device_error(error: &wgpu::Error) -> String {
     }
 }
 
-impl GpuBackend {
+impl WgpuBackend {
     /// A failure record and its readback buffer, from the pile or new: the
     /// first failure's word, the blocks of work taken, and the most the run
     /// may take ([`wgsl::FAILURE_BYTES`]).

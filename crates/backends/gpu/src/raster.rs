@@ -30,7 +30,7 @@ use entelechy_abi::{Handle, Invocation, Scope};
 use entelechy_rules::raster::{SURFACE_WORDS, check_rasterize, surface_schema};
 use entelechy_rules::{ExecutionError, NativeOp};
 
-use crate::{DeviceImage, GpuBackend};
+use crate::{DeviceImage, WgpuBackend};
 
 /// What every stage reads: the canvas, the counts, the cutout, and how
 /// small a triangle the sorting pass draws itself.
@@ -847,7 +847,7 @@ fn build(
 /// A target of this shape from the backend's pile, written as an
 /// attachment and read in place by the resolving pass.
 fn target(
-    gpu: &GpuBackend,
+    gpu: &WgpuBackend,
     label: &str,
     width: u32,
     height: u32,
@@ -865,7 +865,7 @@ fn target(
 
 /// Rasterizes on the device into a new resident surface grid.
 pub(crate) fn rasterize(
-    gpu: &GpuBackend,
+    gpu: &WgpuBackend,
     pipelines: &OnceLock<Result<RasterPipelines, String>>,
     invocation: &Invocation,
     scope: &mut Scope<'_>,
