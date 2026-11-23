@@ -175,7 +175,8 @@ fn a_scene_exported_as_one_page_opens_from_the_disk() {
             return;
         }
     };
-    let web = root().join("target/web/release");
+    let pid = std::process::id();
+    let web = root().join(format!("target/web/release-{pid}"));
     let _ = std::fs::remove_dir_all(&web);
     std::fs::create_dir_all(web.join("target")).expect("a directory");
     std::os::unix::fs::symlink(root().join("bridges"), web.join("bridges"))
@@ -195,7 +196,7 @@ fn a_scene_exported_as_one_page_opens_from_the_disk() {
     .expect("the voxel example exports");
     // No directory of this machine is written into the page.
     assert!(!made.page.contains(&root().to_string_lossy().into_owned()));
-    let page = root().join("target/web/voxel.html");
+    let page = root().join(format!("target/web/voxel-{pid}.html"));
     std::fs::write(&page, &made.page).expect("the page written");
     let mut command = Command::new(node);
     command
@@ -206,6 +207,8 @@ fn a_scene_exported_as_one_page_opens_from_the_disk() {
         .arg("--chrome")
         .arg(chrome);
     passed(command, "a page exported whole", "page: it fetched nothing");
+    let _ = std::fs::remove_dir_all(&web);
+    let _ = std::fs::remove_file(&page);
 }
 
 #[test]
