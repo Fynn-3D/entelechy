@@ -3,7 +3,8 @@
 Exported by `entelechy-export` as a self-contained Xcode project over the
 bundle-only C ABI (`entelechy.h` + `scene.bundle`). On iOS, Kernels run on
 Metal (`wgpu`) with the interpreter beside it, so no runtime executable memory
-(`mmap(PROT_EXEC)`) is requested.
+(`mmap(PROT_EXEC)`) is requested. Any bundled save slots (`entelechy_save_*`)
+persist automatically under `Application Support/<bundle-id>/saves/`.
 
 ## Build and Run
 

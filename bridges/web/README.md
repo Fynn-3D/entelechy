@@ -133,10 +133,11 @@ node bridges/web/test.mjs
 ## One page
 
 `single.html` is the template of a scene exported whole (`entelechy export
-<scene.esn> --out <name>.html`, docs/USAGE.md, *Import and export*). The
-exporter compiles the scene into a binary bundle (`entelechy_session::bundle`,
-holding validated IR modules, the lowered graph, input Fields and baked font
-atlases, with no host paths) and fills the template: `@@pack:<file>@@` is a
+<scene.esn|scene.bundle> --out <name>.html`, docs/USAGE.md, *Import and export*). The
+exporter compiles the scene (or takes a precompiled `.bundle`) into a binary
+bundle (`entelechy_session::bundle`, holding validated IR modules, the lowered
+graph, input Fields, baked font contours and named save slots, with no host
+paths) and fills the template: `@@pack:<file>@@` is a
 file of this directory, packed (`single.js`; `@@include:<file>@@` puts one in
 as it is), and `@@slot:<name>@@` is what the exporter made: `glue` and
 `runtime` the slim playback build (`entelechy_single.js` and
@@ -153,5 +154,6 @@ the page shows its name, a line that fills, and what is being done (unpacking,
 starting Entelechy, opening the scene, preparing so many of its Kernels); a
 failure is said there. The page that results fetches nothing: `single.js`
 loads the glue from the text the page carries, instantiates Entelechy's
-WebAssembly from the unpacked bytes, and opens the bundle through
-`entelechy_open_bundle`.
+WebAssembly from the unpacked bytes, opens the bundle through
+`entelechy_open_bundle`, and persists any bundled save slots (`output ... to
+"<slot>"` paired with `input ... = "<slot>" else ...`) in `localStorage`.

@@ -764,30 +764,33 @@ numbers, which read back the same.
 **Where.** [the table format](../crates/interface/formats/src/table.rs),
 the table input in [DOCUMENTS](DOCUMENTS.md#inputs-from-files).
 
-## A scene exports as one page; the exporter packs, the bridge starts
+## A scene exports as a bundle; the exporter packs, the shell starts
 
-`entelechy export <scene.esn> --out <name>.html` writes a single file that
-plays the scene from the disk: the Player in a page, Entelechy built for
-a page, and the files the scene reads. The exporter loads the scene as a
-front does, through a store that keeps the path of every file read, and
-packs those files; in the page a package found by its name is under
-`packages/` and everything else keeps its place under `play/`, counted
-from the directory all of it is in. How the page starts is the web
-bridge's: `bridges/web/single.html` is a template the exporter fills,
-an include being a file beside it and a slot what the exporter made.
+`entelechy export <scene.esn|scene.bundle> --out <target>` compiles a scene
+into a binary `.bundle` (`entelechy_session::bundle`: validated IR modules,
+the lowered graph, baked input Fields, compact font contours, and named save
+slots where an `output ... to "<path>"` meets `input ... = "<path>" else ...`,
+with no host paths) and packs it into the requested target: a single offline
+HTML page (`bridges/web/single.html`), a standalone desktop application
+(`entelechy-runner` inside a macOS `.app` sealed with a pure-Rust ad-hoc
+Mach-O signature and `CodeResources`, or a self-contained `.exe`/`.bin` with a
+trailer bundle), or a self-contained mobile Xcode/NDK project
+(`bridges/ios`, `bridges/android`). Accepting an already-compiled `.bundle`
+lets browser and WASI hosts pack every platform through the same exporter.
 
-**Why.** What runs in the page is Entelechy itself, the same documents
-and the same backends, so the page is the scene and not a translation of
-it: nothing is compiled to another engine's terms, and what the page
-shows is what the Player shows. Recording what a load reads finds exactly
-the scene's files, with no second reading of `use` and `input` to keep in
-step with the first. The names are made anew so that no directory of the
-machine exported on is written into a file meant to be handed to others.
-The exporter reads the template and Entelechy for the web as files it is
-pointed at (`--web`), as it reads the scene: the workspace is not built
-against the bridge, and the page's own logic stays in the bridge's
-language.
+**Why.** What runs in a page, a desktop binary or a phone app is Entelechy's
+own runtimes over the validated IR and lowered graph — never a translation to
+another engine's terms — while omitting the source compiler, document loader
+and host paths from the playback shell. Declaring save slots from the scene's
+own `input ... else` / `output ... to` pairs gives exported apps persistent
+state (`Application Support` / `AppData` / XDG data dir, `localStorage`, iOS
+and Android app sandboxes) without adding any platform API to `.ent` or
+`.esn`. Sealing `.app` bundles in pure Rust inside `entelechy-export` keeps
+macOS Gatekeeper satisfied even when the bundle is packed off-macOS or under
+WASI.
 
-**Where.** [the exporter](../crates/interface/export/src/page.rs),
-[its tests](../crates/interface/export/tests/page.rs),
-[the template](../bridges/web/single.html), [USAGE](USAGE.md#import-and-export).
+**Where.** [page export](../crates/interface/export/src/page.rs),
+[native export](../crates/interface/export/src/native.rs),
+[Mach-O sealing](../crates/interface/export/src/codesign.rs),
+[the runner](../crates/interface/player/src/runner.rs),
+[the web template](../bridges/web/single.html), [USAGE](USAGE.md#import-and-export).

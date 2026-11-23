@@ -130,7 +130,7 @@ The safe path is the powerful path:
 - **State commits only when truth is valid.** A frame's state and file writes commit only when the whole evaluation succeeds.
 - **The world is observable.** Any port can be read, any element traced through its Kernel, any node timed; a run is a replay, and a replay is a test.
 
-`entelechy help` prints the syntax and API of every layer directly from the tables the runtime executes ([the same text](docs/REFERENCE.md)); the wire operations and answers are in [the protocol](docs/PROTOCOL.md). Bridges speak the same contract from [Blender](bridges/blender/README.md), [Godot](bridges/godot/README.md), [a web page](bridges/web/README.md) and [C](bridges/c/README.md).
+`entelechy help` prints the syntax and API of every layer directly from the tables the runtime executes ([the same text](docs/REFERENCE.md)); the wire operations and answers are in [the protocol](docs/PROTOCOL.md). Bridges speak the same contract from [Blender](bridges/blender/README.md), [Godot](bridges/godot/README.md), [a web page](bridges/web/README.md), [iOS](bridges/ios/README.md), [Android](bridges/android/README.md) and [C](bridges/c/README.md).
 
 ## Start
 
@@ -142,10 +142,11 @@ entelechy player hello/scene.esn                             # open live; edit h
 entelechy replay hello/tests/hello.replay                    # verify frame by frame across backends
 entelechy run examples/grayscale/scene.esn --out gray.png    # evaluate once and write an output
 entelechy export examples/voxel/scene.esn --out voxel.html   # pack runtime + scene into one HTML page
+entelechy export examples/voxel/scene.esn --out Voxel.app    # pack runner + scene into a standalone app
 entelechy help                                               # inspect the syntax and API of every layer
 ```
 
-`entelechy export <scene.esn> --out <page>.html` compiles a scene's validated IR, lowered Graph, baked Fields and subsetted font contours together with Entelechy's WebAssembly/WebGPU page runtime into a single self-contained HTML file that opens straight from disk and fetches nothing. `entelechy import` and `entelechy export` also round-trip glTF/GLB meshes and skinned rigs, audio, MIDI, SVG vectors and OpenType/WOFF fonts into and out of typed Fields ([Usage](docs/USAGE.md)).
+`entelechy export <scene.esn|scene.bundle> --out <target>` compiles a scene's validated IR, lowered Graph, baked Fields, subsetted font contours and persistent save slots into a self-contained `.bundle`, a single offline `.html` page, a standalone desktop application (`.app`, `.exe`, `.bin`), or a mobile Xcode/NDK project (`.ios`, `.android`). `entelechy import` and `entelechy export` also round-trip glTF/GLB meshes and skinned rigs, audio, MIDI, SVG vectors and OpenType/WOFF fonts into and out of typed Fields ([Usage](docs/USAGE.md)).
 
 ## Capabilities grow as packages
 
@@ -178,7 +179,7 @@ Capability ABI   declared capabilities, opaque handles
 Entelechy IR     typed computation, backend-neutral
 Kernel Runtime   prepare, validate, atomic swap
 Graph Runtime    composition by KernelID, typed ports
-Interfaces       CLI, Player, protocol, single-page export, C ABI, bridges
+Interfaces       CLI, Player, Runner, protocol, page & native export, C ABI, bridges
 ```
 
 Rust, in layers held by tests: `core` depends on `core` alone, `frontend` on `core`, a backend on `core` alone, and only the interface layer on everything. `core`, `frontend` and the reference interpreter take zero external dependencies; `unsafe` lives in two crates, `entelechy-jit` (calling the native code it emits) and `entelechy-ffi` (reading C pointers at the boundary). Verified on macOS (Apple silicon, Metal), under WASI, and in the browser on WebAssembly and WebGPU.

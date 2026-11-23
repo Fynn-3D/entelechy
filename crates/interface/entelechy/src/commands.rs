@@ -325,7 +325,7 @@ which `entelechy` does not check.",
         },
         Command {
             name: "export",
-            args: "<file.field>... --out <file> [...]",
+            args: "<file>... --out <target> [...]",
             summary: "Run the exporter.",
             doc: "\
 The exporter: `entelechy-export` beside `entelechy`, run with the same arguments,

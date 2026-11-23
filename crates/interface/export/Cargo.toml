@@ -1,6 +1,6 @@
 [package]
 name = "entelechy-export"
-description = "The exporter: writes the Host's files as formats other software opens, from outside the runtime"
+description = "The exporter: packs scenes as pages or native applications, and writes the Host's files as formats other software opens"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

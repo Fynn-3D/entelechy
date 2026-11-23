@@ -2,6 +2,8 @@
 
 Exported by `entelechy-export` as a self-contained Android NDK (`NativeActivity`)
 project over the bundle-only C ABI (`entelechy.h` + `assets/scene.bundle`).
+Any bundled save slots (`entelechy_save_*`) persist automatically under
+`internalDataPath/saves/`.
 
 ## Build and Run
 

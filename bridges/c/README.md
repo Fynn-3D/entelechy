@@ -24,5 +24,5 @@ pixel (12, 9) = 0.30 0.10 0.10
 
 The static library `libentelechy_ffi.a` links the same way without the
 runtime path. Any language with a C foreign function interface (Python's
-ctypes, C#, Zig, a Godot GDExtension) binds the same ten functions; the
-header documents what each pointer's lifetime is.
+ctypes, C#, Zig, a Godot GDExtension) binds the functions in `entelechy.h`;
+the header documents what each pointer's lifetime is.
