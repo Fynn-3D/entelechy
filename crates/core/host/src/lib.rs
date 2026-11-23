@@ -1597,10 +1597,16 @@ impl Host {
     /// Keeps a released buffer for reuse, with the Field whose words it
     /// holds and what that was made from. The pile holds a few hundred
     /// buffers, enough for the scans of a frame to find their memories'
-    /// the next, and at most a quarter of the budget; the oldest beyond go.
+    /// the next, and at most a quarter of the budget (capped in 32-bit
+    /// WebAssembly, whose linear memory never shrinks); the oldest beyond go.
     fn keep_spare(&mut self, words: Vec<u32>, holds: Option<Version>, made: Option<Lineage>) {
         const KEPT: usize = 256;
-        let room = self.budget_words / 4;
+        const MOST_WORDS: usize = if cfg!(target_arch = "wasm32") {
+            4 << 20
+        } else {
+            usize::MAX
+        };
+        let room = (self.budget_words / 4).min(MOST_WORDS);
         if words.is_empty() || words.len() > room {
             return;
         }

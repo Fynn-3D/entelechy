@@ -36,6 +36,7 @@ pub(crate) struct BundledScene {
     pub(super) dirty_saves: BTreeMap<String, Vec<u8>>,
     pub(super) save_store: Option<(Arc<dyn Store>, PathBuf)>,
     pub(super) said: Vec<String>,
+    pub(super) failed: Option<String>,
 }
 
 pub(super) struct PendingBundle {
@@ -288,6 +289,7 @@ impl Session {
                 dirty_saves: BTreeMap::new(),
                 save_store: None,
                 said: Vec::new(),
+                failed: None,
             })),
         );
         session.copies_let_go.extend(on_device);
@@ -329,20 +331,47 @@ impl Session {
 
     /// Advances one turn of preparation and returns lines to report.
     pub fn sync_turn_lines(&mut self) -> Vec<String> {
+        match self.sync_turn_checked() {
+            Ok(lines) => lines,
+            Err(why) => {
+                let mut lines = self.take_bundle_said();
+                lines.push(why);
+                lines
+            }
+        }
+    }
+
+    /// Advances one turn of preparation and returns lines to report, or why
+    /// the scene failed to open.
+    pub fn sync_turn_checked(&mut self) -> Result<Vec<String>, String> {
         match &mut self.backing {
             #[cfg(feature = "documents")]
-            Backing::Documents(_) => self
-                .sync_a_turn()
-                .into_iter()
-                .map(|e| e.to_string())
-                .collect(),
-            Backing::Bundled(_) => {
-                if let Err(why) = self.sync_bundle_turn()
-                    && let Some(b) = self.backing.bundled_mut()
-                {
-                    b.said.push(why);
+            Backing::Documents(_) => {
+                let events = self.sync_a_turn();
+                let rejected = events.iter().find_map(|event| match event {
+                    entelechy_documents::Event::SceneRejected(error) => Some(error.to_string()),
+                    entelechy_documents::Event::Rejected { path, error } => {
+                        Some(format!("{}: {error}", path.display()))
+                    }
+                    _ => None,
+                });
+                let lines: Vec<String> = events.into_iter().map(|e| e.to_string()).collect();
+                if self.graph().is_none() && !self.scene_waiting() {
+                    return Err(rejected.unwrap_or_else(|| "the scene did not load".to_owned()));
                 }
-                self.take_bundle_said()
+                Ok(lines)
+            }
+            Backing::Bundled(_) => {
+                if let Err(why) = self.sync_bundle_turn() {
+                    if let Some(b) = self.backing.bundled_mut() {
+                        b.failed = Some(why.clone());
+                    }
+                    return Err(why);
+                }
+                if let Some(why) = self.backing.bundled_mut().and_then(|b| b.failed.clone()) {
+                    return Err(why);
+                }
+                Ok(self.take_bundle_said())
             }
         }
     }
@@ -361,6 +390,9 @@ impl Session {
         } else {
             self.sync_bundled_clipboard();
             self.finish_used();
+        }
+        if self.runtime.prepares_in_turns() && entelechy_kernel::clock::since(began) < TURN {
+            self.finish_turn();
         }
         Ok(())
     }
@@ -387,6 +419,14 @@ impl Session {
             self.runtime
                 .publish_all(candidates)
                 .map_err(|e| e.to_string())?;
+        }
+        for node in &pending.graph.nodes {
+            if self.runtime.kernel(&node.kernel).is_none() {
+                return Err(format!(
+                    "node `{}` names `{}`, which is not published in the bundle",
+                    node.id, node.kernel
+                ));
+            }
         }
         if let Some(b) = self.backing.bundled_mut() {
             b.graph = Some(Arc::new(pending.graph));

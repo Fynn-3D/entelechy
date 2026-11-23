@@ -1,7 +1,7 @@
 //! The session: its runtime, evaluator and backing scene (either live
 //! source documents or a compiled [`crate::bundle::Bundle`]).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 #[cfg(feature = "documents")]
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -61,6 +61,10 @@ pub struct Session {
     /// The Kernels handed to threads of their own to be built there
     /// ([`Session::finish_used`]).
     handed: BTreeSet<KernelId>,
+    /// Kernels queued to finish in turns where no thread can start (a page),
+    /// and how many at the front have already been warmed ahead.
+    finishing: VecDeque<Arc<entelechy_kernel::KernelVersion>>,
+    warmed: usize,
 }
 
 pub(super) enum Backing {
@@ -214,6 +218,10 @@ type Opened = (Box<dyn Backend>, Option<Box<dyn Backend>>, Option<Display>);
 /// How long a sync prepares Kernels where no thread can start, at least
 /// one each.
 pub(super) const TURN: std::time::Duration = std::time::Duration::from_millis(12);
+/// How many Kernels at most warm their device pipelines concurrently ahead
+/// of [`Session::finish_turn`] in a page, keeping the browser's GPU process
+/// fed without flooding its main thread.
+const WARM_AHEAD: usize = 12;
 
 impl Session {
     pub(super) fn from_backing(runtime: Runtime, backing: Backing) -> Self {
@@ -232,6 +240,8 @@ impl Session {
             failing: None,
             shown_while_building: false,
             handed: BTreeSet::new(),
+            finishing: VecDeque::new(),
+            warmed: 0,
         }
     }
 
@@ -395,6 +405,7 @@ impl Session {
         let Some(shared) = self.backing.shared_graph().cloned() else {
             return;
         };
+        let reached = shared.read_through(self.pins.iter().cloned());
         let few = self.evaluator.runs_few(
             &shared,
             &self.runtime,
@@ -405,23 +416,38 @@ impl Session {
         let graph: &Graph = &shared;
         let mut wanted: BTreeMap<entelechy_ir::KernelId, bool> = BTreeMap::new();
         for node in &graph.nodes {
+            if !reached.contains(&node.id) {
+                continue;
+            }
             *wanted.entry(node.kernel.clone()).or_default() |= !few.contains(&node.id);
         }
+        let preparer = self.runtime.preparer();
         let mut now = BTreeMap::new();
         let mut first = Vec::new();
         for node in &graph.nodes {
+            if !wanted.get(&node.kernel).copied().unwrap_or(false) {
+                continue;
+            }
             let Some(version) = self.runtime.kernel(&node.kernel) else {
                 continue;
             };
             let id = version.id().clone();
             if now.insert(id.clone(), version.generation()).is_none()
                 && !self.used.contains_key(&id)
-                && wanted.get(&node.kernel).copied().unwrap_or(true)
             {
                 first.push(version);
             }
         }
-        let shown = if self.shown_while_building && !self.runtime.prepares_in_turns() {
+        if self.runtime.prepares_in_turns() {
+            if !first.is_empty() {
+                preparer.expect(first.iter().map(|version| version.id()));
+                self.finishing.extend(first);
+                self.warm_finishing(&preparer);
+            }
+            self.used = now;
+            return;
+        }
+        let shown = if self.shown_while_building {
             match &self.backing {
                 #[cfg(feature = "documents")]
                 Backing::Documents(docs) => shown_kernels(
@@ -445,7 +471,6 @@ impl Session {
         let (later, now_first): (Vec<_>, Vec<_>) = first
             .into_iter()
             .partition(|version| shown.contains(version.id()));
-        let preparer = self.runtime.preparer();
         if !now_first.is_empty() {
             preparer.expect(now_first.iter().map(|version| version.id()));
             finish_each(&now_first, |version| preparer.finish(version));
@@ -465,6 +490,56 @@ impl Session {
         self.runtime
             .set_shown_while_building(shown.intersection(&self.handed).cloned().collect());
         self.used = now;
+    }
+
+    fn warm_finishing(&mut self, preparer: &entelechy_kernel::Preparer) {
+        let target = self.finishing.len().min(WARM_AHEAD);
+        while self.warmed < target {
+            preparer.warm(&self.finishing[self.warmed]);
+            self.warmed += 1;
+        }
+    }
+
+    pub(super) fn finish_turn(&mut self) {
+        if self.finishing.is_empty() {
+            self.warmed = 0;
+            return;
+        }
+        let preparer = self.runtime.preparer();
+        self.warm_finishing(&preparer);
+        let began = entelechy_kernel::clock::now();
+        while let Some(version) = self.finishing.pop_front() {
+            self.warmed = self.warmed.saturating_sub(1);
+            preparer.finish(&version);
+            self.warm_finishing(&preparer);
+            if self.finishing.is_empty() || entelechy_kernel::clock::since(began) >= TURN {
+                break;
+            }
+        }
+        if self.finishing.is_empty() {
+            self.warmed = 0;
+        }
+    }
+
+    pub(super) fn finish_all_turns(&mut self) {
+        if self.finishing.is_empty() {
+            self.warmed = 0;
+            return;
+        }
+        let preparer = self.runtime.preparer();
+        self.warm_finishing(&preparer);
+        while let Some(version) = self.finishing.pop_front() {
+            self.warmed = self.warmed.saturating_sub(1);
+            preparer.finish(&version);
+            self.warm_finishing(&preparer);
+        }
+        self.warmed = 0;
+    }
+
+    /// Whether this session was opened from a compiled [`crate::bundle::Bundle`]
+    /// rather than source documents.
+    pub fn is_bundled(&self) -> bool {
+        matches!(self.backing, Backing::Bundled(_))
     }
 
     /// Shows what only shows from the processor while the device's
@@ -502,6 +577,7 @@ impl Session {
     pub fn wait_a_turn(&mut self) {
         if self.runtime.prepares_in_turns() {
             self.runtime.prepare_turn(usize::MAX);
+            self.finish_all_turns();
         } else {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
@@ -513,22 +589,28 @@ impl Session {
         self.runtime.progress()
     }
 
-    /// The Kernels still waiting their turn to prepare where no thread can
-    /// start, and one more while what they prepare for has yet to land; zero
-    /// elsewhere.
+    /// The Kernels still waiting their turn to prepare or finish where no
+    /// thread can start, and one more while what they prepare for has yet
+    /// to land; zero elsewhere.
     pub fn preparing_left(&self) -> usize {
-        let landing = self.runtime.prepares_in_turns() && self.scene_waiting();
-        self.runtime.prepare_queued() + usize::from(landing)
+        let waiting = match &self.backing {
+            #[cfg(feature = "documents")]
+            Backing::Documents(docs) => docs.scene.waiting() || docs.kernels.preparing(),
+            Backing::Bundled(b) => b.pending.is_some(),
+        };
+        let landing = self.runtime.prepares_in_turns() && waiting;
+        self.runtime.prepare_queued() + self.finishing.len() + usize::from(landing)
     }
 
     /// Whether the scene last read waits for its Kernels before it
     /// replaces the running one.
     pub fn scene_waiting(&self) -> bool {
-        match &self.backing {
-            #[cfg(feature = "documents")]
-            Backing::Documents(docs) => docs.scene.waiting() || docs.kernels.preparing(),
-            Backing::Bundled(b) => b.pending.is_some(),
-        }
+        !self.finishing.is_empty()
+            || match &self.backing {
+                #[cfg(feature = "documents")]
+                Backing::Documents(docs) => docs.scene.waiting() || docs.kernels.preparing(),
+                Backing::Bundled(b) => b.pending.is_some(),
+            }
     }
 
     /// The Field a scene input holds now.

@@ -208,6 +208,20 @@ pub(crate) struct Shader {
 }
 
 impl Shader {
+    /// Starts compiling this pass asynchronously in a page's browser, if
+    /// it is not already cached.
+    fn warm(&self, device: &wgpu::Device, cache: &PassCache) {
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        let _ = (device, cache);
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        {
+            let slot = cache.slot(&self.source, &self.entries);
+            if slot.built.get().is_none() {
+                crate::page::ask_ahead(device, &self.label, &self.source, &self.entries);
+            }
+        }
+    }
+
     /// The pipeline, from the device's own compiler (or shared with a live
     /// pass of the same WGSL and bindings): the long part of preparing, and
     /// the part a device's compiler can fail in.
@@ -260,6 +274,56 @@ impl Shader {
 type Make<'a, P, Q> = &'a mut dyn FnMut(P) -> Result<Q, Unbuilt>;
 
 impl<P> Pipeline<P> {
+    fn visit(&self, visit: &mut dyn FnMut(&P)) {
+        visit(&self.main);
+        if let Some(reduce) = &self.reduce {
+            visit(reduce);
+        }
+        if let Some(scatter) = &self.scatter {
+            match scatter {
+                Scatter::Sorted {
+                    keys, step, fold, ..
+                } => {
+                    visit(keys);
+                    visit(step);
+                    visit(fold);
+                }
+                Scatter::Parallel {
+                    apply,
+                    gather,
+                    keys,
+                    totals,
+                    halves,
+                } => {
+                    visit(apply);
+                    if let Some(gather) = gather {
+                        visit(gather);
+                    }
+                    if let Some(keys) = keys {
+                        visit(&keys.in_place);
+                        visit(&keys.from_base);
+                    }
+                    if let Some(totals) = totals {
+                        visit(&totals.from_base);
+                        visit(&totals.check);
+                    }
+                    if let Some(halves) = halves {
+                        visit(&halves.lows);
+                        visit(&halves.apply);
+                        if let Some(entry) = &halves.entry {
+                            visit(entry);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(prefix) = &self.prefix {
+            visit(&prefix.blocks);
+            visit(&prefix.tops);
+            visit(&prefix.offsets);
+        }
+    }
+
     fn made<Q>(self, make: Make<'_, P, Q>) -> Result<Pipeline<Q>, Unbuilt> {
         Ok(Pipeline {
             main: make(self.main)?,
@@ -353,6 +417,7 @@ pub(crate) struct Lazy {
     wait: Wait,
     passes: Arc<PassCache>,
     unbuilt: Arc<Mutex<Vec<(Validated, String)>>>,
+    heard: Arc<Mutex<Vec<String>>>,
     shaders: Mutex<Option<Pipeline<Shader>>>,
     built: OnceLock<Result<BuiltPipeline, String>>,
 }
@@ -362,6 +427,21 @@ impl Lazy {
     /// for nothing.
     pub(crate) fn is_built(&self) -> bool {
         self.built.get().is_some()
+    }
+
+    /// Starts asynchronous compilation of every pass in a page's browser.
+    pub(crate) fn warm(&self) {
+        if self.is_built() {
+            return;
+        }
+        if let Some(shaders) = self
+            .shaders
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
+            shaders.visit(&mut |shader: &Shader| shader.warm(&self.device, &self.passes));
+        }
     }
 
     /// The pipelines, built now if they are not yet; a second caller waits
@@ -378,13 +458,15 @@ impl Lazy {
                 let device = &self.device;
                 let wait = self.wait;
                 let passes = &self.passes;
+                shaders.visit(&mut |shader: &Shader| shader.warm(device, passes));
                 let mut kept = Vec::new();
                 match shaders
                     .made(&mut |shader: Shader| shader.built(device, wait, passes, &mut kept))
                 {
                     Ok(pipeline) => Ok((pipeline, kept)),
-                    Err(Unbuilt::Ours(error)) => Err(error),
+                    Err(Unbuilt::Ours(error)) => Err(crate::told(&self.heard, error)),
                     Err(Unbuilt::Device(error)) => {
+                        let error = crate::told(&self.heard, error);
                         // Its most particular line, the last, said shortly.
                         let last = error
                             .lines()
@@ -618,9 +700,6 @@ impl WgpuBackend {
             }
         };
         let layout = self.passes.layout(&self.device, label, entries);
-        // A page's browser starts compiling it now, beside the others.
-        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-        crate::page::ask_ahead(&self.device, label, &shared, entries);
         Ok(Shader {
             label: label.to_owned(),
             source: shared,
@@ -650,6 +729,7 @@ impl WgpuBackend {
             wait: self.wait,
             passes: Arc::clone(&self.passes),
             unbuilt: Arc::clone(&self.unbuilt),
+            heard: Arc::clone(&self.heard),
             shaders: Mutex::new(Some(shaders)),
             built: OnceLock::new(),
         })

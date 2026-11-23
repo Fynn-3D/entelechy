@@ -198,3 +198,220 @@ fn an_asked_for_sync_lands_what_it_read_at_once() {
     assert_eq!(result(&mut session).len(), 6);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn finishing_used_kernels_warms_a_bounded_window_and_skips_unreached_kernels() {
+    use std::collections::BTreeSet;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Duration;
+
+    use entelechy_abi::{Handle, Invocation, Scope};
+    use entelechy_ir::Validated;
+    use entelechy_kernel::{Backend, ExecutionError, Prepared, Runtime};
+
+    #[derive(Default)]
+    struct WindowedDevice {
+        in_flight: Mutex<BTreeSet<String>>,
+        max_in_flight: Mutex<usize>,
+        warmed: Mutex<Vec<String>>,
+        finished: Mutex<Vec<String>>,
+    }
+
+    struct Slot {
+        inner: Box<dyn Prepared>,
+        id: String,
+        warmed: OnceLock<()>,
+        built: OnceLock<()>,
+    }
+
+    impl Prepared for Slot {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    impl Backend for &'static WindowedDevice {
+        fn name(&self) -> &'static str {
+            "windowed"
+        }
+        fn has_device(&self) -> bool {
+            true
+        }
+        fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
+            Ok(Box::new(Slot {
+                inner: entelechy_cpu::CpuBackend.prepare(module)?,
+                id: module.manifest.id.to_string(),
+                warmed: OnceLock::new(),
+                built: OnceLock::new(),
+            }))
+        }
+        fn warm(&self, prepared: &dyn Prepared) {
+            let slot = prepared.as_any().downcast_ref::<Slot>().unwrap();
+            if slot.built.get().is_some() {
+                return;
+            }
+            slot.warmed.get_or_init(|| {
+                self.warmed.lock().unwrap().push(slot.id.clone());
+                let mut active = self.in_flight.lock().unwrap();
+                active.insert(slot.id.clone());
+                let mut peak = self.max_in_flight.lock().unwrap();
+                *peak = (*peak).max(active.len());
+            });
+        }
+        fn finish(&self, prepared: &dyn Prepared) {
+            let slot = prepared.as_any().downcast_ref::<Slot>().unwrap();
+            slot.built.get_or_init(|| {
+                std::thread::sleep(Duration::from_millis(14));
+                self.in_flight.lock().unwrap().remove(&slot.id);
+                self.finished.lock().unwrap().push(slot.id.clone());
+            });
+        }
+        fn finished(&self, prepared: &dyn Prepared) -> bool {
+            prepared
+                .as_any()
+                .downcast_ref::<Slot>()
+                .is_none_or(|slot| slot.built.get().is_some())
+        }
+        fn execute(
+            &self,
+            prepared: &dyn Prepared,
+            module: &Validated,
+            invocation: &Invocation,
+            scope: &mut Scope<'_>,
+        ) -> Result<Vec<Handle>, ExecutionError> {
+            let inner = &prepared.as_any().downcast_ref::<Slot>().unwrap().inner;
+            Backend::execute(
+                &entelechy_cpu::CpuBackend,
+                inner.as_ref(),
+                module,
+                invocation,
+                scope,
+            )
+        }
+    }
+
+    let dir = std::env::temp_dir().join(format!("entelechy-turns-window-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut text = String::from(
+        "kernel t.unused@1 { requires { field.write; } output result: Rows<Int>; compute { return 99; } }\n\
+         kernel t.k0@1 { requires { field.write; } output result: Rows<Int>; compute { return element(); } }\n",
+    );
+    for i in 1..18 {
+        text.push_str(&format!(
+            "kernel t.k{i}@1 {{ requires {{ field.read; field.write; }} input x: Rows<Int>; output result: Rows<Int>; compute {{ return sample(x) + 1; }} }}\n"
+        ));
+    }
+    text.push_str("node n0: t.k0@1 { domain = 64; }\n");
+    for i in 1..18 {
+        let prev = i - 1;
+        text.push_str(&format!(
+            "node n{i}: t.k{i}@1 {{ x <- n{prev}.result; domain = 64; }}\n"
+        ));
+    }
+    text.push_str("output result <- n17.result;\n");
+    std::fs::write(dir.join("scene.esn"), text).unwrap();
+
+    let device: &'static WindowedDevice = Box::leak(Box::default());
+    let mut runtime = Runtime::with_backends(
+        1 << 20,
+        Box::new(device),
+        Some(Box::new(entelechy_cpu::CpuBackend)),
+    );
+    runtime.set_small(0);
+    let mut session = Session::open_with(&dir.join("scene.esn"), None, runtime);
+    session.prepare_in_turns();
+
+    let mut turns = 0;
+    while {
+        session.sync_a_turn();
+        turns += 1;
+        session.scene_waiting()
+    } {
+        assert!(turns < 40, "finishing turns never completed");
+    }
+    // 18 reachable Kernels at ~14ms per finish across 12ms turns must slice across multiple turns.
+    assert!(
+        turns >= 18,
+        "expected turn-sliced finishing, ran in {turns} turns"
+    );
+    let peak = *device.max_in_flight.lock().unwrap();
+    assert!(
+        (1..=12).contains(&peak),
+        "expected sliding warm window <= 12, saw peak {peak}"
+    );
+    let warmed = device.warmed.lock().unwrap().clone();
+    let finished = device.finished.lock().unwrap().clone();
+    assert!(!warmed.iter().any(|id| id == "t.unused@1"), "{warmed:?}");
+    assert!(
+        !finished.iter().any(|id| id == "t.unused@1"),
+        "{finished:?}"
+    );
+    assert_eq!(finished.len(), 18, "{finished:?}");
+    assert_eq!(result(&mut session)[0], 17);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn sync_turn_checked_surfaces_bundle_landing_failure() {
+    let dir = scene("bundle_fail");
+    let mut at_once = Session::open(&dir.join("scene.esn"), None, 1 << 20);
+    at_once.sync();
+    let mut bundle = at_once
+        .bundle_with_fonts(|_, _, _| unreachable!("no font nodes"))
+        .unwrap();
+    // Duplicate the last module so `open_bundle(..., turns = true)` queues
+    // tickets across turns and `land_pending_bundle` fails on `publish_all`.
+    let dup = bundle.modules.last().unwrap().clone();
+    bundle.modules.push(dup);
+
+    let err = match Session::open_bundle(
+        bundle,
+        "cpu",
+        entelechy_session::Limits::default(),
+        entelechy_session::Wait::blocking(),
+        true,
+    ) {
+        Err(why) => why,
+        Ok(mut loaded) => {
+            let mut outcome = None;
+            for _ in 0..20 {
+                if let Err(why) = loaded.session.sync_turn_checked() {
+                    // Subsequent turns keep returning the failure instead of reporting 0 waiting.
+                    assert_eq!(loaded.session.sync_turn_checked().unwrap_err(), why);
+                    outcome = Some(why);
+                    break;
+                }
+            }
+            outcome.expect("bundle landing failure must surface")
+        }
+    };
+    assert!(err.contains("t.") || err.contains("already"), "{err}");
+
+    // And a bundle missing a referenced Kernel is rejected at landing time too.
+    let mut missing = at_once
+        .bundle_with_fonts(|_, _, _| unreachable!("no font nodes"))
+        .unwrap();
+    missing.modules.pop();
+    let missing_err = match Session::open_bundle(
+        missing,
+        "cpu",
+        entelechy_session::Limits::default(),
+        entelechy_session::Wait::blocking(),
+        true,
+    ) {
+        Err(why) => why,
+        Ok(mut loaded) => {
+            let mut outcome = None;
+            for _ in 0..20 {
+                if let Err(why) = loaded.session.sync_turn_checked() {
+                    outcome = Some(why);
+                    break;
+                }
+            }
+            outcome.expect("missing Kernel in bundle must fail landing")
+        }
+    };
+    assert!(missing_err.contains("not published"), "{missing_err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

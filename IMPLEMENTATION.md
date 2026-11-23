@@ -136,7 +136,8 @@ any routing is ([GPU `declines`](crates/backends/gpu/src/lib.rs),
 `prepare_on` in [the runtime](crates/core/kernel/src/lib.rs),
 [unbuilt](crates/interface/session/tests/unbuilt.rs)). The device
 builds a Kernel's pipelines when it is needed: a session's graph's
-Kernels as they publish, a replacement before it is ready where the
+reachable GPU Kernels as they publish (sliced across turns with a
+bounded warm-ahead window on a page: [turns](crates/interface/session/tests/turns.rs)), a replacement before it is ready where the
 version it replaces ran there, anything else at its first run
 ([`Lazy`](crates/backends/gpu/src/prepare.rs),
 [lazy](crates/interface/session/tests/lazy.rs)); a changed library
@@ -155,7 +156,9 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   `offset_read`, `row_reads`) and `counted` (an input only counted); the
   [planner](crates/core/graph/src/evaluate/plan.rs) calls a producer
   read at rows while the rows asked for are no more than it would make
-  ([decision](docs/DECISIONS.md#work-is-spared-only-where-the-answer-is-the-same));
+  ([decision](docs/DECISIONS.md#work-is-spared-only-where-the-answer-is-the-same)),
+  and stops fusing past node, instruction and carried-word bounds
+  ([composition](crates/core/graph/tests/composition.rs));
   bit-identical ([test](crates/backends/cpu/tests/fusion.rs), on every
   backend [offset](crates/interface/session/tests/offset.rs)). A reduce,
   scan, scatter, prefix, group, async or native node is never fused.

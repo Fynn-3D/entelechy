@@ -89,14 +89,16 @@ function parking() {
         return Promise.resolve();
       }
       return new Promise((done) => {
+        let timer = 0;
         const resume = () => {
           if (waiting !== resume) return;
           waiting = null;
           woken = false;
+          if (timer) clearTimeout(timer);
           done();
         };
         waiting = resume;
-        setTimeout(resume, 1000);
+        timer = setTimeout(resume, 1000);
       });
     },
     wake() {

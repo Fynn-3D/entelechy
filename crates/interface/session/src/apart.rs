@@ -195,6 +195,9 @@ impl Backend for Apart {
         }
         self.inner.declines(module)
     }
+    fn warm(&self, prepared: &dyn Prepared) {
+        self.inner.warm(prepared);
+    }
     fn finish(&self, prepared: &dyn Prepared) {
         self.inner.finish(prepared);
     }

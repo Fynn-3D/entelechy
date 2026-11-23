@@ -544,6 +544,13 @@ impl Backend for WgpuBackend {
             .map_err(Unbuilt::said)
     }
 
+    /// Starts `prepared`'s asynchronous pipeline compilation on a page.
+    fn warm(&self, prepared: &dyn Prepared) {
+        if let Some(lazy) = prepared.as_any().downcast_ref::<Lazy>() {
+            lazy.warm();
+        }
+    }
+
     /// Builds `prepared`'s pipelines, if they are not yet built.
     fn finish(&self, prepared: &dyn Prepared) {
         if let Some(lazy) = prepared.as_any().downcast_ref::<Lazy>() {
@@ -1082,6 +1089,10 @@ impl Backend for GpuBackend {
 
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
         self.inner().prepare(module)
+    }
+
+    fn warm(&self, prepared: &dyn Prepared) {
+        self.inner().warm(prepared);
     }
 
     fn finish(&self, prepared: &dyn Prepared) {

@@ -7,7 +7,7 @@
 | Fact | What follows from it |
 | --- | --- |
 | The interpreter is the reference; the JIT matches it bit for bit, the GPU to rounding. | Where three answers differ, `--backend cpu` is the right one. |
-| A new Kernel's cost on the GPU is its pipeline's compile: 40 to 120 ms for the voxel example's Kernels on Metal, nearly all of preparing it; one compiled before comes from the driver's cache in under a millisecond. | Natively it is paid off the frame (the preparation worker). A page asks its browser for each pipeline as the Kernel prepares (`createComputePipelineAsync`, through `js-sys` and `wasm-bindgen` in `entelechy-gpu`), compiled off the thread that answers the device; a frame that needs one not yet compiled waits for it. Data, params and structure (`write`, `param`, a `compose` that changes no Kernel) never compile. Scenes are built in the native Player; a page shows them. |
+| A new Kernel's cost on the GPU is its pipeline's compile: 40 to 120 ms for the voxel example's Kernels on Metal, nearly all of preparing it; one compiled before comes from the driver's cache in under a millisecond. | Natively it is paid off the frame (the preparation worker). A page warms a sliding window (`WARM_AHEAD`) of the scene's reachable GPU pipelines (`createComputePipelineAsync`, through `js-sys` and `wasm-bindgen` in `entelechy-gpu`) and finishes them across 12 ms turns, skipping unreached and processor-only Kernels so the browser's GPU process is neither flooded nor stalled; a frame that needs one not yet compiled waits for it. Data, params and structure (`write`, `param`, a `compose` that changes no Kernel) never compile. Scenes are built in the native Player; a page shows them. |
 | A session's documents (scene, ledger, sources, store, history, inputs, writes) are `entelechy-documents`, which reaches no backend (`crates/interface/entelechy/tests/layers.rs`); the session opens the backends and orders the documents' sync. | A part that needs a backend belongs to the session; a part that reads, publishes or lowers documents belongs to the documents. |
 
 Verified surface, as of `main`:
@@ -35,14 +35,21 @@ No release is planned; `v0.1.0` is the last tag.
 
 Open:
 
-1. A page on Windows (an RTX 4090) did not open a large scene that a
-   page on the M4 opens; nothing is known of why until that machine's
-   browser console is read.
-2. A page's WebAssembly memory never shrinks below its peak, about 66 MB
-   for a 230-Kernel scene: some 15 MB are Fields kept both in memory and
-   on the device, as the prefix passes a page's device declines (below)
-   run on the processor between its own, beside the compiled modules,
-   compact font contours and frame Fields.
+1. A page on Windows (an RTX 4090) previously did not open a large scene
+   that a page on the M4 opened. Unthrottled pipeline bursts, monolithic
+   single-turn finishing, sequential `popErrorScope` waits, unbounded
+   fused IR growth (`MAX_FUSED_INSTRUCTIONS`, `MAX_FUSED_CARRIED`) and
+   swallowed bundle landing errors are fixed, and device-lost /
+   uncaptured WebGPU diagnostics now surface; hand-written mega-Kernels
+   (700 to 900 KiB of WGSL) remain to be confirmed on that Windows
+   machine's driver compiler.
+2. A page's WebAssembly memory never shrinks below its peak (`Host`'s
+   spare buffer retention is capped at 16 MiB on 32-bit WebAssembly
+   rather than a quarter of the Host budget): about 66 MB for a
+   230-Kernel game scene, where some 15 MB are Fields kept both in memory
+   and on the device as the prefix and scan passes run on the processor
+   between GPU passes, beside the compiled modules, compact font contours
+   and frame Fields.
 
 What a page does only because one browser fails otherwise, each to be
 taken back once that browser no longer fails:

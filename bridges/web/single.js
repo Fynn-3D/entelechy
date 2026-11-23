@@ -114,14 +114,16 @@ function parking() {
         return Promise.resolve();
       }
       return new Promise((done) => {
+        let timer = 0;
         const resume = () => {
           if (waiting !== resume) return;
           waiting = null;
           woken = false;
+          if (timer) clearTimeout(timer);
           done();
         };
         waiting = resume;
-        setTimeout(resume, 1000);
+        timer = setTimeout(resume, 1000);
       });
     },
     wake() {
@@ -234,7 +236,7 @@ class SinglePlayer {
     this.listen();
   }
 
-  static async start({ glue, wasm, bundle, backend, pointer, canvas, shown, told }) {
+  static async start({ glue, wasm, bundle, backend, pointer, canvas, shown, told = () => {} }) {
     globalThis.entelechy_webgl_canvas = shown || null;
     globalThis.entelechy_webgl ??= makeWebGlHost();
     const host = makeHost();
@@ -301,9 +303,11 @@ class SinglePlayer {
     const player = new SinglePlayer(exports, session, canvas, shown, pointer);
     let left = exports.entelechy_play_preparing(session);
     let most = left;
+    let high = 0.4;
     while (left > 0) {
       most = Math.max(most, left);
-      await told(0.4 + 0.6 * (1 - left / most), `preparing ${most - left} of ${most}`);
+      high = Math.max(high, 0.4 + 0.6 * (1 - left / most));
+      await told(high, `preparing ${most - left} of ${most}`);
       left = await player.inTurn(() => player.turn(session));
       player.say();
       if (left < 0) throw new Error(player.text(exports.entelechy_error(session)));

@@ -547,8 +547,16 @@ pub unsafe extern "C" fn entelechy_play_turn(session: *mut EntelechySession) -> 
     let Some(mut s) = (unsafe { enter(session) }) else {
         return -1;
     };
-    for line in s.session.sync_turn_lines() {
-        s.play.say(line);
-    }
-    c_int::try_from(s.session.preparing_left()).unwrap_or(c_int::MAX)
+    guarded(&mut s, |s| {
+        s.clear();
+        match s.session.sync_turn_checked() {
+            Ok(lines) => {
+                for line in lines {
+                    s.play.say(line);
+                }
+                c_int::try_from(s.session.preparing_left()).unwrap_or(c_int::MAX)
+            }
+            Err(why) => s.fail(why),
+        }
+    })
 }

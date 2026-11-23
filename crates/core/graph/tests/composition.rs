@@ -647,3 +647,133 @@ fn state_read_on_the_processor_queues_its_readback_when_made() {
         ]
     );
 }
+
+#[test]
+fn fusion_stops_past_instruction_bound() {
+    use entelechy_ir::BinaryOp;
+
+    let heavy_kernel = |id: &str, reads: bool, ops: usize| -> Validated {
+        let mut requires = vec![Capability::FieldWrite];
+        if reads {
+            requires.push(Capability::FieldRead);
+        }
+        let image = |name: &str| Port {
+            name: name.into(),
+            ty: PortType::image(),
+        };
+        let mut body = Vec::with_capacity(ops + 1);
+        let mut cur = if reads {
+            body.push(Instruction {
+                id: ValueId(0),
+                ty: Type::Vec4,
+                op: Op::Sample(0),
+            });
+            ValueId(0)
+        } else {
+            body.push(Instruction {
+                id: ValueId(0),
+                ty: Type::Vec4,
+                op: Op::Const(Value::Vec4([0.25, 0.5, 0.75, 1.0])),
+            });
+            ValueId(0)
+        };
+        let mut next = body.len() as u32;
+        for _ in 0..ops {
+            let id_now = ValueId(next);
+            next += 1;
+            body.push(Instruction {
+                id: id_now,
+                ty: Type::Vec4,
+                op: Op::Binary(BinaryOp::Add, cur, cur),
+            });
+            cur = id_now;
+        }
+        entelechy_ir::validate(Module {
+            manifest: Manifest {
+                id: id.parse().unwrap(),
+                mode: Mode::Map,
+                requires: requires.into_iter().collect(),
+                inputs: if reads { vec![image("source")] } else { vec![] },
+                params: vec![],
+                outputs: vec![image("result")],
+                memories: vec![],
+                budget: entelechy_ir::DEFAULT_BUDGET,
+            },
+            structs: vec![],
+            functions: vec![],
+            entry: Function {
+                name: "compute".into(),
+                args: vec![],
+                body,
+                results: vec![cur],
+                bindings: vec![],
+            },
+            merge: None,
+            init: None,
+        })
+        .unwrap()
+    };
+
+    struct CountOnly;
+    impl Backend for CountOnly {
+        fn name(&self) -> &'static str {
+            "count_only"
+        }
+        fn prepare(&self, _module: &Validated) -> Result<Box<dyn Prepared>, String> {
+            Ok(Box::new(Given {
+                value: [1.0, 0.0, 0.0, 1.0],
+                clocked: false,
+                fails: false,
+            }))
+        }
+        fn execute(
+            &self,
+            _prepared: &dyn Prepared,
+            _module: &Validated,
+            _invocation: &Invocation,
+            _scope: &mut Scope<'_>,
+        ) -> Result<Vec<Handle>, ExecutionError> {
+            unreachable!("plan_summary executes nothing")
+        }
+    }
+
+    let mut runtime = Runtime::with_backends(1 << 20, Box::new(CountOnly), None);
+    runtime
+        .load(heavy_kernel("test.prod@1", false, 9_000), "")
+        .unwrap();
+    runtime
+        .load(heavy_kernel("test.cons@1", true, 9_000), "")
+        .unwrap();
+
+    let mut prod = node("prod", "test.prod@1", None);
+    prod.domain = Some(DomainSpec::Literal(Domain::Grid(16, 16)));
+    let mut cons = node("cons", "test.cons@1", Some("prod"));
+    cons.domain = Some(DomainSpec::Literal(Domain::Grid(16, 16)));
+    let scene = graph(vec![prod, cons], "cons");
+
+    let mut evaluator = Evaluator::new();
+    let entries = evaluator
+        .plan_summary(
+            &scene,
+            &mut runtime,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &Context::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        entries.len(),
+        2,
+        "producer and consumer stay apart: {entries:?}"
+    );
+    let cons_entry = entries.iter().find(|e| e.node == id("cons")).unwrap();
+    assert!(cons_entry.absorbed.is_empty());
+    assert!(
+        cons_entry
+            .apart
+            .iter()
+            .any(|(who, why)| *who == id("prod") && why.contains("past 16000")),
+        "expected instruction-bound apart reason, got: {:?}",
+        cons_entry.apart
+    );
+}

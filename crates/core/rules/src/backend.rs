@@ -367,6 +367,13 @@ pub trait Backend: Send + Sync {
     /// Builds backend state for a validated module.
     fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String>;
 
+    /// Starts what [`Backend::finish`] will wait for (such as a page's
+    /// asynchronous pipeline compilation) and returns at once. The default
+    /// has nothing to start ahead.
+    fn warm(&self, prepared: &dyn Prepared) {
+        let _ = prepared;
+    }
+
     /// Finishes what [`Backend::prepare`] left for a run to do (a
     /// device's pipelines, built when first needed), so the first run
     /// does not wait for it. The default has nothing left.

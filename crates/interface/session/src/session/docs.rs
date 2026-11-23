@@ -262,6 +262,7 @@ impl Session {
         if self.runtime.prepares_in_turns() && self.preparing_left() > 0 {
             self.runtime.prepare_turn(usize::MAX);
             events.extend(self.sync_apart(false));
+            self.finish_all_turns();
         }
         events
     }
@@ -406,6 +407,9 @@ impl Session {
             }));
         }
         self.finish_used();
+        if self.runtime.prepares_in_turns() && entelechy_kernel::clock::since(began) < TURN {
+            self.finish_turn();
+        }
         self.sync_placements(&mut events);
         self.sync_shape(&mut events);
         {

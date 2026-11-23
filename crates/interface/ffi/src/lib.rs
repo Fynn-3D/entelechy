@@ -1168,8 +1168,16 @@ pub extern "C" fn entelechy_open_error() -> *const c_char {
 pub unsafe extern "C" fn entelechy_close(session: *mut EntelechySession) {
     // A session another call is inside is not freed under it.
     if unsafe { session.as_ref() }.is_some_and(|held| !held.inside.get()) {
+        #[cfg_attr(all(target_arch = "wasm32", target_os = "unknown"), allow(unused_mut))]
         let mut closed = unsafe { Box::from_raw(session) };
-        let _ = closed.held.get_mut().session.confirm();
+        // On a page (`wasm32-unknown-unknown`), `entelechy_close` is called
+        // synchronously without `WebAssembly.promising`, and bundled saves
+        // flush ahead via `entelechy_save_flush`.
+        #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+        {
+            let _ = closed.held.get_mut().session.confirm();
+        }
+        drop(closed);
     }
 }
 
@@ -1402,6 +1410,13 @@ pub unsafe extern "C" fn entelechy_request(
     guarded(&mut session, |s| {
         s.clear();
         s.widened.clear();
+        if s.session.is_bundled() {
+            let message = "a bundled session has no source documents";
+            s.response = c_string(
+                r#"{"error":{"code":"bundled_session","message":"a bundled session has no source documents"}}"#,
+            );
+            return s.fail(message);
+        }
         // Its changes are recorded with origin `entelechy_request`, as `stdin`
         // or `socket 3` are for a served session.
         let before = s.session.act_for(entelechy_session::Origin::Protocol(

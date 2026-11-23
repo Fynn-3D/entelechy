@@ -553,6 +553,25 @@ pub struct Preparer {
 }
 
 impl Preparer {
+    /// Starts asynchronous backend work for `version` ([`Backend::warm`])
+    /// without blocking until it finishes.
+    pub fn warm(&self, version: &KernelVersion) {
+        let Body::Kernel {
+            prepared,
+            routed,
+            left,
+            ..
+        } = &version.body
+        else {
+            return;
+        };
+        if routed.is_none() && left.get().is_none() {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.backend.warm(prepared.as_ref())
+            }));
+        }
+    }
+
     /// Finishes `version` on the backend that prepared it
     /// ([`Backend::finish`]), so its first run there waits for nothing; where
     /// the main backend could not build it after all, its runs go to the

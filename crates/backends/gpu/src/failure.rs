@@ -157,9 +157,12 @@ impl Scopes {
     /// What was caught since [`Scopes::push`], the backend's own fault said
     /// with the `source` it emitted.
     pub(crate) fn pop(self, wait: Wait, source: &str) -> Result<(), Unbuilt> {
-        let ours = wait.block_on(self.validation.pop());
-        let short = wait.block_on(self.memory.pop());
-        let theirs = wait.block_on(self.internal.pop());
+        let validation = self.validation.pop();
+        let memory = self.memory.pop();
+        let internal = self.internal.pop();
+        let ours = wait.block_on(validation);
+        let short = wait.block_on(memory);
+        let theirs = wait.block_on(internal);
         caught(ours, short, theirs, source)
     }
 

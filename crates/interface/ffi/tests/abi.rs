@@ -842,3 +842,66 @@ fn bundle_wasm_rejects_invalid_bundles_and_stops_cleanly_outside_wasm() {
     assert_eq!(valid_len, 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn open_bundle_and_play_turn_surface_landing_and_turn_results() {
+    let (dir, _) = scene_in("bundle_turn_fail", PICTURE);
+    let under = entelechy_session::SessionOptions::from_environment().store();
+    let built = entelechy_session::Session::build(
+        "cpu",
+        entelechy_session::Limits::default(),
+        entelechy_session::Wait::blocking(),
+    )
+    .unwrap();
+    let mut source =
+        entelechy_session::Session::open_in(under, &dir.join("scene.esn"), None, built.runtime);
+    let _ = source.sync();
+    let valid_bundle = source
+        .bundle_with_fonts(|_, _, _| unreachable!("no font nodes"))
+        .unwrap();
+    let valid_encoded = valid_bundle.encode();
+
+    let mut broken_bundle = valid_bundle;
+    broken_bundle.modules.clear();
+    let broken_encoded = broken_bundle.encode();
+
+    let failed = unsafe {
+        entelechy_ffi::entelechy_open_bundle(
+            broken_encoded.as_ptr(),
+            broken_encoded.len(),
+            c("cpu").as_ptr(),
+        )
+    };
+    assert!(failed.is_null());
+    let err = unsafe { str_of(entelechy_ffi::entelechy_open_error()) };
+    assert!(
+        err.contains("published") || err.contains("k."),
+        "expected descriptive landing failure, got: {err}"
+    );
+
+    let session = unsafe {
+        entelechy_ffi::entelechy_open_bundle(
+            valid_encoded.as_ptr(),
+            valid_encoded.len(),
+            c("cpu").as_ptr(),
+        )
+    };
+    assert!(!session.is_null(), "{}", unsafe {
+        str_of(entelechy_ffi::entelechy_open_error())
+    });
+    assert_eq!(unsafe { entelechy_ffi::entelechy_play_turn(session) }, 0);
+    let status_req = c(r#"{"id":1,"op":"status"}"#);
+    let refused = unsafe {
+        str_of(entelechy_ffi::entelechy_request(
+            session,
+            status_req.as_ptr(),
+        ))
+    };
+    assert!(refused.contains("bundled_session"), "{refused}");
+    assert_eq!(
+        unsafe { entelechy_ffi::entelechy_play_turn(std::ptr::null_mut()) },
+        -1
+    );
+    unsafe { entelechy_ffi::entelechy_close(session) };
+    let _ = std::fs::remove_dir_all(&dir);
+}

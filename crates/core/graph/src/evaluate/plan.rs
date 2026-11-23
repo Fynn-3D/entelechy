@@ -7,6 +7,13 @@ use super::*;
 
 /// The most nodes one fused group holds.
 pub(super) const MAX_FUSED: usize = 64;
+/// The most IR instructions a fused group may hold before further fusion
+/// leaves the remaining producer separate, keeping device shader compilation
+/// bounded.
+const MAX_FUSED_INSTRUCTIONS: usize = 16_000;
+/// The most struct words carried across branches a fused group may grow past,
+/// matching the compiler's large-shader comfort bound (`5_000`).
+const MAX_FUSED_CARRIED: u64 = 5_000;
 
 impl Evaluator {
     /// The order `graph` runs in, kept while the graph is the one before.
@@ -629,7 +636,30 @@ impl Evaluator {
                     producer_module,
                     &producer.node.id.0,
                 ) {
-                    Ok(module) => Arc::new(module),
+                    Ok(module) => {
+                        let instructions = entelechy_ir::sizes(&module).total();
+                        let carried_after = entelechy_ir::carried(&module).total;
+                        let carried_before = entelechy_ir::carried(consumer_module).total;
+                        if instructions > MAX_FUSED_INSTRUCTIONS {
+                            let why = format!(
+                                "together they would hold {instructions} instructions, past {MAX_FUSED_INSTRUCTIONS}"
+                            );
+                            self.declined
+                                .insert(consumer_id.clone(), (members, why.clone()));
+                            keep_apart(&mut groups[position], &producer_id, why);
+                            continue;
+                        }
+                        if carried_after > MAX_FUSED_CARRIED && carried_after > carried_before {
+                            let why = format!(
+                                "together they would carry {carried_after} struct words through branches, past {MAX_FUSED_CARRIED}"
+                            );
+                            self.declined
+                                .insert(consumer_id.clone(), (members, why.clone()));
+                            keep_apart(&mut groups[position], &producer_id, why);
+                            continue;
+                        }
+                        Arc::new(module)
+                    }
                     Err(error) if error.declines => {
                         let why = error.to_string();
                         self.declined

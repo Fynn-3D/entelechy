@@ -61,6 +61,9 @@ impl Backend for Remembered {
     fn declines(&self, module: &Validated) -> Option<String> {
         self.inner.declines(module)
     }
+    fn warm(&self, prepared: &dyn Prepared) {
+        self.inner.warm(made(prepared));
+    }
     fn finish(&self, prepared: &dyn Prepared) {
         self.inner.finish(made(prepared));
     }
