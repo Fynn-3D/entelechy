@@ -187,6 +187,7 @@ class EntelechyPlayer {
   /// from there when it is read), on `backend`, or as the Player does
   /// when none is named: the GPU, else the JIT, else the interpreter.
   static async open({ glue, host, wasm, files, scene, replay, backend, pointer, canvas, shown }) {
+    globalThis.entelechy_webgl_canvas = shown || null;
     const entelechy = await EntelechyInPage.load(glue, host, wasm);
     globalThis.entelechy_files_base = new URL(".", location.href).href;
     for (const [path, bytes] of files) {
@@ -587,7 +588,7 @@ class EntelechyWorkerPlayer {
   /// has the console told each pipeline the device is asked to compile,
   /// before and after. Resolves once the scene has loaded and its frames
   /// run.
-  static openInWorker({ worker, glue, files, scene, replay, backend, pointer, canvas, shown, onpreparing, trace }) {
+  static openInWorker({ worker, glue, files, scene, replay, backend, pointer, canvas, shown, onpreparing, trace, webgl }) {
     const at = new URL(worker || "player-worker.js", location.href);
     const host = new URL("entelechy-host.mjs", at).href;
     const player = new EntelechyWorkerPlayer(new Worker(at), canvas, shown, pointer);
@@ -602,7 +603,7 @@ class EntelechyWorkerPlayer {
       const buffers = files.filter(([, bytes]) => typeof bytes !== "number").map(([, bytes]) => bytes.buffer);
       player.worker.postMessage(
         {
-          open: { glue: new URL(glue, location.href).href, host, files, base: new URL(".", location.href).href, scene, replay, backend, canvas: offscreen, id: shown.id, trace: !!trace },
+          open: { glue: new URL(glue, location.href).href, host, files, base: new URL(".", location.href).href, scene, replay, backend, canvas: offscreen, id: shown.id, trace: !!trace, webgl: !!webgl },
           size: player.fit(),
         },
         [offscreen, ...buffers],

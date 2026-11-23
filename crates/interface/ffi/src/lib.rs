@@ -244,6 +244,25 @@ impl Held {
         let Some((device, width, height)) = self.session.on_device(handle) else {
             return Ok(None);
         };
+        if let Some((window_width, window_height)) = display.webgl_canvas_size(canvas)? {
+            if self.presenter.as_ref().is_none_or(|(id, _)| id != canvas) {
+                let presenter = display
+                    .webgl_presenter(canvas)
+                    .expect("webgl_canvas_size answered");
+                self.presenter = Some((canvas.to_owned(), presenter));
+            }
+            let (_, presenter) = self.presenter.as_mut().expect("just made");
+            let placed = display.present(
+                presenter,
+                device,
+                width,
+                height,
+                window_width,
+                window_height,
+                overlay,
+            )?;
+            return Ok(Some((placed, (width, height))));
+        }
         // The page's canvas element; in a worker, which has no page, the
         // OffscreenCanvas the page handed over, kept by the worker under
         // the canvas's id in `entelechy_canvases`.

@@ -228,13 +228,17 @@ try {
       }
       return `timed out: ${text}`;
     };
-    for (const on of ["gpu", "jit"]) {
-      const text = await play(`replay=examples/ant/tests/ant.replay&on=${on}`, ({ said }) =>
+    for (const [label, query] of [
+      ["gpu", "on=gpu"],
+      ["webgl2", "on=gpu&webgl=1"],
+      ["jit", "on=jit"],
+    ]) {
+      const text = await play(`replay=examples/ant/tests/ant.replay&${query}`, ({ said }) =>
         until(said, /replay: ok \(2 frames, 14 checks\)/, 30),
       );
-      const ok = /replay: ok/.test(text);
-      console.log(`play.html on the ${on}: ${ok ? "the replay played to its end, every check held" : text}`);
-      if (!ok) log = log.replace("RESULT: ok", `RESULT: failed: play.html on the ${on}`);
+      const ok = /replay: ok/.test(text) && (label !== "webgl2" || /WebGL2/.test(text));
+      console.log(`play.html on the ${label}: ${ok ? "the replay played to its end, every check held" : text}`);
+      if (!ok) log = log.replace("RESULT: ok", `RESULT: failed: play.html on the ${label}`);
     }
     const keys = await play("scene=examples/ant/scene.esn&on=jit", async ({ said, key, run }) => {
       await until(said, /scene loaded/, 30);
@@ -260,6 +264,18 @@ try {
     const inWorker = worked === "answered";
     console.log(`play.html in a worker: ${inWorker ? "the scene loaded and played in the worker, and the protocol was answered there" : worked}`);
     if (!inWorker) log = log.replace("RESULT: ok", "RESULT: failed: play.html in a worker");
+    const workedWebGl = await play("scene=examples/voxel/scene.esn&on=gpu&webgl=1&worker=1", async ({ said, run }) => {
+      const loadedText = await until(said, /scene loaded/, 30);
+      const backend = await run("player.call('status').then((s) => s.backend)");
+      const frames = await run("new Promise((done) => setTimeout(() => player.call('status').then((s) => done(s.frame)), 500))");
+      const shown = await run("document.getElementById('shown').style.display");
+      return backend === "gpu" && shown === "block" && frames > 0 && !/runs on jit/.test(loadedText)
+        ? "answered"
+        : `webgl2 worker answered ${backend} (shown=${shown}) at frame ${frames}: ${loadedText}`;
+    });
+    const inWebGlWorker = workedWebGl === "answered";
+    console.log(`play.html on webgl2 in a worker: ${inWebGlWorker ? "voxel scene loaded, rendered on OffscreenCanvas, and answered protocol" : workedWebGl}`);
+    if (!inWebGlWorker) log = log.replace("RESULT: ok", "RESULT: failed: play.html on webgl2 in a worker");
   }
   for (const problem of devtools.problems) console.log(`page: ${problem}`);
   if (!log.includes("RESULT:")) console.log("RESULT: timed out");

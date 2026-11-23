@@ -228,6 +228,8 @@ class SinglePlayer {
   }
 
   static async start({ glue, wasm, bundle, backend, pointer, canvas, shown, told }) {
+    globalThis.entelechy_webgl_canvas = shown || null;
+    globalThis.entelechy_webgl ??= makeWebGlHost();
     const host = makeHost();
     globalThis.__entelechy_host = host;
     const hostUrl = URL.createObjectURL(
@@ -640,4 +642,655 @@ class SinglePlayer {
 }
 
 globalThis.EntelechySingle = SinglePlayer;
+
+function makeWebGlHost() {
+  const VERTEX_SHADER = `#version 300 es
+precision highp float;
+void main() {
+    vec2 p = vec2((gl_VertexID == 1) ? 3.0 : -1.0, (gl_VertexID == 2) ? 3.0 : -1.0);
+    gl_Position = vec4(p, 0.0, 1.0);
+}
+`;
+  const FAIL_REDUCE_SHADER = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp usampler2D;
+uniform highp usampler2D u_fail;
+uniform highp uvec2 u_extent;
+layout(location = 0) out highp uvec4 out_reduced;
+void main() {
+    uvec2 gid = uvec2(gl_FragCoord.xy);
+    uint best = 0u;
+    uint lo = 0u;
+    uint hi = 0u;
+    for (uint y = gid.y; y < u_extent.y; y += 16u) {
+        for (uint x = gid.x; x < u_extent.x; x += 16u) {
+            uvec4 v = texelFetch(u_fail, ivec2(int(x), int(y)), 0);
+            if (v.x > best) { best = v.x; }
+            uint next_lo = lo + v.y;
+            hi += v.z + ((next_lo < lo) ? 1u : 0u);
+            lo = next_lo;
+        }
+    }
+    out_reduced = uvec4(best, lo, hi, 0u);
+}
+`;
+  const SAME_SHADER = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp usampler2D;
+uniform highp usampler2D u_a;
+uniform highp usampler2D u_b;
+uniform highp uint u_words;
+uniform highp uvec2 u_extent;
+layout(location = 0) out highp uvec4 out_diff;
+void main() {
+    uvec2 gid = uvec2(gl_FragCoord.xy);
+    uint diff = 0u;
+    for (uint y = gid.y; y < u_extent.y; y += 16u) {
+        for (uint x = gid.x; x < u_extent.x; x += 16u) {
+            uint base = ((y << 11u) | x) << 2u;
+            if (base >= u_words) { continue; }
+            uvec4 a = texelFetch(u_a, ivec2(int(x), int(y)), 0);
+            uvec4 b = texelFetch(u_b, ivec2(int(x), int(y)), 0);
+            uint rem = u_words - base;
+            if (a.x != b.x) { diff = 1u; }
+            if (rem > 1u && a.y != b.y) { diff = 1u; }
+            if (rem > 2u && a.z != b.z) { diff = 1u; }
+            if (rem > 3u && a.w != b.w) { diff = 1u; }
+        }
+    }
+    out_diff = uvec4(diff, 0u, 0u, 0u);
+}
+`;
+  const BLIT_SHADER = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp usampler2D;
+uniform highp usampler2D u_image;
+uniform highp usampler2D u_overlay;
+uniform highp vec4 u_frame[3];
+layout(location = 0) out vec4 out_color;
+void main() {
+    vec2 pos = vec2(gl_FragCoord.x, u_frame[0].y - gl_FragCoord.y);
+    if (pos.x < u_frame[2].y && pos.y < u_frame[2].z) {
+        uint idx = uint(pos.y) * uint(u_frame[2].y) + uint(pos.x);
+        uint t = idx >> 2u;
+        uvec4 ov = texelFetch(u_overlay, ivec2(int(t & 2047u), int(t >> 11u)), 0);
+        uint lane = idx & 3u;
+        uint o = (lane == 0u) ? ov.x : ((lane == 1u) ? ov.y : ((lane == 2u) ? ov.z : ov.w));
+        vec3 c = vec3(float((o >> 16u) & 255u), float((o >> 8u) & 255u), float(o & 255u)) / 255.0;
+        out_color = vec4(c, 1.0);
+        return;
+    }
+    vec2 p = pos - u_frame[1].xy;
+    if (p.x < 0.0 || p.y < 0.0 || p.x >= u_frame[1].z || p.y >= u_frame[1].w) {
+        out_color = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
+    uint w = uint(u_frame[0].z);
+    uint h = uint(u_frame[0].w);
+    uint x = min(uint(p.x * u_frame[0].z / u_frame[1].z), w - 1u);
+    uint y = min(uint(p.y * u_frame[0].w / u_frame[1].w), h - 1u);
+    uint pixel = y * w + x;
+    uvec4 raw_bits = texelFetch(u_image, ivec2(int(pixel & 2047u), int(pixel >> 11u)), 0);
+    uvec3 rgb_bits = raw_bits.xyz;
+    vec3 raw = uintBitsToFloat(rgb_bits);
+    bvec3 nan = greaterThan(rgb_bits & uvec3(0x7FFFFFFFu), uvec3(0x7F800000u));
+    vec3 clean = mix(raw, vec3(0.0), nan);
+    out_color = vec4(clamp(clean, vec3(0.0), vec3(1.0)), 1.0);
+}
+`;
+
+  let gl = null;
+  let info = null;
+  let vertShader = null;
+  let emptyVao = null;
+  let drawFbo = null;
+  let readFbo = null;
+  let ctxUbo = null;
+  let paramsUbo = null;
+  let ctxCap = 0;
+  let paramsCap = 0;
+  let zeroTex = null;
+  let reduceTex = null;
+  let reduceProg = null;
+  let reduceFailExtentLoc = null;
+  let sameProg = null;
+  let sameWordsLoc = null;
+  let sameExtentLoc = null;
+  let blitProg = null;
+  let blitFrameLoc = null;
+  let overlayTex = null;
+  let overlayCapWords = 0;
+
+  let nextTexId = 1;
+  let nextProgId = 1;
+  const textures = new Map();
+  const programs = new Map();
+  const tmp4 = new Uint32Array(4);
+  const reduceBuf = new Uint32Array(16 * 16 * 4);
+
+  function findCanvas(name) {
+    if (typeof document !== "undefined" && name) return document.getElementById(name);
+    return null;
+  }
+
+  function makeRawTexture(w, h) {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32UI, w, h);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    return tex;
+  }
+
+  function buildShader(type, source) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, source);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      const log = gl.getShaderInfoLog(sh) || "shader compile failed";
+      gl.deleteShader(sh);
+      return { error: log.trim() };
+    }
+    return { shader: sh };
+  }
+
+  function linkUtility(fragSource) {
+    const built = buildShader(gl.FRAGMENT_SHADER, fragSource);
+    if (built.error) throw new Error(built.error);
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vertShader);
+    gl.attachShader(prog, built.shader);
+    gl.linkProgram(prog);
+    gl.deleteShader(built.shader);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      const log = gl.getProgramInfoLog(prog) || "program link failed";
+      gl.deleteProgram(prog);
+      throw new Error(log.trim());
+    }
+    return prog;
+  }
+
+  function readSpanWords(entry, startWord, wordCount) {
+    const firstTexel = startWord >>> 2;
+    const lastTexel = (startWord + wordCount - 1) >>> 2;
+    const w = entry.width;
+    const y0 = (firstTexel / w) | 0;
+    const y1 = (lastTexel / w) | 0;
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, readFbo);
+    gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, entry.tex, 0);
+    let buf, off;
+    if (y0 === y1) {
+      const x0 = firstTexel % w;
+      const cols = lastTexel - firstTexel + 1;
+      buf = new Uint32Array(cols * 4);
+      gl.readPixels(x0, y0, cols, 1, gl.RGBA_INTEGER, gl.UNSIGNED_INT, buf);
+      off = startWord & 3;
+    } else {
+      const rows = y1 - y0 + 1;
+      buf = new Uint32Array(w * rows * 4);
+      gl.readPixels(0, y0, w, rows, gl.RGBA_INTEGER, gl.UNSIGNED_INT, buf);
+      off = startWord - y0 * w * 4;
+    }
+    gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+    return buf.subarray(off, off + wordCount);
+  }
+
+  function uploadInto(tex, w, startWord, words) {
+    if (!words.length) return;
+    let cur = startWord >>> 0;
+    let srcAt = 0;
+    let left = words.length >>> 0;
+
+    const patchTexel = (texelIdx, laneStart, count) => {
+      const tx = texelIdx % w;
+      const ty = (texelIdx / w) | 0;
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, readFbo);
+      gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      gl.readPixels(tx, ty, 1, 1, gl.RGBA_INTEGER, gl.UNSIGNED_INT, tmp4);
+      gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+      for (let k = 0; k < count; k++) tmp4[laneStart + k] = words[srcAt + k];
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, tx, ty, 1, 1, gl.RGBA_INTEGER, gl.UNSIGNED_INT, tmp4);
+    };
+
+    if ((cur & 3) !== 0) {
+      const lane = cur & 3;
+      const take = Math.min(4 - lane, left);
+      patchTexel(cur >>> 2, lane, take);
+      cur += take;
+      srcAt += take;
+      left -= take;
+    }
+
+    const fullTexels = left >>> 2;
+    if (fullTexels > 0) {
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      let tCur = cur >>> 2;
+      let tLeft = fullTexels;
+      const tx0 = tCur % w;
+      if (tx0 !== 0) {
+        const cols = Math.min(w - tx0, tLeft);
+        const ty0 = (tCur / w) | 0;
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, tx0, ty0, cols, 1, gl.RGBA_INTEGER, gl.UNSIGNED_INT, words, srcAt);
+        tCur += cols;
+        srcAt += cols * 4;
+        tLeft -= cols;
+      }
+      const rows = (tLeft / w) | 0;
+      if (rows > 0) {
+        const ty = (tCur / w) | 0;
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, ty, w, rows, gl.RGBA_INTEGER, gl.UNSIGNED_INT, words, srcAt);
+        const span = rows * w;
+        tCur += span;
+        srcAt += span * 4;
+        tLeft -= span;
+      }
+      if (tLeft > 0) {
+        const ty = (tCur / w) | 0;
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, ty, tLeft, 1, gl.RGBA_INTEGER, gl.UNSIGNED_INT, words, srcAt);
+        tCur += tLeft;
+        srcAt += tLeft * 4;
+      }
+      cur += fullTexels * 4;
+      left -= fullTexels * 4;
+    }
+
+    if (left > 0) {
+      const tLast = cur >>> 2;
+      if (startWord === 0 && cur + left >= words.length) {
+        tmp4[0] = left > 0 ? words[srcAt] : 0;
+        tmp4[1] = left > 1 ? words[srcAt + 1] : 0;
+        tmp4[2] = left > 2 ? words[srcAt + 2] : 0;
+        tmp4[3] = 0;
+        const tx = tLast % w;
+        const ty = (tLast / w) | 0;
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, tx, ty, 1, 1, gl.RGBA_INTEGER, gl.UNSIGNED_INT, tmp4);
+      } else {
+        patchTexel(tLast, 0, left);
+      }
+    }
+    gl.bindTexture(gl.TEXTURE_2D, null);
+  }
+
+  return {
+    open() {
+      const desired = globalThis.entelechy_webgl_canvas || findCanvas("shown");
+      if (gl && !gl.isContextLost() && (!desired || gl.canvas === desired)) return info;
+      try {
+        const target =
+          desired ||
+          (typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : document.createElement("canvas"));
+        const ctx = target.getContext("webgl2", {
+          alpha: false,
+          depth: false,
+          stencil: false,
+          antialias: false,
+          premultipliedAlpha: false,
+          preserveDrawingBuffer: false,
+          powerPreference: "high-performance",
+        });
+        if (!ctx) return { error: "WebGL2 context creation refused" };
+
+        gl = ctx;
+        textures.clear();
+        programs.clear();
+        overlayTex = null;
+        overlayCapWords = 0;
+        ctxCap = 0;
+        paramsCap = 0;
+
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+        gl.pixelStorei(gl.PACK_ALIGNMENT, 4);
+        gl.disable(gl.DEPTH_TEST);
+        gl.disable(gl.BLEND);
+        gl.disable(gl.CULL_FACE);
+        gl.disable(gl.SCISSOR_TEST);
+
+        const vs = buildShader(gl.VERTEX_SHADER, VERTEX_SHADER);
+        if (vs.error) return { error: vs.error };
+        vertShader = vs.shader;
+        emptyVao = gl.createVertexArray();
+        drawFbo = gl.createFramebuffer();
+        readFbo = gl.createFramebuffer();
+        ctxUbo = gl.createBuffer();
+        paramsUbo = gl.createBuffer();
+        zeroTex = makeRawTexture(1, 1);
+        reduceTex = makeRawTexture(16, 16);
+
+        reduceProg = linkUtility(FAIL_REDUCE_SHADER);
+        gl.useProgram(reduceProg);
+        gl.uniform1i(gl.getUniformLocation(reduceProg, "u_fail"), 0);
+        reduceFailExtentLoc = gl.getUniformLocation(reduceProg, "u_extent");
+
+        sameProg = linkUtility(SAME_SHADER);
+        gl.useProgram(sameProg);
+        gl.uniform1i(gl.getUniformLocation(sameProg, "u_a"), 0);
+        gl.uniform1i(gl.getUniformLocation(sameProg, "u_b"), 1);
+        sameWordsLoc = gl.getUniformLocation(sameProg, "u_words");
+        sameExtentLoc = gl.getUniformLocation(sameProg, "u_extent");
+
+        blitProg = linkUtility(BLIT_SHADER);
+        gl.useProgram(blitProg);
+        gl.uniform1i(gl.getUniformLocation(blitProg, "u_image"), 0);
+        gl.uniform1i(gl.getUniformLocation(blitProg, "u_overlay"), 1);
+        blitFrameLoc = gl.getUniformLocation(blitProg, "u_frame");
+        gl.useProgram(null);
+
+        const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+        const renderer =
+          (dbg && gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) ||
+          gl.getParameter(gl.RENDERER) ||
+          "WebGL2";
+        info = {
+          renderer: `${renderer} (WebGL2)`,
+          maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE) || 2048,
+          maxTextureUnits: gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS) || 16,
+          maxDrawBuffers: gl.getParameter(gl.MAX_DRAW_BUFFERS) || 4,
+          maxUniformBlockBytes: gl.getParameter(gl.MAX_UNIFORM_BLOCK_SIZE) || 16384,
+        };
+        return info;
+      } catch (err) {
+        gl = null;
+        return { error: err && err.message ? err.message : String(err) };
+      }
+    },
+
+    createTexture(width, height) {
+      const tex = makeRawTexture(width, height);
+      const id = nextTexId++;
+      textures.set(id, { tex, width, height });
+      return id;
+    },
+
+    deleteTexture(id) {
+      const entry = textures.get(id);
+      if (!entry) return;
+      textures.delete(id);
+      if (gl) gl.deleteTexture(entry.tex);
+    },
+
+    uploadWords(id, startWord, words) {
+      const entry = textures.get(id);
+      if (!entry) return;
+      uploadInto(entry.tex, entry.width, startWord, words);
+    },
+
+    copyWords(srcId, srcStartWord, dstId, dstStartWord, wordCount) {
+      if (!wordCount) return;
+      const src = textures.get(srcId);
+      const dst = textures.get(dstId);
+      if (!src || !dst) return;
+      if (
+        srcStartWord === 0 &&
+        dstStartWord === 0 &&
+        src.width === dst.width &&
+        src.height === dst.height &&
+        wordCount >= (src.width * src.height - 1) * 4
+      ) {
+        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, readFbo);
+        gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, src.tex, 0);
+        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, drawFbo);
+        gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, dst.tex, 0);
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+        gl.blitFramebuffer(0, 0, src.width, src.height, 0, 0, dst.width, dst.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+        gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+        gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+        return;
+      }
+      const span = readSpanWords(src, srcStartWord >>> 0, wordCount >>> 0);
+      uploadInto(dst.tex, dst.width, dstStartWord >>> 0, span);
+    },
+
+    readWords(id, wordLen) {
+      const entry = textures.get(id);
+      if (!entry || !wordLen) return new Uint32Array(0);
+      return readSpanWords(entry, 0, wordLen >>> 0);
+    },
+
+    compileProgram(fragSource, totalInputs, packedIndices, hasPacked, outputCount, hasFail) {
+      const fs = buildShader(gl.FRAGMENT_SHADER, fragSource);
+      if (fs.error) return fs.error;
+      const prog = gl.createProgram();
+      gl.attachShader(prog, vertShader);
+      gl.attachShader(prog, fs.shader);
+      gl.linkProgram(prog);
+      gl.deleteShader(fs.shader);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        const log = gl.getProgramInfoLog(prog) || "program link failed";
+        gl.deleteProgram(prog);
+        return log.trim();
+      }
+      const ctxIdx = gl.getUniformBlockIndex(prog, "CtxBlock");
+      if (ctxIdx !== gl.INVALID_INDEX) gl.uniformBlockBinding(prog, ctxIdx, 0);
+      const parIdx = gl.getUniformBlockIndex(prog, "ParamsBlock");
+      if (parIdx !== gl.INVALID_INDEX) gl.uniformBlockBinding(prog, parIdx, 1);
+
+      gl.useProgram(prog);
+      const packedSet = new Set(packedIndices);
+      const bindings = [];
+      let unit = 0;
+      for (let i = 0; i < totalInputs; i++) {
+        if (packedSet.has(i)) continue;
+        const loc = gl.getUniformLocation(prog, `u_in${i}`);
+        if (loc !== null) {
+          gl.uniform1i(loc, unit);
+          bindings.push({ unit, inputIndex: i, packed: false });
+          unit++;
+        }
+      }
+      if (hasPacked) {
+        const loc = gl.getUniformLocation(prog, "u_packed");
+        if (loc !== null) {
+          gl.uniform1i(loc, unit);
+          bindings.push({ unit, inputIndex: -1, packed: true });
+          unit++;
+        }
+      }
+      gl.useProgram(null);
+
+      const id = nextProgId++;
+      const totalAtt = outputCount + (hasFail ? 1 : 0);
+      const drawBuffers = [];
+      for (let a = 0; a < totalAtt; a++) drawBuffers.push(gl.COLOR_ATTACHMENT0 + a);
+      programs.set(id, { prog, bindings, drawBuffers });
+      return id;
+    },
+
+    runPass(progId, width, height, ctxBytes, paramsBytes, inputIds, packedId, outputIds, failId) {
+      const entry = programs.get(progId);
+      if (!entry) return "unknown WebGL2 program";
+
+      gl.bindBuffer(gl.UNIFORM_BUFFER, ctxUbo);
+      if (ctxBytes.byteLength > ctxCap) {
+        ctxCap = Math.max(ctxBytes.byteLength, 256);
+        gl.bufferData(gl.UNIFORM_BUFFER, ctxCap, gl.DYNAMIC_DRAW);
+      }
+      gl.bufferSubData(gl.UNIFORM_BUFFER, 0, ctxBytes);
+      gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, ctxUbo);
+
+      gl.bindBuffer(gl.UNIFORM_BUFFER, paramsUbo);
+      if (paramsBytes.byteLength > paramsCap) {
+        paramsCap = Math.max(paramsBytes.byteLength, 256);
+        gl.bufferData(gl.UNIFORM_BUFFER, paramsCap, gl.DYNAMIC_DRAW);
+      }
+      gl.bufferSubData(gl.UNIFORM_BUFFER, 0, paramsBytes);
+      gl.bindBufferBase(gl.UNIFORM_BUFFER, 1, paramsUbo);
+      gl.bindBuffer(gl.UNIFORM_BUFFER, null);
+
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, drawFbo);
+      let att = 0;
+      for (let i = 0; i < outputIds.length; i++) {
+        const outTex = textures.get(outputIds[i]);
+        if (!outTex) return "missing output texture";
+        gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + att, gl.TEXTURE_2D, outTex.tex, 0);
+        att++;
+      }
+      if (failId) {
+        const fTex = textures.get(failId);
+        if (!fTex) return "missing failure texture";
+        gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + att, gl.TEXTURE_2D, fTex.tex, 0);
+        att++;
+      }
+      gl.drawBuffers(entry.drawBuffers);
+
+      for (const b of entry.bindings) {
+        const tEntry = textures.get(b.packed ? packedId : inputIds[b.inputIndex]);
+        gl.activeTexture(gl.TEXTURE0 + b.unit);
+        gl.bindTexture(gl.TEXTURE_2D, tEntry ? tEntry.tex : zeroTex);
+      }
+
+      gl.viewport(0, 0, width, height);
+      gl.useProgram(entry.prog);
+      gl.bindVertexArray(emptyVao);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+      for (const b of entry.bindings) {
+        gl.activeTexture(gl.TEXTURE0 + b.unit);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+      }
+      for (let a = 0; a < att; a++) {
+        gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + a, gl.TEXTURE_2D, null, 0);
+      }
+    },
+
+    reduceFail(failId, width, height) {
+      const fTex = textures.get(failId);
+      if (!fTex) return new Uint32Array(4);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, drawFbo);
+      gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, reduceTex, 0);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, fTex.tex);
+      gl.viewport(0, 0, 16, 16);
+      gl.useProgram(reduceProg);
+      gl.uniform2ui(reduceFailExtentLoc, width, height);
+      gl.bindVertexArray(emptyVao);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, readFbo);
+      gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, reduceTex, 0);
+      gl.readPixels(0, 0, 16, 16, gl.RGBA_INTEGER, gl.UNSIGNED_INT, reduceBuf);
+      gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+
+      let best = 0;
+      let lo = 0;
+      let hi = 0;
+      for (let i = 0; i < 1024; i += 4) {
+        const w = reduceBuf[i];
+        if (w > best) best = w;
+        const sumLo = (lo + reduceBuf[i + 1]) >>> 0;
+        hi = (hi + reduceBuf[i + 2] + (sumLo < lo ? 1 : 0)) >>> 0;
+        lo = sumLo;
+      }
+      return new Uint32Array([best, lo, hi, 0]);
+    },
+
+    sameTextures(idA, idB, wordLen) {
+      const a = textures.get(idA);
+      const b = textures.get(idB);
+      if (!a || !b) return false;
+      const texels = Math.max(1, Math.ceil(wordLen / 4));
+      const tw = texels <= 2048 ? texels : 2048;
+      const th = texels <= 2048 ? 1 : Math.ceil(texels / 2048);
+
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, drawFbo);
+      gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, reduceTex, 0);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, a.tex);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, b.tex);
+      gl.viewport(0, 0, 16, 16);
+      gl.useProgram(sameProg);
+      gl.uniform1ui(sameWordsLoc, wordLen >>> 0);
+      gl.uniform2ui(sameExtentLoc, tw, th);
+      gl.bindVertexArray(emptyVao);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, readFbo);
+      gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, reduceTex, 0);
+      gl.readPixels(0, 0, 16, 16, gl.RGBA_INTEGER, gl.UNSIGNED_INT, reduceBuf);
+      gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+
+      for (let i = 0; i < 1024; i += 4) {
+        if (reduceBuf[i] !== 0) return false;
+      }
+      return true;
+    },
+
+    canvasSize(name) {
+      const c = findCanvas(name) || (gl && gl.canvas);
+      if (!c) return new Uint32Array(0);
+      return new Uint32Array([c.width >>> 0, c.height >>> 0]);
+    },
+
+    present(name, imageId, windowWidth, windowHeight, frameFloats12, overlayWords) {
+      const img = textures.get(imageId);
+      if (!img || !gl) return false;
+      const target = findCanvas(name) || gl.canvas;
+      if (!target) return false;
+      if (gl.canvas.width !== windowWidth || gl.canvas.height !== windowHeight) {
+        gl.canvas.width = windowWidth;
+        gl.canvas.height = windowHeight;
+      }
+      let ovTex = zeroTex;
+      if (overlayWords && overlayWords.length > 0) {
+        if (!overlayTex || overlayCapWords < overlayWords.length) {
+          if (overlayTex) gl.deleteTexture(overlayTex.tex);
+          const texels = Math.ceil(overlayWords.length / 4);
+          const ow = texels <= 2048 ? texels : 2048;
+          const oh = texels <= 2048 ? 1 : Math.ceil(texels / 2048);
+          overlayTex = { tex: makeRawTexture(ow, oh), width: ow, height: oh };
+          overlayCapWords = ow * oh * 4;
+        }
+        uploadInto(overlayTex.tex, overlayTex.width, 0, overlayWords);
+        ovTex = overlayTex.tex;
+      }
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, windowWidth, windowHeight);
+      gl.useProgram(blitProg);
+      gl.uniform4fv(blitFrameLoc, frameFloats12);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, img.tex);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, ovTex);
+      gl.bindVertexArray(emptyVao);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+
+      if (target !== gl.canvas) {
+        const ctx2d = target.getContext && target.getContext("2d");
+        if (!ctx2d) return false;
+        if (target.width !== windowWidth || target.height !== windowHeight) {
+          target.width = windowWidth;
+          target.height = windowHeight;
+        }
+        ctx2d.drawImage(gl.canvas, 0, 0);
+      }
+      return true;
+    },
+
+    finish() {
+      if (gl) gl.finish();
+    },
+  };
+}
 })();

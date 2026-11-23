@@ -48,6 +48,8 @@ page's console.
     const files = await Promise.all(
       list.map(async (path) => [path, new Uint8Array(await (await fetch(`/${path}`)).arrayBuffer())]),
     );
+    const webgl = !!query.get("webgl");
+    if (webgl) globalThis.entelechy_webgl_only = true;
     const options = {
       glue: query.get("glue") || "../../target/page/entelechy_ffi.js",
       files,
@@ -57,6 +59,7 @@ page's console.
       pointer: query.get("pointer") || "free",
       canvas: document.getElementById("view"),
       shown: document.getElementById("shown"),
+      webgl,
     };
     if (query.get("worker")) {
       globalThis.player = await EntelechyPlayer.openInWorker({ ...options, worker: "player-worker.js" });
