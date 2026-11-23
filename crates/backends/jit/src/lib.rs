@@ -232,6 +232,19 @@ impl Drop for Compiled {
 #[cfg(target_arch = "wasm32")]
 use wasm::Compiled;
 
+/// Emits position-independent WebAssembly bytes for an accounted [`Validated`]
+/// module (`entelechy_ir::account`), linked against this WebAssembly build's
+/// helper table indices.
+#[cfg(target_arch = "wasm32")]
+pub fn wasm_bytes(module: &Validated) -> Result<Vec<u8>, String> {
+    let laned = entelechy_ir::lanes(module).map_err(|error| error.to_string())?;
+    check_ports(&laned)?;
+    if let Some(reason) = frame::refusal(&laned, None) {
+        return Err(reason);
+    }
+    wasm::bytes(&laned)
+}
+
 /// Checks that every narrow port keeps its scalars in one encoding.
 fn check_ports(module: &Validated) -> Result<(), String> {
     for port in module
@@ -2173,5 +2186,34 @@ mod tests {
         assert_eq!(weak.strong_count(), 1);
         drop(prep_b);
         assert_eq!(weak.strong_count(), 0);
+    }
+}
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod wasm_tests {
+    use super::*;
+
+    #[test]
+    fn wasm_bytes_are_position_independent_and_export_mutable_frame() {
+        let raw = entelechy_compiler::compile(
+            "kernel demo.pic@1 {
+                requires { field.read; field.write; }
+                input xs: Rows<Float>;
+                output ys: Rows<Float>;
+                compute {
+                    let table = [1.0, 2.0, 3.0, 4.0];
+                    let i = element() & 3;
+                    return sample(xs) + table[i];
+                }
+            }",
+        )
+        .expect("valid kernel");
+        let accounted = entelechy_ir::account(&raw).expect("accounted");
+        let first = wasm_bytes(&accounted).expect("first wasm_bytes");
+        let _heap_shift = vec![0xdead_beef_u32; 4096];
+        let second = wasm_bytes(&accounted).expect("second wasm_bytes");
+        assert_eq!(first, second);
+        assert!(first.starts_with(b"\0asm\x01\0\0\0"));
+        assert!(first.windows(7).any(|w| w == b"\x05frame\x03"));
     }
 }

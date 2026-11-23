@@ -19,16 +19,17 @@ use translate::{Fx, Kind, Shared, signature};
 #[link(wasm_import_module = "entelechy")]
 unsafe extern "C" {
     /// Compiles `len` bytes of a module, instantiates it over Entelechy's
-    /// memory and table, puts the functions it exports as "0", "1", ...
-    /// into the table, writes their indices to `slots` (at most `most`),
-    /// and answers how many; below zero when the host refuses the module.
-    fn load(bytes: *const u8, len: usize, slots: *mut u32, most: u32) -> i32;
+    /// memory and table with its `"frame"` global set to `frame`, puts the
+    /// functions it exports as "0", "1", ... into the table, writes their
+    /// indices to `slots` (at most `most`), and answers how many; below zero
+    /// when the host refuses the module.
+    fn load(bytes: *const u8, len: usize, frame: usize, slots: *mut u32, most: u32) -> i32;
     /// Gives the table's slots back.
     fn unload(slots: *const u32, count: u32);
 }
 
 #[cfg(not(feature = "wasm-host"))]
-unsafe fn load(_: *const u8, _: usize, _: *mut u32, _: u32) -> i32 {
+unsafe fn load(_: *const u8, _: usize, _: usize, _: *mut u32, _: u32) -> i32 {
     -1
 }
 
@@ -53,8 +54,17 @@ impl Drop for Compiled {
     }
 }
 
-/// Compiles the module and has the host load it.
-pub fn compile(module: &Validated) -> Result<Compiled, String> {
+struct Encoded {
+    bytes: Vec<u8>,
+    frame_bytes: u32,
+    tables: Vec<(u32, Vec<u32>)>,
+    has_init: bool,
+    has_merge: bool,
+}
+
+/// Translates `module` into position-independent WebAssembly bytes and its
+/// constant-table layout.
+fn encode_module(module: &Validated) -> Result<Encoded, String> {
     for port in module
         .manifest
         .inputs
@@ -138,9 +148,33 @@ pub fn compile(module: &Validated) -> Result<Compiled, String> {
         functions.push((ty, body));
         has_merge = true;
     }
+    let bytes = Module {
+        types: shared.types,
+        functions,
+        exports,
+    }
+    .encode();
+    Ok(Encoded {
+        bytes,
+        frame_bytes: shared.frame,
+        tables: shared.tables,
+        has_init,
+        has_merge,
+    })
+}
+
+/// Emits position-independent WebAssembly bytes for `module`, linked against
+/// this build's helper table indices.
+pub fn bytes(module: &Validated) -> Result<Vec<u8>, String> {
+    encode_module(module).map(|encoded| encoded.bytes)
+}
+
+/// Compiles the module and has the host load it.
+pub fn compile(module: &Validated) -> Result<Compiled, String> {
+    let encoded = encode_module(module)?;
     // The slots and the constant tables, in the Kernel's own memory.
-    let mut frame = vec![0u64; (shared.frame as usize).div_ceil(8).max(1)];
-    for (offset, words) in &shared.tables {
+    let mut frame = vec![0u64; (encoded.frame_bytes as usize).div_ceil(8).max(1)];
+    for (offset, words) in &encoded.tables {
         for (k, word) in words.iter().enumerate() {
             let at = *offset as usize / 4 + k;
             let slot = &mut frame[at / 2];
@@ -148,23 +182,24 @@ pub fn compile(module: &Validated) -> Result<Compiled, String> {
             *slot = (*slot & !(0xffff_ffffu64 << shift)) | (u64::from(*word) << shift);
         }
     }
-    let bytes = Module {
-        types: shared.types,
-        functions,
-        exports,
-        global: frame.as_mut_ptr() as usize as i32,
-    }
-    .encode();
     let mut slots = [0u32; 3];
-    let loaded = unsafe { load(bytes.as_ptr(), bytes.len(), slots.as_mut_ptr(), 3) };
-    let wanted = 1 + usize::from(has_init) + usize::from(has_merge);
+    let loaded = unsafe {
+        load(
+            encoded.bytes.as_ptr(),
+            encoded.bytes.len(),
+            frame.as_mut_ptr() as usize,
+            slots.as_mut_ptr(),
+            3,
+        )
+    };
+    let wanted = 1 + usize::from(encoded.has_init) + usize::from(encoded.has_merge);
     if loaded < wanted as i32 {
         return Err("the host refused the compiled Kernel".into());
     }
     let slots = slots[..wanted].to_vec();
     let mut rest = slots.iter().skip(1).map(|slot| *slot as usize);
-    let init = has_init.then(|| rest.next()).flatten();
-    let merge = has_merge.then(|| rest.next()).flatten();
+    let init = encoded.has_init.then(|| rest.next()).flatten();
+    let merge = encoded.has_merge.then(|| rest.next()).flatten();
     Ok(Compiled {
         entry: slots[0] as usize,
         init,

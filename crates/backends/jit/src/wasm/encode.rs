@@ -102,13 +102,14 @@ impl Body {
     }
 }
 
-/// A module: every function's type index and body, the exports by
-/// function index, and the one immutable `i32` global's value.
+/// A module: every function's type index and body, and the exports by
+/// function index. Global 0 is a mutable `i32` exported as `"frame"`,
+/// initialized to zero and pointed at the Kernel's slot memory on load so
+/// the module's bytes are independent of heap placement.
 pub struct Module {
     pub types: Vec<Signature>,
     pub functions: Vec<(u32, Body)>,
     pub exports: Vec<(String, u32)>,
-    pub global: i32,
 }
 
 impl Module {
@@ -142,12 +143,12 @@ impl Module {
         section(&mut module, 3, &functions);
         let mut globals = Vec::new();
         unsigned(&mut globals, 1);
-        globals.extend([Val::I32.byte(), 0x00, 0x41]);
-        signed(&mut globals, i64::from(self.global));
-        globals.push(0x0b);
+        globals.extend([Val::I32.byte(), 0x01, 0x41, 0x00, 0x0b]);
         section(&mut module, 6, &globals);
         let mut exports = Vec::new();
-        unsigned(&mut exports, self.exports.len() as u64);
+        unsigned(&mut exports, self.exports.len() as u64 + 1);
+        name(&mut exports, "frame");
+        exports.extend([0x03, 0x00]);
         for (export, function) in &self.exports {
             name(&mut exports, export);
             exports.push(0x00);

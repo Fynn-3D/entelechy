@@ -140,12 +140,13 @@ function makeHost() {
     bind(bound) {
       exports = bound;
     },
-    load(bytes, length, slots, most) {
+    load(bytes, length, frame, slots, most) {
       try {
         const code = new Uint8Array(exports.memory.buffer, bytes, length).slice();
         const loaded = new WebAssembly.Instance(new WebAssembly.Module(code), {
           env: { memory: exports.memory, table: table() },
         });
+        if (loaded.exports.frame) loaded.exports.frame.value = frame | 0;
         const out = new Uint32Array(exports.memory.buffer, slots, most);
         let count = 0;
         for (; count < most && loaded.exports[String(count)]; count++) {
@@ -552,8 +553,8 @@ class SinglePlayer {
     const framed = await this.frame(this.session, this.canvas.width, this.canvas.height, scale, rate);
     this.say();
     if (framed === 0) {
-      await this.show();
       await this.play();
+      await this.show();
       wear(this.canvas, this.pointerLook());
     } else if (framed < 0) {
       const error = this.text(this.x.entelechy_error(this.session));
@@ -744,6 +745,7 @@ void main() {
 
   let gl = null;
   let info = null;
+  let defaultFbo = null;
   let vertShader = null;
   let emptyVao = null;
   let drawFbo = null;
@@ -838,6 +840,7 @@ void main() {
       off = startWord - y0 * w * 4;
     }
     gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, defaultFbo);
     return buf.subarray(off, off + wordCount);
   }
 
@@ -854,6 +857,7 @@ void main() {
       gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
       gl.readPixels(tx, ty, 1, 1, gl.RGBA_INTEGER, gl.UNSIGNED_INT, tmp4);
       gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, defaultFbo);
       for (let k = 0; k < count; k++) tmp4[laneStart + k] = words[srcAt + k];
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texSubImage2D(gl.TEXTURE_2D, 0, tx, ty, 1, 1, gl.RGBA_INTEGER, gl.UNSIGNED_INT, tmp4);
@@ -939,6 +943,7 @@ void main() {
         if (!ctx) return { error: "WebGL2 context creation refused" };
 
         gl = ctx;
+        defaultFbo = gl.getParameter(gl.FRAMEBUFFER_BINDING) || null;
         textures.clear();
         programs.clear();
         overlayTex = null;
@@ -1042,6 +1047,7 @@ void main() {
         gl.blitFramebuffer(0, 0, src.width, src.height, 0, 0, dst.width, dst.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
         gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
         gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, defaultFbo);
         return;
       }
       const span = readSpanWords(src, srcStartWord >>> 0, wordCount >>> 0);
@@ -1128,13 +1134,25 @@ void main() {
       let att = 0;
       for (let i = 0; i < outputIds.length; i++) {
         const outTex = textures.get(outputIds[i]);
-        if (!outTex) return "missing output texture";
+        if (!outTex) {
+          for (let a = 0; a < att; a++) {
+            gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + a, gl.TEXTURE_2D, null, 0);
+          }
+          gl.bindFramebuffer(gl.FRAMEBUFFER, defaultFbo);
+          return "missing output texture";
+        }
         gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + att, gl.TEXTURE_2D, outTex.tex, 0);
         att++;
       }
       if (failId) {
         const fTex = textures.get(failId);
-        if (!fTex) return "missing failure texture";
+        if (!fTex) {
+          for (let a = 0; a < att; a++) {
+            gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + a, gl.TEXTURE_2D, null, 0);
+          }
+          gl.bindFramebuffer(gl.FRAMEBUFFER, defaultFbo);
+          return "missing failure texture";
+        }
         gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + att, gl.TEXTURE_2D, fTex.tex, 0);
         att++;
       }
@@ -1158,6 +1176,7 @@ void main() {
       for (let a = 0; a < att; a++) {
         gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + a, gl.TEXTURE_2D, null, 0);
       }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, defaultFbo);
     },
 
     reduceFail(failId, width, height) {
@@ -1180,6 +1199,7 @@ void main() {
       gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, reduceTex, 0);
       gl.readPixels(0, 0, 16, 16, gl.RGBA_INTEGER, gl.UNSIGNED_INT, reduceBuf);
       gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, defaultFbo);
 
       let best = 0;
       let lo = 0;
@@ -1225,6 +1245,7 @@ void main() {
       gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, reduceTex, 0);
       gl.readPixels(0, 0, 16, 16, gl.RGBA_INTEGER, gl.UNSIGNED_INT, reduceBuf);
       gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, defaultFbo);
 
       for (let i = 0; i < 1024; i += 4) {
         if (reduceBuf[i] !== 0) return false;
@@ -1261,7 +1282,7 @@ void main() {
         ovTex = overlayTex.tex;
       }
 
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, defaultFbo);
       gl.viewport(0, 0, windowWidth, windowHeight);
       gl.useProgram(blitProg);
       gl.uniform4fv(blitFrameLoc, frameFloats12);

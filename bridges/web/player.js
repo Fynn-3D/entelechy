@@ -434,8 +434,8 @@ class EntelechyPlayer {
     const framed = await this.frame(this.session, this.canvas.width, this.canvas.height, scale, rate);
     this.say();
     if (framed === 0) {
-      await this.show();
       await this.play();
+      await this.show();
       wear(this.canvas, this.entelechy.pointerLook());
     } else if (framed < 0) {
       // The title holds what the page has room for; the console the whole.
