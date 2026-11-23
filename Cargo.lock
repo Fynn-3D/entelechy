@@ -1027,6 +1027,7 @@ dependencies = [
  "entelechy-abi",
  "entelechy-gpu",
  "entelechy-graph",
+ "entelechy-ir",
  "entelechy-jit",
  "entelechy-kernel",
  "entelechy-protocol",
