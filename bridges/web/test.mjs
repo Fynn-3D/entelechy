@@ -276,6 +276,49 @@ try {
     const inWebGlWorker = workedWebGl === "answered";
     console.log(`play.html on webgl2 in a worker: ${inWebGlWorker ? "voxel scene loaded, rendered on OffscreenCanvas, and answered protocol" : workedWebGl}`);
     if (!inWebGlWorker) log = log.replace("RESULT: ok", "RESULT: failed: play.html on webgl2 in a worker");
+
+    const exporterBin = resolve(dirname(entelechy), process.platform === "win32" ? "entelechy-export.exe" : "entelechy-export");
+    if (existsSync(exporterBin)) {
+      const bundlePath = join(profile, "ant.bundle");
+      await new Promise((done, fail) => {
+        const p = spawn(exporterBin, [join(root, "examples/ant/scene.esn"), "--out", bundlePath]);
+        p.on("exit", (code) => (code === 0 ? done() : fail(new Error(`entelechy-export exited ${code}`))));
+      });
+      const bundleB64 = (await import("node:fs")).readFileSync(bundlePath).toString("base64");
+      const aotCheck = await play("scene=examples/ant/scene.esn&on=jit", async ({ said, run }) => {
+        await until(said, /scene loaded/, 30);
+        return run(`(() => {
+          const raw = Uint8Array.from(atob(${JSON.stringify(bundleB64)}), (c) => c.charCodeAt(0));
+          const x = player.x;
+          const bPtr = x.entelechy_alloc(raw.length);
+          const lenPtr = x.entelechy_alloc(4);
+          new Uint8Array(x.memory.buffer, bPtr, raw.length).set(raw);
+          let count = 0;
+          for (let i = 0; ; i++) {
+            const wPtr = x.entelechy_bundle_wasm(bPtr, raw.length, i, lenPtr);
+            const wLen = new Uint32Array(x.memory.buffer, lenPtr, 1)[0];
+            if (!wPtr) {
+              if (wLen !== 0) return "error at " + i + ": " + wLen;
+              break;
+            }
+            const code = new Uint8Array(x.memory.buffer, wPtr, wLen).slice();
+            if (!WebAssembly.validate(code)) return "invalid wasm at " + i;
+            const inst = new WebAssembly.Instance(new WebAssembly.Module(code), {
+              env: { memory: x.memory, table: x.__indirect_function_table },
+            });
+            if (!(inst.exports.frame instanceof WebAssembly.Global)) return "missing mutable frame export at " + i;
+            inst.exports.frame.value = 64;
+            count++;
+          }
+          x.entelechy_free(bPtr, raw.length);
+          x.entelechy_free(lenPtr, 4);
+          return count > 0 ? "ok:" + count : "zero modules";
+        })()`);
+      });
+      const aotOk = typeof aotCheck === "string" && aotCheck.startsWith("ok:");
+      console.log(`entelechy_bundle_wasm: ${aotOk ? `compiled ${aotCheck.slice(3)} valid PIC WebAssembly Kernels from ant.bundle` : aotCheck}`);
+      if (!aotOk) log = log.replace("RESULT: ok", "RESULT: failed: entelechy_bundle_wasm");
+    }
   }
   for (const problem of devtools.problems) console.log(`page: ${problem}`);
   if (!log.includes("RESULT:")) console.log("RESULT: timed out");

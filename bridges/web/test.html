@@ -159,6 +159,161 @@ async function inPage(glue) {
     say(`voxel in the page: a frame on the ${backend === "jit" ? "JIT" : "GPU"}`);
     voxel.close();
   }
+  await webglConformance(glue);
+}
+
+async function webglConformance(glue) {
+  const enc = new TextEncoder();
+  const wglCanvas = window.document.createElement("canvas");
+  wglCanvas.id = "wgl-av";
+  wglCanvas.width = 64;
+  wglCanvas.height = 36;
+  window.document.body.appendChild(wglCanvas);
+  const prevOnly = globalThis.entelechy_webgl_only;
+  const prevCanvas = globalThis.entelechy_webgl_canvas;
+  globalThis.entelechy_webgl_only = true;
+  globalThis.entelechy_webgl_canvas = wglCanvas;
+  try {
+    const conformanceEsn = `
+kernel wgl.narrow_write@1 {
+  requires { field.write; }
+  output unorm_out: Rows<Vec4 as unorm8>;
+  output half_out: Rows<Float as f16>;
+  output short_out: Rows<Int as i16>;
+  compute {
+    let i = element();
+    let f = float(i) / 7.0;
+    return { unorm_out: vec4(f, 1.0 - f, 0.5, 1.0), half_out: f * 2.0 - 1.0, short_out: i * 17 - 40 };
+  }
+}
+kernel wgl.narrow_read@1 {
+  requires { field.read; field.write; }
+  input u: Rows<Vec4 as unorm8>;
+  input h: Rows<Float as f16>;
+  input s: Rows<Int as i16>;
+  output sums: Rows<Float>;
+  output ints: Rows<Int>;
+  compute {
+    let a = sample(u);
+    let b = sample(h);
+    let c = sample(s);
+    return { sums: a.x + a.y + b, ints: c + clz(c & 255) + popcount(c & 63) };
+  }
+}
+node nw: wgl.narrow_write@1 { domain = 8; }
+node nr: wgl.narrow_read@1 { u <- nw.unorm_out; h <- nw.half_out; s <- nw.short_out; }
+output sums <- nr.sums;
+output ints <- nr.ints;
+`;
+    const runBackend = async (backend) => {
+      const s = await EntelechyInPage.load(`/${glue}`);
+      s.put("scene.esn", enc.encode(conformanceEsn));
+      await s.open("scene.esn", backend);
+      await s.call("pin", { node: "nw" });
+      await s.call("evaluate", { time: 0 });
+      const sums = decodeWords((await s.call("read", { output: "sums", format: "words" })).data);
+      const ints = decodeWords((await s.call("read", { output: "ints", format: "words" })).data);
+      s.close();
+      return { sums, ints };
+    };
+    const ref = await runBackend("jit");
+    const got = await runBackend("gpu");
+    for (let i = 0; i < 8; i++) {
+      assert(got.ints.int(i) === ref.ints.int(i), `WebGL2 narrow+multi int[${i}]: ${got.ints.int(i)} vs ${ref.ints.int(i)}`);
+      assert(Math.abs(got.sums.float(i) - ref.sums.float(i)) <= 1e-3, `WebGL2 narrow+multi float[${i}]: ${got.sums.float(i)} vs ${ref.sums.float(i)}`);
+    }
+    say("WebGL2 conformance: narrow encodings (unorm8, f16, i16), multi-output Map, and bit intrinsics match JIT");
+
+    // Exact arithmetic failure reporting on WebGL2 (division by zero at element 5).
+    const failEsn = `
+kernel wgl.divzero@1 {
+  requires { field.write; }
+  output out: Rows<Int>;
+  compute {
+    let d = if element() == 5 { 0 } else { 1 };
+    return 100 / d;
+  }
+}
+node dz: wgl.divzero@1 { domain = 16; }
+output out <- dz.out;
+`;
+    const failSess = await EntelechyInPage.load(`/${glue}`);
+    failSess.put("scene.esn", enc.encode(failEsn));
+    await failSess.open("scene.esn", "gpu");
+    let caught = "";
+    try {
+      await failSess.call("evaluate", { time: 0 });
+    } catch (e) {
+      caught = e.message || String(e);
+    }
+    failSess.close();
+    assert(/division by zero/i.test(caught) && /5/.test(caught), `WebGL2 arithmetic failure named at element 5, got: ${caught}`);
+    say("WebGL2 conformance: arithmetic failure names division by zero at exact element");
+
+    // Simultaneous WebGL2 zero-copy present + GPU sound readback leaves default screen FBO complete.
+    const avEsn = `
+kernel wgl.pic@1 {
+  requires { field.write; }
+  output result: Image;
+  compute {
+    let s = loop 64 with acc = 0.0 { acc + sin(float(index()) * 0.1) * 0.001 };
+    return vec4(0.2 + s, 0.6, 0.9, 1.0);
+  }
+}
+kernel wgl.sfx@1 {
+  requires { field.write; time.read; }
+  output result: Rows<Vec2>;
+  compute {
+    let e = float(element()) + time();
+    let v = loop 64 with acc = 0.0 { acc + sin(e * 0.05 + float(index())) * 0.002 };
+    return vec2(v, -v);
+  }
+}
+node pic: wgl.pic@1 { domain = vec2(128, 72); }
+node sfx: wgl.sfx@1 { domain = 4096; }
+output screen <- pic.result;
+output sound <- sfx.result to sound;
+`;
+    const av = await EntelechyInPage.load(`/${glue}`);
+    try {
+      wglCanvas.width = 128;
+      wglCanvas.height = 72;
+      av.put("scene.esn", enc.encode(avEsn));
+      await av.open("scene.esn", "gpu");
+      const x = av.x;
+      while (x.entelechy_play_preparing(av.session) > 0) {
+        assert(x.entelechy_play_turn(av.session) >= 0, "preparing turn failed");
+      }
+      await av.withBytes(enc.encode("48000 Hz\0"), (p) => x.entelechy_play_sound_opened(av.session, p));
+      const fieldPtr = x.entelechy_alloc(36);
+      try {
+        for (let f = 0; f < 3; f++) {
+          if (f > 0) await new Promise((r) => setTimeout(r, 5));
+          x.entelechy_play_sound_queued(av.session, 0);
+          const framed = x.entelechy_play_frame(av.session, 128, 72, 1, 48000);
+          assert(framed === 0, `WebGL2 AV frame ${f}: ${framed} (${av.text(x.entelechy_error(av.session))})`);
+          const heard = x.entelechy_play_sound(av.session, fieldPtr);
+          if (f > 0) assert(heard === 0, `WebGL2 GPU sound readback frame ${f}: ${heard}`);
+          const drawn = av.withBytes(enc.encode("wgl-av\0"), (p) => x.entelechy_play_present(av.session, p));
+          assert(drawn === 0, `WebGL2 present frame ${f}: ${drawn}`);
+          const gl = wglCanvas.getContext("webgl2");
+          assert(gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING) === null, "DRAW_FRAMEBUFFER_BINDING restored to null");
+          assert(gl.getParameter(gl.READ_FRAMEBUFFER_BINDING) === null, "READ_FRAMEBUFFER_BINDING restored to null");
+          assert(gl.checkFramebufferStatus(gl.READ_FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE, "READ_FRAMEBUFFER complete for compositor");
+          assert(gl.getError() === gl.NO_ERROR, "zero WebGL errors after sound readback + present");
+        }
+      } finally {
+        x.entelechy_free(fieldPtr, 36);
+      }
+      say("WebGL2 conformance: GPU sound readback + zero-copy present keeps default framebuffer complete");
+    } finally {
+      av.close();
+    }
+  } finally {
+    wglCanvas.remove();
+    globalThis.entelechy_webgl_only = prevOnly;
+    globalThis.entelechy_webgl_canvas = prevCanvas;
+  }
 }
 
 async function voxelScene(port) {

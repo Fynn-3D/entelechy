@@ -163,6 +163,12 @@ fn encode_module(module: &Validated) -> Result<Encoded, String> {
     })
 }
 
+/// Whether the host can instantiate only precompiled WebAssembly modules and
+/// cannot compile new module bytes at run time.
+pub fn aot_only() -> bool {
+    unsafe { load(std::ptr::null(), 0, 0, std::ptr::null_mut(), 0) == -2 }
+}
+
 /// Emits position-independent WebAssembly bytes for `module`, linked against
 /// this build's helper table indices.
 pub fn bytes(module: &Validated) -> Result<Vec<u8>, String> {

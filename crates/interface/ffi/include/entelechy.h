@@ -127,6 +127,15 @@ EntelechySession *entelechy_open_bundle(const uint8_t *data, size_t len, const c
  * entelechy_alloc) and freeing it once decoded so the session opens into the
  * same memory. */
 EntelechySession *entelechy_open_bundle_owned(uint8_t *data, size_t len, const char *backend);
+/* Compiles the `index`-th static, position-independent WebAssembly Kernel
+ * module of a binary scene bundle (`len` bytes at `data`) for this
+ * WebAssembly build's helper table, writing its byte length to `*out_len` and
+ * returning its bytes (valid until the next entelechy_bundle_wasm call on
+ * this thread). Returns NULL with `*out_len` set to 0 once `index` reaches
+ * the module count (or outside a WebAssembly build), or NULL with `*out_len`
+ * set to `SIZE_MAX` and entelechy_open_error() set when the bundle or Kernel
+ * is invalid. */
+const uint8_t *entelechy_bundle_wasm(const uint8_t *data, size_t len, size_t index, size_t *out_len);
 /* A scene played, as every interface that shows one plays it: the host
  * hands its person's keys, pointer, wheel and pads to the play, asks it
  * for a frame, shows the picture on its own device and plays the sound

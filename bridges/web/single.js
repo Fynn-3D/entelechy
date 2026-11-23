@@ -141,6 +141,7 @@ function makeHost() {
       exports = bound;
     },
     load(bytes, length, frame, slots, most) {
+      if (!length) return typeof WebAssembly.Module === "function" ? 0 : -2;
       try {
         const code = new Uint8Array(exports.memory.buffer, bytes, length).slice();
         const loaded = new WebAssembly.Instance(new WebAssembly.Module(code), {
@@ -928,10 +929,7 @@ void main() {
       const desired = globalThis.entelechy_webgl_canvas || findCanvas("shown");
       if (gl && !gl.isContextLost() && (!desired || gl.canvas === desired)) return info;
       try {
-        const target =
-          desired ||
-          (typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : document.createElement("canvas"));
-        const ctx = target.getContext("webgl2", {
+        const opts = {
           alpha: false,
           depth: false,
           stencil: false,
@@ -939,7 +937,12 @@ void main() {
           premultipliedAlpha: false,
           preserveDrawingBuffer: false,
           powerPreference: "high-performance",
-        });
+        };
+        let ctx = desired && typeof desired.getContext === "function" ? desired.getContext("webgl2", opts) : null;
+        if (!ctx) {
+          const fb = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(1, 1) : document.createElement("canvas");
+          ctx = fb.getContext("webgl2", opts);
+        }
         if (!ctx) return { error: "WebGL2 context creation refused" };
 
         gl = ctx;

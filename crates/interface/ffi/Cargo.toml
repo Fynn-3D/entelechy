@@ -23,6 +23,7 @@ full = ["entelechy-session/documents", "dep:entelechy-protocol"]
 entelechy-session = { path = "../../interface/session", default-features = false }
 entelechy-protocol = { path = "../../interface/protocol", optional = true }
 entelechy-abi = { path = "../../core/abi" }
+entelechy-ir = { path = "../../core/ir" }
 entelechy-graph = { path = "../../core/graph" }
 entelechy-kernel = { path = "../../core/kernel" }
 entelechy-gpu = { path = "../../backends/gpu" }

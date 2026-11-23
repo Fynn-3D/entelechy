@@ -808,3 +808,37 @@ fn a_replacement_is_prepared_off_the_callers_thread() {
     unsafe { entelechy_ffi::entelechy_close(session) };
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[test]
+fn bundle_wasm_rejects_invalid_bundles_and_stops_cleanly_outside_wasm() {
+    let mut out_len = 123usize;
+    let bad = b"NOT_A_BUNDLE";
+    let ptr =
+        unsafe { entelechy_ffi::entelechy_bundle_wasm(bad.as_ptr(), bad.len(), 0, &mut out_len) };
+    assert!(ptr.is_null());
+    assert_eq!(out_len, usize::MAX);
+    assert!(!unsafe { str_of(entelechy_ffi::entelechy_open_error()) }.is_empty());
+
+    let (dir, _) = scene_in("bundle_wasm", PICTURE);
+    let under = entelechy_session::SessionOptions::from_environment().store();
+    let built = entelechy_session::Session::build(
+        "cpu",
+        entelechy_session::Limits::default(),
+        entelechy_session::Wait::blocking(),
+    )
+    .unwrap();
+    let mut s =
+        entelechy_session::Session::open_in(under, &dir.join("scene.esn"), None, built.runtime);
+    let _ = s.sync();
+    let encoded = s
+        .bundle_with_fonts(|_, _, _| unreachable!("no font nodes"))
+        .unwrap()
+        .encode();
+    let mut valid_len = 99usize;
+    let ptr = unsafe {
+        entelechy_ffi::entelechy_bundle_wasm(encoded.as_ptr(), encoded.len(), 0, &mut valid_len)
+    };
+    assert!(ptr.is_null());
+    assert_eq!(valid_len, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}

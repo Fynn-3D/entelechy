@@ -499,6 +499,99 @@ fn new_session(
     }))
 }
 
+/// Compiles the `index`-th static, position-independent WebAssembly Kernel
+/// module of a binary scene bundle (`Bundle::encode`).
+///
+/// # Safety
+/// `data` points to `len` bytes (or may be NULL when `len` is 0); `out_len` is
+/// a valid writable pointer to a `usize`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_bundle_wasm(
+    data: *const u8,
+    len: usize,
+    index: usize,
+    out_len: *mut usize,
+) -> *const u8 {
+    if out_len.is_null() {
+        return std::ptr::null();
+    }
+    let fail = |message: String| -> *const u8 {
+        OPEN_ERROR.with(|slot| *slot.borrow_mut() = c_string(&message));
+        unsafe { *out_len = usize::MAX };
+        std::ptr::null()
+    };
+    if data.is_null() && len > 0 {
+        return fail("entelechy_bundle_wasm needs bundle bytes".to_owned());
+    }
+    let bytes = if len == 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(data, len) }
+    };
+    let outcome = catch_unwind(AssertUnwindSafe(|| -> Result<Option<*const u8>, String> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            use std::hash::{Hash, Hasher};
+            type CachedBundle = Option<(u64, usize, Vec<entelechy_ir::Validated>)>;
+            thread_local! {
+                static CACHED: RefCell<CachedBundle> = const { RefCell::new(None) };
+                static MODULE_BYTES: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+            }
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            bytes.hash(&mut hasher);
+            let digest = hasher.finish();
+            CACHED.with(|slot| {
+                let reuse = slot
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|(d, l, _)| *d == digest && *l == len);
+                if !reuse {
+                    let bundle = entelechy_session::bundle::Bundle::decode(bytes)?;
+                    let mut validated = Vec::with_capacity(bundle.modules.len());
+                    for module in bundle.modules {
+                        validated.push(entelechy_ir::validate(module).map_err(|e| e.to_string())?);
+                    }
+                    *slot.borrow_mut() = Some((digest, len, validated));
+                }
+                let borrow = slot.borrow();
+                let (_, _, validated) = borrow.as_ref().expect("populated above");
+                let Some(module) = validated.get(index).cloned() else {
+                    drop(borrow);
+                    *slot.borrow_mut() = None;
+                    unsafe { *out_len = 0 };
+                    return Ok(None);
+                };
+                drop(borrow);
+                let accounted = entelechy_ir::account(&module).map_err(|e| e.to_string())?;
+                let wasm = entelechy_jit::wasm_bytes(&accounted)?;
+                Ok(Some(MODULE_BYTES.with(|buf| {
+                    let mut buf = buf.borrow_mut();
+                    *buf = wasm;
+                    unsafe { *out_len = buf.len() };
+                    buf.as_ptr()
+                })))
+            })
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = index;
+            let bundle = entelechy_session::bundle::Bundle::decode(bytes)?;
+            for module in bundle.modules {
+                let validated = entelechy_ir::validate(module).map_err(|e| e.to_string())?;
+                let _ = entelechy_ir::account(&validated).map_err(|e| e.to_string())?;
+            }
+            unsafe { *out_len = 0 };
+            Ok(None)
+        }
+    }));
+    match outcome {
+        Ok(Ok(Some(ptr))) => ptr,
+        Ok(Ok(None)) => std::ptr::null(),
+        Ok(Err(message)) => fail(message),
+        Err(_) => fail("a panic inside Entelechy while compiling bundle WebAssembly".to_owned()),
+    }
+}
+
 /// Opens a compiled binary scene bundle (`Bundle::encode`) on `backend`
 /// ("gpu", "jit", or "best"; NULL for "best"); NULL with
 /// `entelechy_open_error` set on failure.

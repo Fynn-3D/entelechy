@@ -551,11 +551,15 @@ impl Backend for JitBackend {
         if let Some(reason) = frame::refusal(&laned, None) {
             return Err(reason);
         }
-        Ok(Box::new(Lazy {
+        let lazy = Lazy {
             memo: Arc::clone(&self.memo),
             module: Mutex::new(Some(laned)),
             compiled: OnceLock::new(),
-        }))
+        };
+        if wasm::aot_only() {
+            lazy.built().map_err(|error| error.to_string())?;
+        }
+        Ok(Box::new(lazy))
     }
 
     /// Compiles `prepared`'s code, if it is not yet compiled.

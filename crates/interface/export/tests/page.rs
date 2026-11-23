@@ -195,3 +195,27 @@ fn runtime_save_files_are_not_baked_into_exported_pages() {
     assert_eq!(compiled.inputs, 0, "stale save.field must not be bundled");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn the_exporter_writes_a_standalone_bundle_from_a_scene() {
+    let dir = std::env::temp_dir().join(format!("entelechy-bundle-cli-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let out = dir.join("ant.bundle");
+    let scene = repository().join("examples/ant/scene.esn");
+    let ran = std::process::Command::new(env!("CARGO_BIN_EXE_entelechy-export"))
+        .arg(&scene)
+        .arg("--out")
+        .arg(&out)
+        .output()
+        .expect("entelechy-export runs");
+    assert!(
+        ran.status.success(),
+        "entelechy-export failed: {}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    let bytes = std::fs::read(&out).expect("bundle file written");
+    let decoded = Bundle::decode(&bytes).expect("bundle decodes");
+    assert!(!decoded.modules.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -40,6 +40,9 @@ usage:
       (glyph rows, outline segments in ems, the measures); --name names the
       family, the file's stem by default; --chars (or --chars-file, a UTF-8
       file) keeps those characters alone.
+      To .bundle: a scene (.esn) compiled into one standalone binary bundle
+      (its validated IR modules, lowered Graph, baked Field inputs and compact
+      font atlases, subsetted by --chars / --chars-file as for .html).
       To .html: a scene (.esn) as one page that plays it, opened from the
       disk with nothing beside it: the Player in a page, Entelechy's bundle
       runtime, and the scene compiled into one binary bundle (its validated
@@ -167,8 +170,13 @@ fn export(args: &[String]) -> Result<String, String> {
     if family.is_some() && !matches!(extension(&out).as_str(), "ttf" | "otf" | "woff" | "html") {
         return Err("--name is for a font or a page".into());
     }
-    if chars.is_some() && !matches!(extension(&out).as_str(), "ttf" | "otf" | "woff" | "html") {
-        return Err("--chars and --chars-file are for a font, or a page's fonts".into());
+    if chars.is_some()
+        && !matches!(
+            extension(&out).as_str(),
+            "ttf" | "otf" | "woff" | "html" | "bundle"
+        )
+    {
+        return Err("--chars and --chars-file are for a font, a bundle, or a page's fonts".into());
     }
     if (web.is_some() || backend.is_some()) && extension(&out) != "html" {
         return Err("--web and --backend are for a page".into());
@@ -177,6 +185,31 @@ fn export(args: &[String]) -> Result<String, String> {
         return Err("--hold-pointer and --lock-pointer are for a page".into());
     }
     match extension(&out).as_str() {
+        "bundle" => {
+            let [scene] = inputs.as_slice() else {
+                return Err("a bundle is made of one scene".into());
+            };
+            if extension(scene) != "esn" {
+                return Err(format!(
+                    "{}: a bundle is made of a scene (.esn)",
+                    scene.display()
+                ));
+            }
+            let compiled = page::compile(scene, chars.as_deref())?;
+            std::fs::write(&out, &compiled.bundle)
+                .map_err(|e| format!("{}: {e}", out.display()))?;
+            let mut said = format!(
+                "{}: {} bytes ({} Kernel(s), {} input(s))",
+                out.display(),
+                compiled.bundle.len(),
+                compiled.modules,
+                compiled.inputs,
+            );
+            for (name, read, kept) in &compiled.fonts {
+                said.push_str(&format!("\n  {name}: {read} bytes carried as {kept}"));
+            }
+            Ok(said)
+        }
         "html" => {
             let [scene] = inputs.as_slice() else {
                 return Err("a page is made of one scene".into());

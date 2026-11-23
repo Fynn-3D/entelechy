@@ -130,6 +130,7 @@ function host(instance) {
   const table = () => instance().exports.__indirect_function_table;
   return {
     load(bytes, length, frame, slots, most) {
+      if (!length) return typeof WebAssembly.Module === "function" ? 0 : -2;
       const exports = instance().exports;
       try {
         const code = new Uint8Array(exports.memory.buffer, bytes, length).slice();
@@ -1058,17 +1059,7 @@ void main() {
         return info;
       }
       try {
-        const target =
-          desired ||
-          (typeof OffscreenCanvas !== "undefined"
-            ? new OffscreenCanvas(1, 1)
-            : typeof document !== "undefined"
-              ? document.createElement("canvas")
-              : null);
-        if (!target || typeof target.getContext !== "function") {
-          return { error: "no canvas available for WebGL2" };
-        }
-        const ctx = target.getContext("webgl2", {
+        const opts = {
           alpha: false,
           depth: false,
           stencil: false,
@@ -1076,7 +1067,21 @@ void main() {
           premultipliedAlpha: false,
           preserveDrawingBuffer: false,
           powerPreference: "high-performance",
-        });
+        };
+        const makeFallback = () =>
+          typeof OffscreenCanvas !== "undefined"
+            ? new OffscreenCanvas(1, 1)
+            : typeof document !== "undefined"
+              ? document.createElement("canvas")
+              : null;
+        let ctx = desired && typeof desired.getContext === "function" ? desired.getContext("webgl2", opts) : null;
+        if (!ctx) {
+          const fb = makeFallback();
+          if (!fb || typeof fb.getContext !== "function") {
+            return { error: "no canvas available for WebGL2" };
+          }
+          ctx = fb.getContext("webgl2", opts);
+        }
         if (!ctx) return { error: "WebGL2 context creation refused" };
 
         gl = ctx;
