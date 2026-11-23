@@ -144,28 +144,7 @@ pub fn fill(
     Ok(out)
 }
 
-/// How an exported page handles the browser's pointer.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PointerMode {
-    /// Free browser cursor mapped into the canvas.
-    #[default]
-    Free,
-    /// Captured on click, stepped by relative motion and clamped to the output's edges.
-    Hold,
-    /// Captured on click, stepped by unbounded relative motion for 360-degree camera aim.
-    Lock,
-}
-
-impl PointerMode {
-    /// The slot text written into `single.html`'s `data-pointer`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Free => "free",
-            Self::Hold => "hold",
-            Self::Lock => "lock",
-        }
-    }
-}
+pub use entelechy_session::bundle::PointerMode;
 
 /// What a page was made of, for the line the exporter prints.
 pub struct Made {

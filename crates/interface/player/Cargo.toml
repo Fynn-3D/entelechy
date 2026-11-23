@@ -50,3 +50,6 @@ arboard = { version = "3", default-features = false }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+entelechy-export = { path = "../../interface/export" }

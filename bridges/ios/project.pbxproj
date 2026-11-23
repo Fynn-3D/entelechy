@@ -1,0 +1,155 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+		100000000000000000000001 /* App.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000001 /* App.m */; };
+		100000000000000000000002 /* scene.bundle in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* scene.bundle */; };
+		100000000000000000000003 /* libentelechy_ffi.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000004 /* libentelechy_ffi.a */; };
+		200000000000000000000001 /* App.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = App.m; sourceTree = "<group>"; };
+		200000000000000000000002 /* entelechy.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = entelechy.h; sourceTree = "<group>"; };
+		200000000000000000000003 /* scene.bundle */ = {isa = PBXFileReference; lastKnownFileType = file; path = scene.bundle; sourceTree = "<group>"; };
+		200000000000000000000004 /* libentelechy_ffi.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libentelechy_ffi.a; path = lib/libentelechy_ffi.a; sourceTree = "<group>"; };
+		200000000000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		200000000000000000000006 /* @@slot:executable@@.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "@@slot:executable@@.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		300000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100000000000000000000003 /* libentelechy_ffi.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		400000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				200000000000000000000001 /* App.m */,
+				200000000000000000000002 /* entelechy.h */,
+				200000000000000000000005 /* Info.plist */,
+				200000000000000000000003 /* scene.bundle */,
+				200000000000000000000004 /* libentelechy_ffi.a */,
+				400000000000000000000002 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		400000000000000000000002 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				200000000000000000000006 /* @@slot:executable@@.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		500000000000000000000001 /* @@slot:executable@@ */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 800000000000000000000002 /* Build configuration list for PBXNativeTarget */;
+			buildPhases = (
+				600000000000000000000001 /* Sources */,
+				300000000000000000000001 /* Frameworks */,
+				600000000000000000000002 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "@@slot:executable@@";
+			productName = "@@slot:executable@@";
+			productReference = 200000000000000000000006 /* @@slot:executable@@.app */;
+			productType = "com.apple.product-type.application";
+		};
+		700000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = 800000000000000000000001 /* Build configuration list for PBXProject */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+			);
+			mainGroup = 400000000000000000000001;
+			productRefGroup = 400000000000000000000002 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				500000000000000000000001 /* @@slot:executable@@ */,
+			);
+		};
+		600000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100000000000000000000001 /* App.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		600000000000000000000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100000000000000000000002 /* scene.bundle in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		900000000000000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				SDKROOT = iphoneos;
+			};
+			name = Release;
+		};
+		900000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				INFOPLIST_FILE = Info.plist;
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/lib",
+				);
+				OTHER_LDFLAGS = (
+					"-framework",
+					"UIKit",
+					"-framework",
+					"Foundation",
+					"-framework",
+					"QuartzCore",
+					"-framework",
+					"Metal",
+					"-framework",
+					"AVFAudio",
+					"-framework",
+					"CoreGraphics",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "@@slot:bundle_id@@";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		800000000000000000000001 /* Build configuration list for PBXProject */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				900000000000000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		800000000000000000000002 /* Build configuration list for PBXNativeTarget */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				900000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+	};
+	rootObject = 700000000000000000000001 /* Project object */;
+}

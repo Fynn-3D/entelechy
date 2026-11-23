@@ -1,12 +1,13 @@
 //! `entelechy-export`: the Host's files as other software's formats. Mesh
 //! rows (and a PNG) become a GLB, rows of one or two floats a WAV, a
 //! grid a PNG, a font's Fields a TrueType, OpenType (CFF) or WOFF font; a
-//! scene becomes one page that plays it.
+//! scene becomes a bundle, one page, a desktop app (`.app`, `.exe`, `.bin`),
+//! or a mobile project (`.ios`, `.android`) that plays it.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use entelechy_export::{font, gltf, page};
+use entelechy_export::{font, gltf, native, page};
 use entelechy_formats::rig::Part;
 use entelechy_host::{FieldData, Shape};
 
@@ -14,9 +15,11 @@ const USAGE: &str = "\
 usage:
   entelechy-export <file>... --out <target> [--rate <hz>] [--beats <n>]
               [--filter linear|nearest] [--joints <name>,<name>,...]
-              [--double-sided] [--name <family>]
+              [--double-sided] [--name <title|family>]
               [--chars <text> | --chars-file <file>]
-              [--web <dir>] [--backend gpu|jit] [--hold-pointer | --lock-pointer]
+              [--web <dir>] [--runner <file>] [--lib <file>] [--app-id <id>]
+              [--window <w>x<h>] [--backend gpu|jit|cpu|best]
+              [--hold-pointer | --lock-pointer]
       To .glb: a vertices .field (rows of position, normal, uv, and a
       tangent where a normal map is read along one), a triangles .field
       (rows of three ints), and PNGs: the base color, a normal map named
@@ -45,19 +48,21 @@ usage:
       font atlases, subsetted by --chars / --chars-file as for .html).
       To .html: a scene (.esn) as one page that plays it, opened from the
       disk with nothing beside it: the Player in a page, Entelechy's bundle
-      runtime, and the scene compiled into one binary bundle (its validated
-      IR modules, lowered Graph, baked Field inputs and font atlases). --web
-      is where Entelechy for the web is (the directory holding bridges/web
-      and target/page: a web release, or a checkout that has built it; the
-      current directory by default). --backend names what runs it in the
-      page (gpu or jit); without it the page chooses the GPU where WebGPU
-      opens, else the JIT. --name names the page's title (its project or stem
-      by default). --hold-pointer captures the browser cursor on
-      click and keeps it inside the output; --lock-pointer captures it and
-      steps it without bound (Escape lets either go). --chars and
-      --chars-file (each may be given again) name the characters the page's
-      font nodes keep, so a page that writes a few words does not carry a
-      whole font; a character not among them is then not drawn.";
+      runtime, and the scene compiled into one binary bundle. --web is where
+      Entelechy for the web is (the directory holding bridges/web and
+      target/page; the current directory by default).
+      To .app, .exe or .bin: a scene (.esn) packed with a prebuilt
+      `entelechy-runner` binary (--runner <file>, else beside entelechy-export)
+      into a standalone native desktop application: a macOS .app bundle
+      (preserving the Mach-O runner's linker signature), a single-file Windows
+      .exe, or a single-file Unix .bin. --name sets the application title,
+      --app-id the bundle identifier (`run.entelechy.<slug>` by default), and
+      --window <w>x<h> the initial logical window size.
+      To .ios or .android: a scene (.esn) exported as a self-contained Xcode
+      project directory (.ios) or Android NDK NativeActivity project directory
+      (.android) over `entelechy.h` and `scene.bundle`, using `bridges/ios` or
+      `bridges/android` under --web (current directory by default); --lib
+      copies a prebuilt `libentelechy_ffi.a` or `libentelechy_ffi.so` into it.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -83,6 +88,48 @@ fn read_field(path: &Path) -> Result<FieldData, String> {
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
+fn parse_window_wh(text: &str) -> Result<(u32, u32), String> {
+    let parts: Vec<&str> = text.split('x').collect();
+    let [w, h] = parts.as_slice() else {
+        return Err(format!("--window `{text}` is not <w>x<h>"));
+    };
+    let w = w
+        .parse::<u32>()
+        .ok()
+        .filter(|n| *n > 0)
+        .ok_or_else(|| format!("--window width `{w}` must be positive"))?;
+    let h = h
+        .parse::<u32>()
+        .ok()
+        .filter(|n| *n > 0)
+        .ok_or_else(|| format!("--window height `{h}` must be positive"))?;
+    Ok((w, h))
+}
+
+fn require_single_scene<'a>(inputs: &'a [PathBuf], what: &str) -> Result<&'a Path, String> {
+    let [scene] = inputs else {
+        return Err(format!("{what} is made of one scene"));
+    };
+    let ext = scene
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if ext != "esn" {
+        return Err(format!(
+            "{}: {what} is made of a scene (.esn)",
+            scene.display()
+        ));
+    }
+    Ok(scene.as_path())
+}
+
+fn append_fonts(said: &mut String, fonts: &[(String, usize, usize)]) {
+    for (name, read, kept) in fonts {
+        said.push_str(&format!("\n  {name}: {read} bytes carried as {kept}"));
+    }
+}
+
 fn export(args: &[String]) -> Result<String, String> {
     let mut inputs: Vec<PathBuf> = Vec::new();
     let mut out: Option<PathBuf> = None;
@@ -92,6 +139,10 @@ fn export(args: &[String]) -> Result<String, String> {
     let mut family: Option<String> = None;
     let mut chars: Option<String> = None;
     let mut web: Option<PathBuf> = None;
+    let mut runner: Option<PathBuf> = None;
+    let mut lib: Option<PathBuf> = None;
+    let mut app_id: Option<String> = None;
+    let mut window: Option<(u32, u32)> = None;
     let mut backend: Option<String> = None;
     let mut pointer = page::PointerMode::Free;
     let mut iter = args.iter();
@@ -99,10 +150,18 @@ fn export(args: &[String]) -> Result<String, String> {
         match arg.as_str() {
             "--out" => out = Some(PathBuf::from(iter.next().ok_or("--out needs a file")?)),
             "--web" => web = Some(PathBuf::from(iter.next().ok_or("--web needs a directory")?)),
+            "--runner" => runner = Some(PathBuf::from(iter.next().ok_or("--runner needs a file")?)),
+            "--lib" => lib = Some(PathBuf::from(iter.next().ok_or("--lib needs a file")?)),
+            "--app-id" => app_id = Some(iter.next().ok_or("--app-id needs an identifier")?.clone()),
+            "--window" => {
+                window = Some(parse_window_wh(
+                    iter.next().ok_or("--window needs <w>x<h>")?,
+                )?)
+            }
             "--backend" => {
                 backend = match iter.next().map(String::as_str) {
-                    Some(name @ ("gpu" | "jit" | "cpu")) => Some(name.to_string()),
-                    _ => return Err("--backend is gpu, jit or cpu".into()),
+                    Some(name @ ("gpu" | "jit" | "cpu" | "best")) => Some(name.to_string()),
+                    _ => return Err("--backend is gpu, jit, cpu or best".into()),
                 }
             }
             "--rate" => {
@@ -141,7 +200,6 @@ fn export(args: &[String]) -> Result<String, String> {
             }
             "--double-sided" => options.double_sided = true,
             "--name" => family = Some(iter.next().ok_or("--name needs a family name")?.clone()),
-            // (Each adds to the characters kept: several files may hold a scene's words.)
             "--chars" => chars
                 .get_or_insert_with(String::new)
                 .push_str(iter.next().ok_or("--chars needs the characters")?),
@@ -167,34 +225,59 @@ fn export(args: &[String]) -> Result<String, String> {
             .map(str::to_ascii_lowercase)
             .unwrap_or_default()
     };
-    if family.is_some() && !matches!(extension(&out).as_str(), "ttf" | "otf" | "woff" | "html") {
-        return Err("--name is for a font or a page".into());
+    let ext = extension(&out);
+    let is_scene_app = matches!(
+        ext.as_str(),
+        "html" | "app" | "exe" | "bin" | "ios" | "android"
+    );
+    if family.is_some() && !matches!(ext.as_str(), "ttf" | "otf" | "woff") && !is_scene_app {
+        return Err("--name is for a font, a page, or an application".into());
     }
     if chars.is_some()
-        && !matches!(
-            extension(&out).as_str(),
-            "ttf" | "otf" | "woff" | "html" | "bundle"
-        )
+        && !matches!(ext.as_str(), "ttf" | "otf" | "woff" | "bundle")
+        && !is_scene_app
     {
-        return Err("--chars and --chars-file are for a font, a bundle, or a page's fonts".into());
+        return Err(
+            "--chars and --chars-file are for a font, a bundle, a page, or an application".into(),
+        );
     }
-    if (web.is_some() || backend.is_some()) && extension(&out) != "html" {
-        return Err("--web and --backend are for a page".into());
+    if web.is_some() && !matches!(ext.as_str(), "html" | "ios" | "android") {
+        return Err("--web is for a page (.html) or mobile project (.ios, .android)".into());
     }
-    if pointer != page::PointerMode::Free && extension(&out) != "html" {
-        return Err("--hold-pointer and --lock-pointer are for a page".into());
+    if backend.is_some() && !is_scene_app {
+        return Err("--backend is for a page or an application".into());
     }
-    match extension(&out).as_str() {
+    if pointer != page::PointerMode::Free && !is_scene_app {
+        return Err("--hold-pointer and --lock-pointer are for a page or an application".into());
+    }
+    if runner.is_some() && !matches!(ext.as_str(), "app" | "exe" | "bin") {
+        return Err("--runner is for a desktop application (.app, .exe, .bin)".into());
+    }
+    if lib.is_some() && !matches!(ext.as_str(), "ios" | "android") {
+        return Err("--lib is for a mobile project (.ios, .android)".into());
+    }
+    if app_id.is_some() && !matches!(ext.as_str(), "app" | "ios" | "android") {
+        return Err("--app-id is for .app, .ios, or .android".into());
+    }
+    if window.is_some() && !matches!(ext.as_str(), "app" | "exe" | "bin") {
+        return Err("--window is for a desktop application (.app, .exe, .bin)".into());
+    }
+
+    let native_opts = native::Options {
+        runner: runner.as_deref(),
+        bridge_root: web.as_deref(),
+        lib: lib.as_deref(),
+        backend: backend.as_deref(),
+        chars: chars.as_deref(),
+        pointer,
+        title: family.as_deref(),
+        window,
+        app_id: app_id.as_deref(),
+    };
+
+    match ext.as_str() {
         "bundle" => {
-            let [scene] = inputs.as_slice() else {
-                return Err("a bundle is made of one scene".into());
-            };
-            if extension(scene) != "esn" {
-                return Err(format!(
-                    "{}: a bundle is made of a scene (.esn)",
-                    scene.display()
-                ));
-            }
+            let scene = require_single_scene(&inputs, "a bundle")?;
             let compiled = page::compile(scene, chars.as_deref())?;
             std::fs::write(&out, &compiled.bundle)
                 .map_err(|e| format!("{}: {e}", out.display()))?;
@@ -205,21 +288,11 @@ fn export(args: &[String]) -> Result<String, String> {
                 compiled.modules,
                 compiled.inputs,
             );
-            for (name, read, kept) in &compiled.fonts {
-                said.push_str(&format!("\n  {name}: {read} bytes carried as {kept}"));
-            }
+            append_fonts(&mut said, &compiled.fonts);
             Ok(said)
         }
         "html" => {
-            let [scene] = inputs.as_slice() else {
-                return Err("a page is made of one scene".into());
-            };
-            if extension(scene) != "esn" {
-                return Err(format!(
-                    "{}: a page is made of a scene (.esn)",
-                    scene.display()
-                ));
-            }
+            let scene = require_single_scene(&inputs, "a page")?;
             let made = page::page_with_options(
                 scene,
                 web.as_deref().unwrap_or(Path::new(".")),
@@ -238,9 +311,90 @@ fn export(args: &[String]) -> Result<String, String> {
                 made.bundle_bytes,
                 made.runtime_bytes
             );
-            for (name, read, kept) in &made.fonts {
-                said.push_str(&format!("\n  {name}: {read} bytes carried as {kept}"));
-            }
+            append_fonts(&mut said, &made.fonts);
+            Ok(said)
+        }
+        "app" => {
+            let scene = require_single_scene(&inputs, "a macOS .app")?;
+            let made = native::macos_app(scene, &out, &native_opts)?;
+            let mut said = format!(
+                "{}: {} bytes ({} Kernel(s), {} input(s), bundle {} bytes, runner {} bytes)",
+                out.display(),
+                made.total_bytes,
+                made.modules,
+                made.inputs,
+                made.bundle_bytes,
+                made.runner_bytes
+            );
+            append_fonts(&mut said, &made.fonts);
+            Ok(said)
+        }
+        "exe" => {
+            let scene = require_single_scene(&inputs, "a Windows .exe")?;
+            let made =
+                native::packed_executable(scene, &out, native::ExeKind::WindowsPe, &native_opts)?;
+            let mut said = format!(
+                "{}: {} bytes ({} Kernel(s), {} input(s), bundle {} bytes, runner {} bytes)",
+                out.display(),
+                made.total_bytes,
+                made.modules,
+                made.inputs,
+                made.bundle_bytes,
+                made.runner_bytes
+            );
+            append_fonts(&mut said, &made.fonts);
+            Ok(said)
+        }
+        "bin" => {
+            let scene = require_single_scene(&inputs, "a standalone binary")?;
+            let made =
+                native::packed_executable(scene, &out, native::ExeKind::UnixBin, &native_opts)?;
+            let mut said = format!(
+                "{}: {} bytes ({} Kernel(s), {} input(s), bundle {} bytes, runner {} bytes)",
+                out.display(),
+                made.total_bytes,
+                made.modules,
+                made.inputs,
+                made.bundle_bytes,
+                made.runner_bytes
+            );
+            append_fonts(&mut said, &made.fonts);
+            Ok(said)
+        }
+        "ios" => {
+            let scene = require_single_scene(&inputs, "an iOS project")?;
+            let made = native::ios_project(scene, &out, &native_opts)?;
+            let mut said = format!(
+                "{}: Xcode project ({} Kernel(s), {} input(s), bundle {} bytes{})",
+                out.display(),
+                made.modules,
+                made.inputs,
+                made.bundle_bytes,
+                if made.lib_copied {
+                    ", libentelechy_ffi.a included"
+                } else {
+                    ""
+                }
+            );
+            append_fonts(&mut said, &made.fonts);
+            Ok(said)
+        }
+        "android" => {
+            let scene = require_single_scene(&inputs, "an Android project")?;
+            let made = native::android_project(scene, &out, &native_opts)?;
+            let mut said = format!(
+                "{}: Android NDK project ({} Kernel(s), {} input(s), bundle {} bytes{})",
+                out.display(),
+                made.modules,
+                made.inputs,
+                made.bundle_bytes,
+                if made.lib_copied {
+                    ", libentelechy_ffi.so included"
+                } else {
+                    ""
+                }
+            );
+            append_fonts(&mut said, &made.fonts);
             Ok(said)
         }
         "glb" => {
@@ -254,7 +408,6 @@ fn export(args: &[String]) -> Result<String, String> {
                     "png" => textures.push(input.clone()),
                     "field" => {
                         let data = read_field(input)?;
-                        // A rig's rows are told apart by layout.
                         let part = (data.domain().shape() == Shape::Rows)
                             .then(|| Part::of(data.schema()))
                             .flatten();
@@ -294,7 +447,6 @@ fn export(args: &[String]) -> Result<String, String> {
                 &texture_paths,
                 &rig_paths,
                 &clip_paths,
-                // 30 frames a second unless given, as `entelechy import`.
                 rate.unwrap_or(30) as f32,
                 &out,
                 &options,
@@ -343,7 +495,6 @@ fn export(args: &[String]) -> Result<String, String> {
             };
             let data = read_field(input)?;
             let rate = match format {
-                // A WAV input brings its rate; a .field takes the given one.
                 "wav" => rate.or_else(|| {
                     let bytes = std::fs::read(input).ok()?;
                     entelechy_formats::wav::decode(&bytes)
@@ -389,7 +540,7 @@ fn export(args: &[String]) -> Result<String, String> {
             })
         }
         other => Err(format!(
-            "`.{other}` is not a format export knows; write .glb, .wav, .mid, .png, .ttf, .otf or .woff"
+            "`.{other}` is not a format export knows; write .glb, .wav, .mid, .png, .ttf, .otf, .woff, .bundle, .html, .app, .exe, .bin, .ios or .android"
         )),
     }
 }
