@@ -33,9 +33,16 @@ entelechy-kernel = { path = "../../core/kernel" }
 entelechy-rules = { path = "../../core/rules" }
 entelechy-cpu = { path = "../../backends/cpu", optional = true }
 entelechy-gpu = { path = "../../backends/gpu" }
-entelechy-jit = { path = "../../backends/jit" }
 entelechy-formats = { path = "../../interface/formats" }
 entelechy-documents = { path = "../../interface/documents", optional = true }
+
+# iOS forbids mapping executable pages for a runtime JIT; bundled iOS apps run
+# on Metal (`entelechy-gpu`) with the interpreter beside it for small work.
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+entelechy-jit = { path = "../../backends/jit" }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+entelechy-cpu = { path = "../../backends/cpu" }
 
 [dev-dependencies]
 entelechy-import = { path = "../../interface/import", default-features = false }

@@ -8,6 +8,9 @@
 
 mod decode;
 mod encode;
+pub mod standalone;
+
+pub use standalone::{PointerMode, Standalone, pack_executable, read_trailer, unpack_trailer};
 
 use std::collections::{BTreeMap, HashMap};
 

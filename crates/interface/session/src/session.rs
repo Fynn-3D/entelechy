@@ -21,9 +21,9 @@ mod inspect;
 #[cfg(feature = "documents")]
 mod time;
 
-#[cfg(feature = "documents")]
+#[cfg(any(feature = "documents", target_os = "ios"))]
 pub(super) const BEST: &[&str] = &["gpu", "jit", "cpu"];
-#[cfg(not(feature = "documents"))]
+#[cfg(not(any(feature = "documents", target_os = "ios")))]
 pub(super) const BEST: &[&str] = &["gpu", "jit"];
 
 /// A scene, the Kernels it uses, and the runtime state built from them.
@@ -294,9 +294,9 @@ impl Session {
 
     fn opened(backend: &str, wait: entelechy_gpu::Wait) -> Result<Opened, String> {
         match backend {
-            #[cfg(feature = "documents")]
+            #[cfg(any(feature = "documents", target_os = "ios"))]
             "cpu" => Ok((Box::new(entelechy_cpu::CpuBackend), None, None)),
-            #[cfg(not(feature = "documents"))]
+            #[cfg(not(any(feature = "documents", target_os = "ios")))]
             "cpu" => Err(
                 "the interpreter backend is not included in this runtime; use gpu, jit, or best"
                     .to_owned(),
@@ -305,7 +305,7 @@ impl Session {
                 let gpu = entelechy_gpu::GpuBackend::with_wait(wait)
                     .map_err(|error| error.to_string())?;
                 let display = gpu.display();
-                Ok((Box::new(gpu), Self::jit().ok(), Some(display)))
+                Ok((Box::new(gpu), Self::ordered_beside_gpu(), Some(display)))
             }
             "jit" => Ok((Self::jit()?, None, None)),
             other => Err(format!(
@@ -315,8 +315,28 @@ impl Session {
     }
 
     /// The JIT, where the machine or a WebAssembly host runs its code.
+    #[cfg(not(target_os = "ios"))]
     fn jit() -> Result<Box<dyn Backend>, String> {
         entelechy_jit::JitBackend::new().map(|jit| Box::new(jit) as Box<dyn Backend>)
+    }
+
+    /// iOS forbids mapping executable pages for runtime-generated code.
+    #[cfg(target_os = "ios")]
+    fn jit() -> Result<Box<dyn Backend>, String> {
+        Err("the JIT is unavailable on iOS: executable memory cannot be mapped".into())
+    }
+
+    /// The processor backend kept beside a GPU for small or ordered runs.
+    fn ordered_beside_gpu() -> Option<Box<dyn Backend>> {
+        if let Ok(jit) = Self::jit() {
+            return Some(jit);
+        }
+        #[cfg(any(feature = "documents", target_os = "ios"))]
+        {
+            Some(Box::new(entelechy_cpu::CpuBackend))
+        }
+        #[cfg(not(any(feature = "documents", target_os = "ios")))]
+        None
     }
 
     /// The current graph, if the scene loaded.

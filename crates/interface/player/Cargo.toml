@@ -1,6 +1,6 @@
 [package]
 name = "entelechy-player"
-description = "Entelechy Player: a window that shows a live Graph scene and hot-reloads its Kernels"
+description = "Entelechy Player and standalone Runner: a window that plays a live scene or a compiled Bundle"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,13 +10,30 @@ rust-version.workspace = true
 # The crate has no doc tests, so `cargo test` skips the rustdoc pass.
 doctest = false
 
+[features]
+# Live `.ent`/`.esn` documents, the creation protocol server, replays, and the
+# system folder dialog. Disabled when building `entelechy-runner` alone for an
+# exported native application.
+default = ["documents"]
+documents = [
+    "entelechy-session/documents",
+    "dep:entelechy-protocol",
+    "dep:serde_json",
+    "dep:rfd",
+]
+
 [[bin]]
 name = "entelechy-player"
 path = "src/main.rs"
+required-features = ["documents"]
+
+[[bin]]
+name = "entelechy-runner"
+path = "src/runner.rs"
 
 [dependencies]
-entelechy-session = { path = "../../interface/session" }
-entelechy-protocol = { path = "../../interface/protocol" }
+entelechy-session = { path = "../../interface/session", default-features = false }
+entelechy-protocol = { path = "../../interface/protocol", optional = true }
 entelechy-kernel = { path = "../../core/kernel" }
 entelechy-gpu = { path = "../../backends/gpu" }
 entelechy-graph = { path = "../../core/graph" }
@@ -25,9 +42,9 @@ softbuffer = "0.4"
 cpal = "0.18"
 # The inverted axes in `gamepad.rs` are read from this version's database.
 gilrs = "=0.11.2"
-serde_json = "1"
+serde_json = { version = "1", optional = true }
 # The system's dialog for choosing a folder (Cmd+O).
-rfd = "0.15"
+rfd = { version = "0.15", optional = true }
 # The system's clipboard, read and written as the scene is allowed.
 arboard = { version = "3", default-features = false }
 

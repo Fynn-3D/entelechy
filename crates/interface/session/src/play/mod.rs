@@ -326,6 +326,9 @@ pub struct Play {
     shown_size: (u32, u32),
     /// The node shown instead of the graph's picture.
     preview: Option<NodeId>,
+    /// Whether developer hotkeys (F5–F10) are turned off, as in a standalone
+    /// exported app where every key belongs to the scene.
+    standalone: bool,
     hud: bool,
     stats: hud::Stats,
     panel: Option<hud::Panel>,
@@ -389,6 +392,7 @@ impl Play {
             placement: Placement::default(),
             shown_size: (0, 0),
             preview: None,
+            standalone: false,
             hud: false,
             stats: hud::Stats::default(),
             panel: None,
@@ -482,12 +486,25 @@ impl Play {
         }
     }
 
+    /// Turns developer hotkeys (F5–F10) off when `standalone` is true, so every
+    /// key reaches a shipped application's scene untouched.
+    pub fn set_standalone(&mut self, standalone: bool) {
+        self.standalone = standalone;
+    }
+
     /// A key by name (`a`, `ArrowLeft`, `F5`). F5 resets state, F6
     /// moves the preview, F10 toggles the frame-data line; F8 holds the
     /// scene's time still or lets it run, F9 steps it a frame on and F7 a
     /// frame back (while a replay plays, its inputs keep the time). Every
-    /// other key goes to the scene, Tab and Escape among them.
+    /// other key goes to the scene, Tab and Escape among them; in standalone
+    /// mode every key goes to the scene.
     pub fn key(&mut self, session: &mut Session, name: &str, down: bool) {
+        if self.standalone {
+            if let Some(code) = key_code(name) {
+                self.hold(Held::Key(code), down);
+            }
+            return;
+        }
         match name {
             "F7" | "F8" | "F9" => {
                 if down && !self.replaying() {

@@ -1,28 +1,18 @@
 //! The `entelechy-player` command: a window, sound card and pads over a live
 //! session. Frames, key meanings and the frame line are
-//! `entelechy_session::play`'s.
+//! `entelechy_session::play`'s; the window loop is `entelechy_player::window`.
 
-use std::num::NonZeroU32;
 use std::process::ExitCode;
 use std::sync::mpsc::{Receiver, channel};
-use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
 
-use entelechy_gpu::present::{Display, Overlay, Presenter};
-use entelechy_player::audio::Audio;
 use entelechy_player::gamepad::Gamepad;
-use entelechy_session::Session;
-use entelechy_session::play::{self, Frame, Placement, Play, View, hud};
-use serde_json::Value as Json;
-use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
-use winit::event::{
-    DeviceEvent, DeviceId, ElementState, Ime, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent,
+use entelechy_player::window::{
+    PointerMode, SystemClipboard, WindowConfig, WindowHooks, WindowRunner, clock,
 };
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{Key, ModifiersState};
-use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
-use winit::window::{CursorGrabMode, CursorIcon, CustomCursor, Window, WindowId};
+use entelechy_session::Session;
+use entelechy_session::play::Play;
+use serde_json::Value as Json;
+use winit::event_loop::ActiveEventLoop;
 
 const USAGE: &str = "\
 usage:
@@ -96,53 +86,17 @@ usage:
       from this machine; a page elsewhere only from an origin
       --allow-origin <origin> names (`null` for a page opened from a file).";
 
-/// The system's clipboard, opened for each read and write.
-struct SystemClipboard;
-
-impl entelechy_session::Clipboard for SystemClipboard {
-    fn text(&mut self) -> Option<String> {
-        arboard::Clipboard::new().ok()?.get_text().ok()
-    }
-
-    fn put(&mut self, text: &str) -> Result<(), String> {
-        arboard::Clipboard::new()
-            .and_then(|mut clipboard| clipboard.set_text(text.to_owned()))
-            .map_err(|e| format!("the clipboard: {e}"))
-    }
-}
-
-/// The window `window()` reads before one opens, when none was asked for.
-const DEFAULT_WINDOW: (u32, u32) = (960, 540);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PointerMode {
-    Free,
-    Hold,
-    Lock,
-}
-
 struct Options {
-    /// The session: scene, library, inputs, params, backend, limits and
-    /// allowances.
     session: entelechy_session::SessionOptions,
     scale: u32,
-    /// The window's logical size, when given; else the output's times `scale`.
     window: Option<(u32, u32)>,
     serve: bool,
     listen: Option<String>,
     origins: Vec<String>,
-    /// Leave the sound card closed even when the scene has a sound output.
     no_audio: bool,
-    /// Show what only shows from the processor while the device's compiler
-    /// builds it, instead of waiting for every Kernel before the window.
     show_while_building: bool,
-    /// A replay driving the scene frame by frame at its own times; the
-    /// person takes over when it ends.
     replay: Option<entelechy_session::replay::Replay>,
-    /// How the window grabs the system's cursor once clicked.
     pointer_mode: PointerMode,
-    /// The inputs and outputs a folder chosen with Cmd+O takes, and what
-    /// the folder is allowed besides reads.
     folder: Vec<String>,
     folder_allow: Vec<String>,
 }
@@ -213,8 +167,6 @@ fn parse(args: &[String]) -> Result<Options, String> {
             other => return Err(format!("unknown flag {other}")),
         }
     }
-    // A replay supplies scene, library and window the command line
-    // leaves unset.
     if let Some(replay) = &options.replay {
         options
             .session
@@ -236,7 +188,6 @@ fn parse(args: &[String]) -> Result<Options, String> {
     Ok(options)
 }
 
-/// The names of a comma-separated list.
 fn listed(text: &str) -> Vec<String> {
     text.split(',')
         .map(str::trim)
@@ -245,103 +196,117 @@ fn listed(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// The window's clock: seconds since the Player started.
-fn clock() -> f64 {
-    static START: OnceLock<Instant> = OnceLock::new();
-    START.get_or_init(Instant::now).elapsed().as_secs_f64()
-}
-
-struct Player {
-    session: Session,
-    play: Play,
-    scale: u32,
-    /// The logical size the window opens at, when asked for; also what
-    /// `window()` reads before the window exists.
-    requested: Option<(u32, u32)>,
-    window: Option<Arc<Window>>,
-    surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
-    /// The backend's device, when it has one to present from.
-    display: Option<Display>,
-    /// The GPU presenter, when the backend is the GPU and the surface is
-    /// configured; it shows frames without readback.
-    presenter: Option<Presenter>,
-    last_frame: Option<entelechy_kernel::Image>,
-    last_size: (u32, u32),
-    /// Protocol requests arriving from stdin or a socket, when serving.
+struct DevHooks {
     requests: Option<Receiver<entelechy_protocol::Incoming>>,
-    /// The answers owed, including a `compose` or `publish` waiting for
-    /// its change to stand while frames continue.
     answers: entelechy_protocol::Answers,
-    /// The sound card, opened when a scene has a sound-shaped output.
-    audio: Option<Audio>,
-    /// The gamepads, when the system offers them.
-    gamepad: Option<Gamepad>,
-    audio_allowed: bool,
-    audio_failed: bool,
-    /// The pointer's look a frame asked for, worn once the event loop is
-    /// at hand ([`Player::wear`]).
-    pointer_look: Option<play::PointerLook>,
-    /// How the pointer is grabbed once the window is clicked, where the
-    /// system's cursor last was, the held pointer while grabbed
-    /// ([`entelechy_player::pointer`]), and the click that grabbed a lock.
-    pointer_mode: PointerMode,
-    cursor: (f64, f64),
-    held: Option<(f64, f64)>,
-    swallowed_button: Option<MouseButton>,
-    /// The modifiers held: a key's text with Control or Command is a
-    /// shortcut, not typing.
-    modifiers: ModifiersState,
-    /// Whether an input method is composing: the keys go to it, and its
-    /// commit is the text typed.
-    composing: bool,
-    /// The inputs and outputs a folder chosen with Cmd+O takes, and what
-    /// it is allowed besides reads (`--folder`, `--folder-allow`).
     folder: Vec<String>,
     folder_allow: Vec<String>,
 }
 
-impl entelechy_protocol::Served for Player {
-    fn session(&mut self) -> &mut Session {
-        &mut self.session
+impl WindowHooks for DevHooks {
+    fn initial_title(&self) -> &str {
+        "Entelechy Player"
     }
 
-    /// `evaluate` runs one window frame under the person's input;
-    /// measured, each of its nodes waits for the device.
+    fn title(&self, session: &Session) -> String {
+        let name = session
+            .graph()
+            .map(|graph| graph.name.clone())
+            .unwrap_or_else(|| "no scene".into());
+        let folder = session
+            .chosen_folder()
+            .and_then(|dir| dir.file_name())
+            .map(|name| format!(" — {}", name.to_string_lossy()))
+            .unwrap_or_default();
+        format!("Entelechy Player: {name}{folder}")
+    }
+
+    fn poll_pending(runner: &mut WindowRunner<Self>, event_loop: &ActiveEventLoop) {
+        let Some(requests) = &runner.hooks.requests else {
+            return;
+        };
+        let pending: Vec<entelechy_protocol::Incoming> =
+            std::iter::from_fn(|| requests.try_recv().ok()).collect();
+        if !pending.is_empty() || runner.hooks.answers.is_waiting() {
+            runner.confirm();
+        }
+        let mut answers = std::mem::take(&mut runner.hooks.answers);
+        let quit = {
+            let mut served = ServedRunner(runner);
+            let mut q = answers.poll(&mut served);
+            for incoming in pending {
+                q |= answers.answer(&mut served, incoming);
+            }
+            q
+        };
+        runner.hooks.answers = answers;
+        if quit {
+            event_loop.exit();
+        }
+    }
+
+    fn wants_folder(&self) -> bool {
+        !self.folder.is_empty()
+    }
+
+    fn choose_folder(&mut self, session: &mut Session) -> bool {
+        let Some(dir) = rfd::FileDialog::new()
+            .set_title("Choose a folder for the scene")
+            .pick_folder()
+        else {
+            return false;
+        };
+        match session.choose_folder(&self.folder, &dir, &self.folder_allow) {
+            Ok(()) => {
+                eprintln!("folder: {}", dir.display());
+                true
+            }
+            Err(why) => {
+                eprintln!("folder {}: {why}", dir.display());
+                false
+            }
+        }
+    }
+}
+
+struct ServedRunner<'a>(&'a mut WindowRunner<DevHooks>);
+
+impl entelechy_protocol::Served for ServedRunner<'_> {
+    fn session(&mut self) -> &mut Session {
+        &mut self.0.session
+    }
+
     fn own(&mut self, incoming: &entelechy_protocol::Incoming) -> Option<(String, bool)> {
         let (id, request) = incoming.parsed.as_ref().ok()?;
-        // The window's clock: held, let run, stepped.
         if request.get("op").and_then(Json::as_str) == Some("pause") {
             if let Err(error) = entelechy_protocol::ops::check(request) {
                 return Some((entelechy_protocol::envelope(id, Err(error)), false));
             }
             if let Some(paused) = request.get("paused").and_then(Json::as_bool) {
-                self.play.pause(paused);
+                self.0.play.pause(paused);
             }
             if let Some(step) = request.get("step").and_then(Json::as_i64) {
-                self.play.step(step.clamp(-100_000, 100_000) as i32);
+                self.0.play.step(step.clamp(-100_000, 100_000) as i32);
             }
-            self.say();
+            self.0.say();
             let answer =
-                serde_json::json!({ "paused": self.play.paused(), "time": self.play.time() });
+                serde_json::json!({ "paused": self.0.play.paused(), "time": self.0.play.time() });
             return Some((entelechy_protocol::envelope(id, Ok(answer)), false));
         }
         if request.get("op").and_then(Json::as_str) != Some("evaluate") {
             return None;
         }
         let measured = entelechy_protocol::measure_asked(request);
-        self.session.set_measured(measured);
-        let frame = self.frame();
+        self.0.session.set_measured(measured);
+        let frame = self.0.frame();
         if measured {
-            self.session.set_measured(false);
+            self.0.session.set_measured(false);
         }
-        // The frame answered is confirmed: what it committed holds. Its
-        // input and clock are the person's; context the request gave is
-        // named as not read, so a caller is not misled.
         let ignored = entelechy_protocol::context_given(request);
         let result = match frame {
-            Some(report) if self.confirm() => {
+            Some(report) if self.0.confirm() => {
                 let mut answer =
-                    entelechy_protocol::evaluation_json(&self.session, &report, measured);
+                    entelechy_protocol::evaluation_json(&self.0.session, &report, measured);
                 if !ignored.is_empty() {
                     answer["ignored"] = serde_json::json!(ignored);
                     answer["note"] = serde_json::json!(
@@ -350,571 +315,9 @@ impl entelechy_protocol::Served for Player {
                 }
                 Ok(answer)
             }
-            _ => Err(serde_json::json!({ "message": self.play.status() })),
+            _ => Err(serde_json::json!({ "message": self.0.play.status() })),
         };
         Some((entelechy_protocol::envelope(id, result), false))
-    }
-}
-
-impl Player {
-    /// The window's physical size and scale factor (before it opens, the
-    /// requested size at scale one, or the default), and the sound rate.
-    fn view(&self) -> View {
-        let (window, scale) = match &self.window {
-            Some(window) => {
-                let size = window.inner_size();
-                (
-                    [size.width as f32, size.height as f32],
-                    window.scale_factor() as f32,
-                )
-            }
-            None => {
-                let (w, h) = self.requested.unwrap_or(DEFAULT_WINDOW);
-                ([w as f32, h as f32], 1.0)
-            }
-        };
-        View {
-            window,
-            scale,
-            rate: self.audio.as_ref().map_or(0.0, |audio| audio.rate() as f32),
-            queued: self.audio.as_ref().map_or(0, Audio::queued),
-        }
-    }
-
-    /// Whether the sound device is still playing the last block; it then
-    /// paces the next evaluation.
-    fn device_is_ahead(&self) -> bool {
-        self.audio.as_ref().is_some_and(|audio| !audio.has_room())
-    }
-
-    /// Prints what the play has to say.
-    fn say(&mut self) {
-        for line in self.play.said() {
-            eprintln!("{line}");
-        }
-    }
-
-    /// Confirms the frame in flight; one found failed is taken back, and
-    /// its sound is not heard.
-    fn confirm(&mut self) -> bool {
-        let confirmed = self.play.confirm(&mut self.session);
-        self.say();
-        confirmed
-    }
-
-    fn frame(&mut self) -> Option<entelechy_graph::Report> {
-        if let Some(gamepad) = &mut self.gamepad {
-            gamepad.poll(&mut self.play);
-        }
-        let view = self.view();
-        let frame = self.play.frame(&mut self.session, view);
-        self.say();
-        match frame {
-            Frame::Wait => None,
-            Frame::Failed => {
-                let placement = self.blit();
-                self.play.landed(placement, self.last_size);
-                None
-            }
-            Frame::Shown(shown) => {
-                let presenting = clock();
-                let (placement, path, downloaded) = self.show(shown.picture);
-                self.play.placed(
-                    placement,
-                    self.last_size,
-                    path,
-                    downloaded,
-                    clock() - presenting,
-                );
-                self.sound(shown.sound);
-                if let Some(look) = self.play.pointer_look(&mut self.session, &shown.report) {
-                    self.pointer_look = Some(look);
-                }
-                Some(shown.report)
-            }
-        }
-    }
-
-    /// Answers protocol requests arrived since the last frame; `evaluate`
-    /// runs a window frame, the rest go to the shared handler.
-    fn serve_pending(&mut self, event_loop: &ActiveEventLoop) {
-        let Some(requests) = &self.requests else {
-            return;
-        };
-        let pending: Vec<entelechy_protocol::Incoming> =
-            std::iter::from_fn(|| requests.try_recv().ok()).collect();
-        // A request sees what the last frame left, confirmed.
-        if !pending.is_empty() || self.answers.is_waiting() {
-            self.confirm();
-        }
-        // Waiting answers first, then new requests; a quit on standard
-        // input closes the window.
-        let mut answers = std::mem::take(&mut self.answers);
-        let mut quit = answers.poll(self);
-        for incoming in pending {
-            quit |= answers.answer(self, incoming);
-        }
-        self.answers = answers;
-        if quit {
-            event_loop.exit();
-        }
-    }
-
-    /// Shows a picture from the device when resident and presentable,
-    /// else by download and blit. Returns placement, path, and whether it
-    /// downloaded.
-    fn show(
-        &mut self,
-        output: entelechy_kernel::Handle,
-    ) -> (Option<Placement>, &'static str, bool) {
-        if let (Some(window), Some(presenter)) = (&self.window, &mut self.presenter) {
-            // What the device cannot show as it lies downloads (widened)
-            // and is drawn or refused below.
-            if let Some((device, width, height)) = self.session.on_device(output) {
-                let size = window.inner_size();
-                if let Some(display) = &self.display {
-                    let overlay = self.play.panel().map(|panel| Overlay {
-                        pixels: &panel.pixels,
-                        width: panel.width,
-                        height: panel.height,
-                    });
-                    match display.present(
-                        presenter,
-                        device,
-                        width,
-                        height,
-                        size.width,
-                        size.height,
-                        overlay,
-                    ) {
-                        Ok(Some(placement)) => {
-                            self.last_size = (width, height);
-                            return (Some(placement), "presented on the device", false);
-                        }
-                        Ok(None) => {
-                            self.last_size = (width, height);
-                            return (None, "window not ready", false);
-                        }
-                        Err(error) => eprintln!("present failed: {error}; downloading instead"),
-                    }
-                }
-            }
-        }
-        let downloaded = match self.session.picture(output) {
-            Ok(image) => {
-                self.last_size = (image.width(), image.height());
-                self.last_frame = Some(image);
-                true
-            }
-            Err(_) => false,
-        };
-        (self.blit(), "downloaded and blitted", downloaded)
-    }
-
-    /// Hands the frame's sound output to the sound card, opening it on
-    /// first use.
-    fn sound(&mut self, sound: Option<entelechy_kernel::Handle>) {
-        if !self.audio_allowed || self.audio_failed {
-            return;
-        }
-        let Some(handle) = sound else {
-            return;
-        };
-        let (frames, words_per_frame) = {
-            let host = self.session.runtime().host();
-            (
-                host.domain(handle).map(|d| d.count()).unwrap_or(0),
-                host.schema(handle).map(|s| s.value_words()).unwrap_or(0),
-            )
-        };
-        if self.audio.is_none() {
-            match Audio::open(frames) {
-                Ok(audio) => {
-                    eprintln!("audio: {}", audio.describe());
-                    self.play.sound_opened(audio.describe());
-                    self.audio = Some(audio);
-                }
-                Err(error) => {
-                    eprintln!("audio unavailable: {error}");
-                    self.audio_failed = true;
-                    return;
-                }
-            }
-        }
-        // Materializing is the observation boundary: on the frame thread,
-        // never in the device callback ([`Play::heard`]).
-        let Some(words) = self.play.heard(&mut self.session, handle) else {
-            return;
-        };
-        if let Some(audio) = &mut self.audio {
-            audio.push(&words, words_per_frame);
-        }
-    }
-
-    fn update_title(&self) {
-        if let Some(window) = &self.window {
-            let name = self
-                .session
-                .graph()
-                .map(|graph| graph.name.clone())
-                .unwrap_or_else(|| "no scene".into());
-            let folder = self
-                .session
-                .chosen_folder()
-                .and_then(|dir| dir.file_name())
-                .map(|name| format!(" — {}", name.to_string_lossy()))
-                .unwrap_or_default();
-            window.set_title(&format!("Entelechy Player: {name}{folder}"));
-        }
-    }
-
-    /// The system's dialog for a folder, and the scene's `--folder`
-    /// inputs and outputs placed in the one chosen, with the
-    /// `--folder-allow` grants there; canceled, nothing changes.
-    fn choose_folder(&mut self) {
-        let Some(dir) = rfd::FileDialog::new()
-            .set_title("Choose a folder for the scene")
-            .pick_folder()
-        else {
-            return;
-        };
-        match self
-            .session
-            .choose_folder(&self.folder, &dir, &self.folder_allow)
-        {
-            Ok(()) => {
-                eprintln!("folder: {}", dir.display());
-                self.update_title();
-            }
-            Err(why) => eprintln!("folder {}: {why}", dir.display()),
-        }
-    }
-
-    /// Draws the last downloaded picture and the frame line over it;
-    /// returns where it landed.
-    fn blit(&mut self) -> Option<Placement> {
-        if self.presenter.is_some() && self.last_frame.is_none() {
-            return None;
-        }
-        let (Some(window), Some(surface)) = (&self.window, &mut self.surface) else {
-            return None;
-        };
-        let size = window.inner_size();
-        let (Some(width), Some(height)) =
-            (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
-        else {
-            return None;
-        };
-        if surface.resize(width, height).is_err() {
-            return None;
-        }
-        let Ok(mut buffer) = surface.buffer_mut() else {
-            return None;
-        };
-        let pixels = self
-            .last_frame
-            .as_ref()
-            .map_or(&[][..], entelechy_kernel::Image::pixels);
-        let placement = play::present(
-            pixels,
-            self.last_size.0,
-            self.last_size.1,
-            size.width,
-            size.height,
-            &mut buffer,
-        );
-        if let Some(panel) = self.play.panel() {
-            hud::stamp(panel, &mut buffer, size.width, size.height);
-        }
-        let _ = buffer.present();
-        Some(placement)
-    }
-}
-
-impl Player {
-    /// The system's pointer over the window made the look the scene last
-    /// asked for ([`play::PointerLook`]): its picture, or the system's own.
-    fn wear(&mut self, event_loop: &ActiveEventLoop) {
-        let (Some(window), Some(look)) = (&self.window, self.pointer_look.take()) else {
-            return;
-        };
-        match look {
-            play::PointerLook::System => window.set_cursor(CursorIcon::Default),
-            play::PointerLook::Picture {
-                width,
-                height,
-                rgba,
-                hotspot,
-            } => {
-                // `PointerLook` holds a side to `POINTER_MOST`, within a u16.
-                let side = |n: u32| n as u16;
-                match CustomCursor::from_rgba(
-                    rgba,
-                    side(width),
-                    side(height),
-                    side(hotspot.0),
-                    side(hotspot.1),
-                ) {
-                    Ok(source) => window.set_cursor(event_loop.create_custom_cursor(source)),
-                    Err(error) => eprintln!("pointer refused by the system: {error}"),
-                }
-            }
-        }
-    }
-
-    /// The pointer held: the system's cursor locked (or, where it cannot
-    /// be, confined) and hidden, the held pointer where it was.
-    fn hold(&mut self) {
-        let Some(window) = &self.window else { return };
-        let locked = window
-            .set_cursor_grab(CursorGrabMode::Locked)
-            .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined));
-        if locked.is_ok() {
-            window.set_cursor_visible(false);
-            if self.pointer_mode == PointerMode::Lock {
-                window.set_ime_allowed(false);
-                self.composing = false;
-            }
-            self.held = Some(self.cursor);
-        }
-    }
-
-    /// The pointer let go: the system's cursor free and shown where the
-    /// held one was.
-    fn let_go(&mut self) {
-        let (Some(at), Some(window)) = (self.held.take(), &self.window) else {
-            return;
-        };
-        let _ = window.set_cursor_grab(CursorGrabMode::None);
-        let _ = window.set_cursor_position(winit::dpi::PhysicalPosition::new(at.0, at.1));
-        window.set_cursor_visible(true);
-        if self.pointer_mode == PointerMode::Lock {
-            window.set_ime_allowed(true);
-        }
-        self.cursor = at;
-    }
-}
-
-impl ApplicationHandler for Player {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() {
-            return;
-        }
-        let (width, height) = if self.last_size == (0, 0) {
-            (256, 256)
-        } else {
-            self.last_size
-        };
-        let (logical_width, logical_height) = self
-            .requested
-            .unwrap_or((width * self.scale, height * self.scale));
-        let attributes = Window::default_attributes()
-            .with_title("Entelechy Player")
-            .with_inner_size(LogicalSize::new(logical_width, logical_height));
-        let window = match event_loop.create_window(attributes) {
-            Ok(window) => Arc::new(window),
-            Err(error) => {
-                eprintln!("cannot create a window: {error}");
-                event_loop.exit();
-                return;
-            }
-        };
-        let size = window.inner_size();
-        if let Some(display) = &self.display {
-            match display.presenter(window.clone(), size.width, size.height) {
-                Ok(presenter) => {
-                    self.presenter = Some(presenter);
-                    eprintln!("presenting on the device");
-                }
-                Err(error) => eprintln!("device presentation unavailable ({error}); blitting"),
-            }
-        }
-        if self.presenter.is_none() {
-            let context = softbuffer::Context::new(window.clone());
-            let surface =
-                context.and_then(|context| softbuffer::Surface::new(&context, window.clone()));
-            match surface {
-                Ok(surface) => self.surface = Some(surface),
-                Err(error) => {
-                    eprintln!("cannot present to the window: {error}");
-                    event_loop.exit();
-                    return;
-                }
-            }
-        }
-        // Input methods (Chinese among them) commit text to `typed()`.
-        window.set_ime_allowed(true);
-        self.window = Some(window);
-        self.update_title();
-    }
-
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::CursorMoved { position, .. } => {
-                self.cursor = (position.x, position.y);
-                if self.held.is_none() && self.pointer_mode != PointerMode::Lock {
-                    self.play.pointer(position.x as f32, position.y as f32);
-                }
-            }
-            // Out of the focus, a held pointer and every held key and
-            // button are let go: their releases go to the window that has it.
-            WindowEvent::Focused(false) => {
-                self.swallowed_button = None;
-                self.let_go();
-                self.play.release_all();
-            }
-            WindowEvent::MouseInput { state, button, .. } => {
-                let held = state == ElementState::Pressed;
-                if held && self.pointer_mode != PointerMode::Free && self.held.is_none() {
-                    self.hold();
-                    if self.pointer_mode == PointerMode::Lock && !self.play.replaying() {
-                        self.swallowed_button = Some(button);
-                        return;
-                    }
-                }
-                if !held && self.swallowed_button == Some(button) {
-                    self.swallowed_button = None;
-                    return;
-                }
-                match button {
-                    MouseButton::Left => self.play.button(0, held),
-                    MouseButton::Right => self.play.button(1, held),
-                    MouseButton::Middle => self.play.button(2, held),
-                    _ => {}
-                }
-            }
-            // The wheel accumulates until the next evaluation reads it.
-            WindowEvent::MouseWheel { delta, .. } => {
-                let (x, y) = match delta {
-                    MouseScrollDelta::LineDelta(x, y) => (x, y),
-                    MouseScrollDelta::PixelDelta(p) => (p.x as f32 / 40.0, p.y as f32 / 40.0),
-                };
-                self.play.wheel(x, y);
-            }
-            // The modifiers as the system has them: one released while
-            // another window had the focus is let go here too.
-            WindowEvent::ModifiersChanged(modifiers) => {
-                self.modifiers = modifiers.state();
-                let m = self.modifiers;
-                self.play
-                    .modifiers(m.shift_key(), m.control_key(), m.alt_key(), m.super_key());
-            }
-            // Text comes from a key, held keys repeating, unless an input
-            // method is composing or the key is a shortcut; else from what
-            // the input method commits.
-            WindowEvent::Ime(Ime::Preedit(text, _)) => self.composing = !text.is_empty(),
-            WindowEvent::Ime(Ime::Commit(text)) => {
-                self.composing = false;
-                self.play.typed(&text);
-            }
-            WindowEvent::Ime(Ime::Disabled) => self.composing = false,
-            WindowEvent::KeyboardInput { event, .. } => {
-                // The key pressed, as the keyboard has it without the
-                // modifiers held: Option+Z is Z, not the Ω it types.
-                let logical_key = event.key_without_modifiers();
-                let KeyEvent {
-                    state,
-                    repeat,
-                    text,
-                    ..
-                } = event;
-                let down = state == ElementState::Pressed;
-                let shortcut = self.modifiers.control_key() || self.modifiers.super_key();
-                // Cmd+O (Ctrl+O off macOS) chooses a folder, where the
-                // scene names what one takes; the scene never sees it.
-                let opener = if cfg!(target_os = "macos") {
-                    self.modifiers.super_key()
-                } else {
-                    self.modifiers.control_key()
-                };
-                if !self.folder.is_empty()
-                    && opener
-                    && matches!(&logical_key, Key::Character(c) if c.eq_ignore_ascii_case("o"))
-                {
-                    if down && !repeat {
-                        self.choose_folder();
-                    }
-                    return;
-                }
-                if down
-                    && !self.composing
-                    && !shortcut
-                    && let Some(text) = &text
-                {
-                    self.play.typed(text);
-                }
-                if repeat {
-                    return;
-                }
-                let name = match logical_key {
-                    Key::Named(named) => format!("{named:?}"),
-                    Key::Character(text) => text.to_string(),
-                    _ => return,
-                };
-                if down
-                    && name == "Escape"
-                    && self.pointer_mode == PointerMode::Lock
-                    && self.held.is_some()
-                {
-                    self.swallowed_button = None;
-                    self.let_go();
-                    self.play.release_all();
-                    return;
-                }
-                self.play.key(&mut self.session, &name, down);
-                self.say();
-            }
-            WindowEvent::RedrawRequested => {
-                // With sound, a block is produced when the ring can take
-                // it: the device paces evaluation.
-                if self.device_is_ahead() {
-                    std::thread::sleep(Duration::from_millis(1));
-                } else {
-                    self.frame();
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// A grabbed pointer moves by the mouse's own motion: kept inside the
-    /// window under `--hold-pointer`, unbounded under `--lock-pointer`.
-    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
-        let (Some(at), Some(window)) = (self.held, &self.window) else {
-            return;
-        };
-        if let DeviceEvent::MouseMotion { delta } = event {
-            let scale = window.scale_factor();
-            if self.pointer_mode == PointerMode::Lock {
-                self.play
-                    .move_pointer((delta.0 * scale) as f32, (delta.1 * scale) as f32);
-            } else {
-                let size = window.inner_size();
-                let next = entelechy_player::pointer::held_step(
-                    at,
-                    delta,
-                    scale,
-                    (size.width, size.height),
-                );
-                self.held = Some(next);
-                self.play.pointer(next.0 as f32, next.1 as f32);
-            }
-        }
-    }
-
-    /// The frame in flight is confirmed before the window goes, so what it
-    /// writes to files is written.
-    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        self.confirm();
-    }
-
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        self.serve_pending(event_loop);
-        self.wear(event_loop);
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
     }
 }
 
@@ -957,8 +360,6 @@ fn main() -> ExitCode {
             None => "unavailable",
         }
     );
-    // A replay that lets its scene write keeps what it writes for the
-    // play alone.
     let store = match &options.replay {
         Some(replay) => entelechy_session::replay::store_for(replay, options.session.store()),
         None => options.session.store(),
@@ -980,21 +381,13 @@ fn main() -> ExitCode {
         }
     };
     session.give_clipboard(Box::new(SystemClipboard));
-    // A served scene's reads are held to its documents' directories and
-    // the person's allowances, fixed before the scene is first read.
     if options.serve
         && let Err(error) = session.restrict_reads()
     {
         eprintln!("error: {error}");
         return ExitCode::FAILURE;
     }
-    // The window opens on a scene whose every Kernel is built, so play
-    // starts smooth; asked, what only shows is shown from the processor
-    // while the device's compiler builds it, but for a replay played
-    // here, which waits as its test does.
     session.show_while_building(options.show_while_building && options.replay.is_none());
-    // The first load prepares before the window opens, its Kernels seen
-    // preparing in the terminal; replacements prepare off the frame.
     let events = {
         let _watch = entelechy_session::watch::watch(session.progress());
         session.sync()
@@ -1003,37 +396,8 @@ fn main() -> ExitCode {
         eprintln!("{event}");
     }
     session.set_background(true);
-    let mut player = Player {
-        session,
-        play: Play::new(clock),
-        scale: options.scale,
-        requested: options.window,
-        window: None,
-        surface: None,
-        display,
-        presenter: None,
-        last_frame: None,
-        last_size: (0, 0),
-        requests: None,
-        answers: entelechy_protocol::Answers::new(),
-        audio: None,
-        gamepad,
-        audio_allowed: !options.no_audio,
-        audio_failed: false,
-        pointer_look: None,
-        pointer_mode: options.pointer_mode,
-        cursor: (0.0, 0.0),
-        held: None,
-        swallowed_button: None,
-        modifiers: ModifiersState::empty(),
-        composing: false,
-        folder: options.folder.clone(),
-        folder_allow: options.folder_allow.clone(),
-    };
-    if let Some(replay) = &options.replay {
-        player.play.replay(replay, &mut player.session);
-        player.say();
-    }
+
+    let mut requests = None;
     if options.serve {
         let (sender, receiver) = channel();
         if let Some(address) = &options.listen {
@@ -1050,41 +414,43 @@ fn main() -> ExitCode {
             eprintln!("error: cannot read standard input: {error}");
             return ExitCode::FAILURE;
         }
-        player.requests = Some(receiver);
+        requests = Some(receiver);
         eprintln!("serving the creation protocol on stdin/stdout");
     }
-    // Evaluate once so the window opens at the output size; a replay
-    // owns its window and every frame, so it skips this.
-    let context = player.play.context(player.view());
-    let probed = (!player.play.replaying()).then(|| player.session.evaluate(&context));
+
+    let hooks = DevHooks {
+        requests,
+        answers: entelechy_protocol::Answers::new(),
+        folder: options.folder,
+        folder_allow: options.folder_allow,
+    };
+    let config = WindowConfig {
+        scale: options.scale,
+        requested: options.window,
+        pointer_mode: options.pointer_mode,
+        audio_allowed: !options.no_audio,
+    };
+    let mut runner = WindowRunner::new(session, Play::new(clock), display, gamepad, config, hooks);
+    if let Some(replay) = &options.replay {
+        runner.play.replay(replay, &mut runner.session);
+        runner.say();
+    }
+    let context = runner.play.context(runner.view());
+    let probed = (!runner.play.replaying()).then(|| runner.session.evaluate(&context));
     match probed {
         Some(Ok(report)) => {
-            if let Ok((width, height)) = player.session.runtime().host().image_size(report.output) {
-                player.last_size = (width, height);
+            if let Ok((width, height)) = runner.session.runtime().host().image_size(report.output) {
+                runner.last_size = (width, height);
             }
         }
         Some(Err(error)) => {
-            let told = player.session.told(&error);
+            let told = runner.session.told(&error);
             eprintln!("evaluation failed: {told}; the window opens when it succeeds");
-            if let Some(place) = player.session.failure_place(&error, &context) {
+            if let Some(place) = runner.session.failure_place(&error, &context) {
                 eprintln!("  the failing operation is written at {place}");
             }
         }
         None => {}
     }
-    let event_loop = match EventLoop::new() {
-        Ok(event_loop) => event_loop,
-        Err(error) => {
-            eprintln!("error: cannot start the event loop: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-    event_loop.set_control_flow(ControlFlow::Poll);
-    match event_loop.run_app(&mut player) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("error: {error}");
-            ExitCode::FAILURE
-        }
-    }
+    runner.run()
 }
