@@ -581,7 +581,8 @@ impl Emitter<'_> {
             } => {
                 self.line(depth, &format!("var v{}: {ty_name} = {};", id.0, v(init)));
                 let limit = match bound {
-                    Some(bound) => format!("clamp({}, 0i, {count}i)", v(bound)),
+                    Some(bound) => format!("clamp({}, 0i, {count}i * i32({OPAQUE_ONE}))", v(bound)),
+                    None if *count >= 2 => format!("({count}i * i32({OPAQUE_ONE}))"),
                     None => format!("{count}i"),
                 };
                 // The counter is `it<id>`, which never spells a WGSL type.
@@ -623,10 +624,15 @@ impl Emitter<'_> {
                 // The array a variable, each run of the body writing its
                 // element at the counter's place.
                 self.line(depth, &format!("var v{}: {ty_name};", id.0));
+                let limit = if *count >= 2 {
+                    format!("({count}i * i32({OPAQUE_ONE}))")
+                } else {
+                    format!("{count}i")
+                };
                 self.line(
                     depth,
                     &format!(
-                        "for (var it{0}: i32 = 0; it{0} < {count}i; it{0} = it{0} + 1) {{",
+                        "for (var it{0}: i32 = 0; it{0} < {limit}; it{0} = it{0} + 1) {{",
                         id.0
                     ),
                 );

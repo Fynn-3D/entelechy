@@ -975,7 +975,12 @@ pub(crate) fn rasterize(
     let est_ops = u64::from(triangle_count)
         .saturating_mul(64)
         .saturating_add(pixels.saturating_mul(16));
-    if gpu.wait.parks_with_host() && !gpu.measured() && gpu.page_queue.full(pixels, est_ops) {
+    if gpu.wait.parks_with_host()
+        && !gpu.measured()
+        && gpu
+            .page_queue
+            .full(pixels, est_ops, gpu.page_pace_ops_budget())
+    {
         gpu.drain_page()?;
     }
     let keys = scratch(

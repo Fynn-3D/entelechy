@@ -37,6 +37,7 @@ pub(crate) struct BundledScene {
     pub(super) save_store: Option<(Arc<dyn Store>, PathBuf)>,
     pub(super) said: Vec<String>,
     pub(super) failed: Option<String>,
+    pub(super) needs_compute_gpu: bool,
 }
 
 pub(super) struct PendingBundle {
@@ -72,6 +73,69 @@ fn put_on_device(runtime: &mut Runtime, handle: Handle) -> bool {
             .is_ok_and(|bytes| bytes.host >= COPY_LEAST)
         && runtime.upload(handle).unwrap_or(false)
         && runtime.host_mut().let_go_of_copy(handle).is_ok()
+}
+
+fn bundle_needs_compute_gpu(
+    graph: &Graph,
+    handles: &BTreeMap<String, Handle>,
+    validated: &[entelechy_ir::Validated],
+) -> bool {
+    let by_id: BTreeMap<&KernelId, &entelechy_ir::Validated> =
+        validated.iter().map(|m| (&m.manifest.id, m)).collect();
+    let output_seeds = graph.outputs.iter().filter_map(|(_, source)| match source {
+        Source::Node { node, .. } => Some(node.clone()),
+        Source::External(_) => None,
+    });
+    let fallback_seeds = graph
+        .fallbacks
+        .iter()
+        .filter(|(name, _)| !handles.contains_key(name))
+        .filter_map(|(_, source)| match source {
+            Source::Node { node, .. } => Some(node.clone()),
+            Source::External(_) => None,
+        });
+    let reached = graph.read_through(output_seeds.chain(fallback_seeds));
+    let mut seen = BTreeSet::new();
+    let mut has_native_raster = false;
+    let mut has_non_map = false;
+    let mut sum_typical = 0u64;
+    for node in &graph.nodes {
+        if !reached.contains(&node.id) {
+            continue;
+        }
+        let Some(module) = by_id.get(&node.kernel).copied() else {
+            if node.kernel.name() == "native.rasterize" || node.kernel.name() == "native.cover" {
+                has_native_raster = true;
+            }
+            continue;
+        };
+        let manifest = &module.manifest;
+        if matches!(manifest.mode, entelechy_ir::Mode::Group { .. }) {
+            return true;
+        }
+        if !matches!(
+            manifest.mode,
+            entelechy_ir::Mode::Map | entelechy_ir::Mode::Scan
+        ) {
+            has_non_map = true;
+        }
+        if manifest
+            .inputs
+            .iter()
+            .chain(&manifest.outputs)
+            .any(|port| port.shape() == entelechy_abi::Shape::Volume)
+        {
+            return true;
+        }
+        if seen.insert(manifest.id.clone()) {
+            let typ = module.typical_work();
+            if typ > 6_000 {
+                return true;
+            }
+            sum_typical = sum_typical.saturating_add(typ);
+        }
+    }
+    sum_typical > 20_000 || (has_native_raster && (reached.len() > 24 || has_non_map))
 }
 
 fn shape_progress(graph: &Graph) -> (Vec<KernelId>, Vec<(usize, usize)>) {
@@ -274,6 +338,7 @@ impl Session {
         } else {
             Vec::new()
         };
+        let needs_compute_gpu = bundle_needs_compute_gpu(&graph, &handles, validated);
         let mut session = Self::from_backing(
             runtime,
             Backing::Bundled(Box::new(BundledScene {
@@ -290,6 +355,7 @@ impl Session {
                 save_store: None,
                 said: Vec::new(),
                 failed: None,
+                needs_compute_gpu,
             })),
         );
         session.copies_let_go.extend(on_device);

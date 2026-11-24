@@ -83,7 +83,7 @@ pub(crate) const LONG_HELPERS: &str = "
 fn udivmod_u64(n: u64, d: u64) -> vec2<u64> {
     var q: u64 = 0lu;
     var r: u64 = 0lu;
-    for (var i: i32 = 63; i >= 0; i = i - 1) {
+    for (var i: i32 = 63 * i32(ctx[5].z); i >= 0; i = i - 1) {
         r = (r << 1u) | ((n >> u32(i)) & 1lu);
         if (r >= d) {
             r = r - d;
@@ -330,7 +330,7 @@ fn sar_i64(a: i64, count: u32) -> i64 {
 fn udivmod_pair(n: i64, d: i64) -> vec4<u32> {
     var q = vec2<u32>(0u, 0u);
     var r = vec2<u32>(0u, 0u);
-    for (var i: i32 = 63; i >= 0; i = i - 1) {
+    for (var i: i32 = 63 * i32(ctx[5].z); i >= 0; i = i - 1) {
         r = shl_i64(r, 1u) | (shr_ulong(n, u32(i)) & vec2<u32>(1u, 0u));
         if (!ulong_lt(r, d)) {
             r = sub_wrap_i64(r, d);

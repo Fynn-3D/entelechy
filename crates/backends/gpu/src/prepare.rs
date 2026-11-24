@@ -239,7 +239,15 @@ impl Shader {
                 // A page's browser compiles it first, beside the thread that
                 // answers the device; elsewhere the device does by itself.
                 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-                crate::page::compile_beside(device, wait, &self.label, &self.source, &self.entries);
+                if let Err(error) = crate::page::compile_beside(
+                    device,
+                    wait,
+                    &self.label,
+                    &self.source,
+                    &self.entries,
+                ) {
+                    return Err(Unbuilt::Device(error));
+                }
                 let scopes = Scopes::push(device);
                 let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some(&self.label),
@@ -466,21 +474,30 @@ impl Lazy {
                     Ok(pipeline) => Ok((pipeline, kept)),
                     Err(Unbuilt::Ours(error)) => Err(crate::told(&self.heard, error)),
                     Err(Unbuilt::Device(error)) => {
+                        let had_device_loss = self.heard.lock().is_ok_and(|h| !h.is_empty())
+                            || error.contains("device was lost")
+                            || error.contains("Instance reference no longer exists");
                         let error = crate::told(&self.heard, error);
-                        // Its most particular line, the last, said shortly.
-                        let last = error
-                            .lines()
-                            .rev()
-                            .find(|line| !line.trim().is_empty())
-                            .unwrap_or("")
-                            .trim();
-                        let short: String = last.chars().take(160).collect();
-                        let mut unbuilt = self
-                            .unbuilt
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        if !unbuilt.iter().any(|(seen, _)| seen == &self.module) {
-                            unbuilt.push((self.module.clone(), short));
+                        // Do not silently route heavy compute Kernels onto the
+                        // page's single-threaded ordered backend, or record a
+                        // dead device as a per-Kernel compiler refusal.
+                        let too_heavy_for_page_cpu =
+                            self.wait.parks_with_host() && self.module.typical_work() > 6_000;
+                        if !had_device_loss && !too_heavy_for_page_cpu {
+                            let last = error
+                                .lines()
+                                .rev()
+                                .find(|line| !line.trim().is_empty())
+                                .unwrap_or("")
+                                .trim();
+                            let short: String = last.chars().take(160).collect();
+                            let mut unbuilt = self
+                                .unbuilt
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            if !unbuilt.iter().any(|(seen, _)| seen == &self.module) {
+                                unbuilt.push((self.module.clone(), short));
+                            }
                         }
                         Err(format!(
                             "the device's own compiler could not build `{}`: {error}",

@@ -259,6 +259,7 @@ class SinglePlayer {
     this._bundleGz = bundleGz;
     this.needsGpu = !!needsGpu;
     this.onfail = typeof onfail === "function" ? onfail : null;
+    this.ready = false;
     this.shownFrames = 0;
     this.context = canvas.getContext("2d");
     const promising = (name) =>
@@ -373,11 +374,13 @@ class SinglePlayer {
       }
       if (player.failed) {
         const msg = player.failed;
+        player.running = false;
         try { exports.entelechy_close(player.session); } catch {}
         player.session = 0;
         throw new Error(msg);
       }
     }
+    player.ready = true;
     return player;
   }
 
@@ -571,7 +574,7 @@ class SinglePlayer {
         });
         if (swallow) {
           this.swallowedButton = button;
-          if (!this.running) this.run();
+          if (this.ready && !this.running) this.run();
           return;
         }
       }
@@ -581,7 +584,7 @@ class SinglePlayer {
         } catch {}
       }
       this.hand(() => this.x.entelechy_play_button(this.session, button, 1));
-      if (!this.running) this.run();
+      if (this.ready && !this.running) this.run();
     });
     this.canvas.addEventListener("pointerup", (event) => {
       const button = BUTTON[event.button] ?? 0;
@@ -715,6 +718,10 @@ class SinglePlayer {
   }
 
   async stepNow() {
+    if (!this.session) {
+      this.running = false;
+      return RESTING;
+    }
     const hands = this.hands;
     this.hands = [];
     for (const hand of hands) hand();
@@ -760,6 +767,8 @@ class SinglePlayer {
         }
       }
       this.failed = error;
+      this.running = false;
+      return RESTING;
     }
   }
 

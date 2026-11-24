@@ -251,7 +251,7 @@ pub(super) const TURN: std::time::Duration = std::time::Duration::from_millis(12
 /// of [`Session::finish_turn`] in a page, keeping the browser's GPU process
 /// fed without saturating Windows DXC / Dawn worker threads past Chrome's
 /// GPU watchdog.
-const WARM_AHEAD: usize = 4;
+const WARM_AHEAD: usize = 2;
 
 impl Session {
     pub(super) fn from_backing(runtime: Runtime, backing: Backing) -> Self {
@@ -543,9 +543,9 @@ impl Session {
         let heavy = self.finishing.iter().take(WARM_AHEAD).any(|version| {
             version
                 .module()
-                .is_some_and(|m| m.typical_work() > 15_000 || m.functions.len() > 24)
+                .is_some_and(|m| m.typical_work() > 8_000 || m.functions.len() > 20)
         });
-        let limit = if heavy { 2 } else { WARM_AHEAD };
+        let limit = if heavy { 1 } else { WARM_AHEAD };
         let target = self.finishing.len().min(limit);
         while self.warmed < target {
             preparer.warm(&self.finishing[self.warmed]);
@@ -600,6 +600,12 @@ impl Session {
     /// true for 3D worlds using `Volume` fields, `Group` workgroups, heavy
     /// raymarching/SDF Kernels, or large multi-pass hardware rasterization.
     pub fn needs_compute_gpu(&self) -> bool {
+        match &self.backing {
+            #[cfg(feature = "documents")]
+            Backing::Documents(_) => {}
+            Backing::Bundled(b) if b.needs_compute_gpu => return true,
+            Backing::Bundled(_) => {}
+        }
         let Some(graph) = self.graph() else {
             return false;
         };
@@ -660,13 +666,13 @@ impl Session {
                 && let Some(module) = version.module()
             {
                 let typ = module.typical_work();
-                if typ > 8_000 {
+                if typ > 6_000 {
                     return true;
                 }
                 sum_typical = sum_typical.saturating_add(typ);
             }
         }
-        sum_typical > 30_000 || (has_native_raster && (reached.len() > 24 || has_non_map))
+        sum_typical > 20_000 || (has_native_raster && (reached.len() > 24 || has_non_map))
     }
 
     /// Shows what only shows from the processor while the device's

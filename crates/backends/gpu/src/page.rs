@@ -8,16 +8,36 @@
 //! what they are made of, so the plain one made after it is the same
 //! pipeline, already compiled.
 
-use js_sys::{Array, Object, Reflect};
+use js_sys::{Array, Function, Object, Reflect};
 use wasm_bindgen::{JsCast, JsValue};
 
 use crate::wait::Wait;
 
 thread_local! {
     /// Pipelines asked of the browser ahead ([`ask_ahead`]) and not yet
-    /// waited for, by what they are made of.
-    static ASKED: std::cell::RefCell<std::collections::HashMap<u64, js_sys::Promise>> =
+    /// waited for, keyed by `(device_id, shader_and_layout_hash)`.
+    static ASKED: std::cell::RefCell<std::collections::HashMap<(u32, u64), js_sys::Promise>> =
         std::cell::RefCell::default();
+    static NEXT_DEVICE_ID: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
+    static NOOP_CATCH: Function = Function::new_no_args("");
+}
+
+/// Stable numeric tag attached to each JS `GPUDevice` so promises from a
+/// closed or lost device never collide with a new session's device.
+fn device_tag(device: &JsValue) -> u32 {
+    let key = JsValue::from_str("__ent_dev_id");
+    if let Ok(existing) = Reflect::get(device, &key)
+        && let Some(id) = existing.as_f64()
+    {
+        return id as u32;
+    }
+    let id = NEXT_DEVICE_ID.with(|cell| {
+        let cur = cell.get();
+        cell.set(cur.wrapping_add(1).max(1));
+        cur
+    });
+    let _ = Reflect::set(device, &key, &JsValue::from_f64(f64::from(id)));
+    id
 }
 
 /// What a pipeline is made of, as [`ASKED`] keeps it.
@@ -27,6 +47,19 @@ fn made_of(source: &str, entries: &[wgpu::BindGroupLayoutEntry]) -> u64 {
     source.hash(&mut hasher);
     entries.hash(&mut hasher);
     hasher.finish()
+}
+
+fn describe_js_error(err: &JsValue) -> String {
+    if let Some(s) = err.as_string() {
+        return s;
+    }
+    if let Ok(msg) = Reflect::get(err, &"message".into())
+        && let Some(s) = msg.as_string()
+        && !s.is_empty()
+    {
+        return s;
+    }
+    format!("{err:?}")
 }
 
 /// Asks the browser to start compiling a pipeline as a Kernel is
@@ -39,14 +72,14 @@ pub(crate) fn ask_ahead(
     source: &str,
     entries: &[wgpu::BindGroupLayoutEntry],
 ) {
-    let key = made_of(source, entries);
-    if ASKED.with(|asked_ahead| asked_ahead.borrow().contains_key(&key)) {
-        return;
-    }
     let Some(device) = device.as_webgpu() else {
         return;
     };
     let device: &JsValue = device.as_ref();
+    let key = (device_tag(device), made_of(source, entries));
+    if ASKED.with(|asked_ahead| asked_ahead.borrow().contains_key(&key)) {
+        return;
+    }
     if let Ok(asked) = ask(device, label, source, entries) {
         ASKED.with(|asked_ahead| {
             asked_ahead.borrow_mut().insert(key, asked);
@@ -56,17 +89,17 @@ pub(crate) fn ask_ahead(
 
 /// Asks the browser to compile the pipeline of `source`'s `main` with one
 /// group of `entries` (or takes what [`ask_ahead`] asked), and waits until
-/// it has, parked. Whatever the browser says against it is said again,
-/// and caught, when the pipeline is made.
+/// it has, parked. Returns `Err` immediately when the browser or device
+/// refuses or loses the pipeline so dead-device builds fail fast.
 pub(crate) fn compile_beside(
     device: &wgpu::Device,
     wait: Wait,
     label: &str,
     source: &str,
     entries: &[wgpu::BindGroupLayoutEntry],
-) {
+) -> Result<(), String> {
     let Some(device) = device.as_webgpu() else {
-        return;
+        return Ok(());
     };
     let device: &JsValue = device.as_ref();
     let traced = traced();
@@ -77,14 +110,11 @@ pub(crate) fn compile_beside(
         ));
     }
     let started = entelechy_rules::clock::now();
-    let ahead =
-        ASKED.with(|asked_ahead| asked_ahead.borrow_mut().remove(&made_of(source, entries)));
+    let key = (device_tag(device), made_of(source, entries));
+    let ahead = ASKED.with(|asked_ahead| asked_ahead.borrow_mut().remove(&key));
     let asked = match ahead {
         Some(asked) => asked,
-        None => match ask(device, label, source, entries) {
-            Ok(asked) => asked,
-            Err(_) => return,
-        },
+        None => ask(device, label, source, entries).map_err(|e| describe_js_error(&e))?,
     };
     let answer = wait.block_on(wasm_bindgen_futures::JsFuture::from(asked));
     if traced {
@@ -96,6 +126,7 @@ pub(crate) fn compile_beside(
         };
         tell(&format!("{how} {label} in {took:.0} ms"));
     }
+    answer.map(|_| ()).map_err(|e| describe_js_error(&e))
 }
 
 /// Whether the page asked to be told each pipeline (`entelechy_trace`).
@@ -111,7 +142,9 @@ fn tell(line: &str) {
     let _ = call(&console, "log", &format!("entelechy: {line}").into());
 }
 
-/// The browser's promise of the pipeline.
+/// The browser's promise of the pipeline, marked handled so rejected warmups
+/// on a lost device never fire unhandled-rejection console noise before
+/// [`compile_beside`] awaits them.
 fn ask(
     device: &JsValue,
     label: &str,
@@ -146,7 +179,12 @@ fn ask(
         ("layout", layout),
         ("compute", compute),
     ])?;
-    call(device, "createComputePipelineAsync", &descriptor)?.dyn_into()
+    let promise: js_sys::Promise =
+        call(device, "createComputePipelineAsync", &descriptor)?.dyn_into()?;
+    NOOP_CATCH.with(|noop| {
+        let _ = call(promise.as_ref(), "catch", noop.as_ref());
+    });
+    Ok(promise)
 }
 
 /// A binding as the browser takes it: a Kernel binds buffers alone.

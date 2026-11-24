@@ -41,7 +41,7 @@ const INLINE_LIMIT: usize = 96;
 /// across the module when writing out a non-tiny function called in more than
 /// one place; beyond this, keeping the shared helper avoids compound WGSL/HLSL
 /// blowup while preserving single-call inlining.
-const INLINE_DUP_LIMIT: usize = 160;
+const INLINE_DUP_LIMIT: usize = 96;
 
 /// A function taking a record or array of at least this many words is
 /// written out where it is called up to [`INLINE_BIG_LIMIT`] instructions,
@@ -49,10 +49,10 @@ const INLINE_DUP_LIMIT: usize = 160;
 const BIG_ARG_WORDS: usize = 32;
 /// The most instructions of a function taking a wide argument that is
 /// still written out where it is called.
-const INLINE_BIG_LIMIT: usize = 384;
+const INLINE_BIG_LIMIT: usize = 224;
 /// The most instructions a caller grows to by writing out non-tiny calls,
 /// keeping compound shaders from exploding quadratically in driver compilers.
-const INLINE_CALLER_LIMIT: usize = 1024;
+const INLINE_CALLER_LIMIT: usize = 640;
 /// An `each` builder whose elements together hold at most this many
 /// instructions, nested blocks counted, is written out element by
 /// element; a longer one runs as a builder's loop (or, for a backend that
