@@ -349,6 +349,9 @@ pub struct Play {
     /// Whether a frame has been shown: before the first, a scene still
     /// waiting for its Kernels (prepared in turns, in a page) is waited for.
     shown: bool,
+    /// Whether the play has settled to a fixed-point `0 Hz` snapshot until
+    /// an input event, window change or protocol mutation wakes it.
+    resting: bool,
     /// The sound fetched behind the frame in flight, heard the frame after
     /// ([`Play::heard`]); a frame found failed lets it go unheard.
     sound_behind: Option<entelechy_kernel::Fetch>,
@@ -406,6 +409,7 @@ impl Play {
             said: Vec::new(),
             synced: None,
             shown: false,
+            resting: false,
             sound_behind: None,
             pointer_wanted: None,
             pointer_behind: None,
@@ -418,9 +422,36 @@ impl Play {
     /// ends; then the person does.
     #[cfg(feature = "documents")]
     pub fn replay(&mut self, replay: &Replay, session: &mut Session) {
+        self.resting = false;
         self.replaying = Some((Replayer::start(replay, session), None));
         self.said
             .push("playing the replay: its inputs drive the scene until it ends".into());
+    }
+
+    /// Whether the play is settled at a fixed-point `0 Hz` snapshot where
+    /// subsequent frames with no new input, resize or protocol mutation
+    /// would evaluate nothing.
+    pub fn resting(&self) -> bool {
+        self.resting
+    }
+
+    /// Wakes the play from a `0 Hz` resting snapshot after an external
+    /// mutation or resize.
+    pub fn wake(&mut self) {
+        self.resting = false;
+    }
+
+    /// Advances the play's scene clock by `seconds` (as after a `warp` on a
+    /// served window), waking it to show the new state.
+    pub fn advance_clock(&mut self, seconds: f64) {
+        self.resting = false;
+        if seconds <= 0.0 || !seconds.is_finite() {
+            return;
+        }
+        match &mut self.held {
+            Some(at) => *at += seconds,
+            None => self.began -= seconds,
+        }
     }
 
     /// Whether a replay is playing.
@@ -451,6 +482,7 @@ impl Play {
     /// time stands still, and it still takes the person's input; a scene
     /// that steps every frame without reading its time steps on.
     pub fn pause(&mut self, paused: bool) {
+        self.resting = false;
         match (paused, self.held) {
             (true, None) => {
                 let at = self.time();
@@ -469,6 +501,7 @@ impl Play {
     /// Moves the held time `frames` steps of [`STEP`] (back when below
     /// zero, never before the start), pausing first if it was running.
     pub fn step(&mut self, frames: i32) {
+        self.resting = false;
         let at = (self.time() + f64::from(frames) * STEP).max(0.0);
         self.held = Some(at);
         self.said.push(format!("paused at {at:.3} s"));
@@ -521,17 +554,20 @@ impl Play {
         match name {
             "F5" => {
                 if down {
+                    self.resting = false;
                     session.reset_state();
                     self.said.push("state reset".into());
                 }
             }
             "F6" => {
                 if down {
+                    self.resting = false;
                     self.cycle_preview(session);
                 }
             }
             "F10" => {
                 if down {
+                    self.resting = false;
                     self.hud = !self.hud;
                     self.panel = None;
                     // Its device time is clocked only while the line shows.
@@ -549,6 +585,7 @@ impl Play {
     /// A press or release; a release before any frame saw the press
     /// takes effect after the next frame.
     fn hold(&mut self, held: Held, down: bool) {
+        self.resting = false;
         if down {
             self.late.retain(|late| *late != held);
             if !self.pressed.contains(&held) {
@@ -596,6 +633,7 @@ impl Play {
     /// Every key and pointer button let go: the window or page lost focus
     /// or pointer lock, and the releases go to whatever took it.
     pub fn release_all(&mut self) {
+        self.resting = false;
         self.release_keys();
         self.pressed.retain(|held| !matches!(held, Held::Button(_)));
         self.late.retain(|held| !matches!(held, Held::Button(_)));
@@ -619,6 +657,9 @@ impl Play {
 
     /// The pointer at `(x, y)` in window pixels.
     pub fn pointer(&mut self, x: f32, y: f32) {
+        if self.cursor != (x, y) || self.pointer_roaming {
+            self.resting = false;
+        }
         self.cursor = (x, y);
         self.pointer_roaming = false;
         self.update_pointer();
@@ -627,6 +668,9 @@ impl Play {
     /// Moves the pointer by `(dx, dy)` window pixels without clamping to
     /// the picture's edges, for a locked pointer turning without bound.
     pub fn move_pointer(&mut self, dx: f32, dy: f32) {
+        if dx != 0.0 || dy != 0.0 || !self.pointer_roaming {
+            self.resting = false;
+        }
         self.cursor = (self.cursor.0 + dx, self.cursor.1 + dy);
         self.pointer_roaming = true;
         self.update_pointer();
@@ -634,6 +678,7 @@ impl Play {
 
     /// A pointer button, 0 left, 1 right, 2 middle.
     pub fn button(&mut self, which: u8, down: bool) {
+        self.resting = false;
         self.hold(Held::Button(which), down);
         self.update_pointer();
     }
@@ -644,15 +689,22 @@ impl Play {
     /// Backspace) and the private codes some systems give arrows and
     /// function keys are keys, which `key()` reads, not characters.
     pub fn typed(&mut self, text: &str) {
+        let before = self.typing.len();
         self.typing.extend(
             text.chars()
                 .filter(|c| !c.is_control() && !('\u{F700}'..='\u{F8FF}').contains(c)),
         );
+        if self.typing.len() != before {
+            self.resting = false;
+        }
     }
 
     /// Wheel lines, y positive away from the person; accumulated until
     /// the next frame.
     pub fn wheel(&mut self, x: f32, y: f32) {
+        if x != 0.0 || y != 0.0 {
+            self.resting = false;
+        }
         self.input.wheel[0] += x;
         self.input.wheel[1] += y;
     }
@@ -660,6 +712,7 @@ impl Play {
     /// A pad's button. A pad's contacts chatter: a release is held back
     /// [`PAD_SETTLE`], and a press within it was the button held.
     pub fn pad_button(&mut self, button: PadButton, down: bool) {
+        self.resting = false;
         self.pad_released
             .retain(|(released, _)| *released != button);
         if down {
@@ -684,11 +737,18 @@ impl Play {
 
     /// A pad's axis.
     pub fn pad_axis(&mut self, axis: PadAxis, value: f32) {
+        let before = self.input.sticks;
         self.pad.axis(&mut self.input, axis, value);
+        if self.input.sticks != before {
+            self.resting = false;
+        }
     }
 
     /// How many pads are connected, what `pads()` reads.
     pub fn pads_connected(&mut self, count: u32) {
+        if self.input.pads != count {
+            self.resting = false;
+        }
         self.input.pads = count;
     }
 
@@ -810,6 +870,22 @@ impl Play {
                 }
                 self.status = "running".into();
                 self.shown = true;
+                let input_settled = self.pressed.is_empty()
+                    && self.late.is_empty()
+                    && self.typing.is_empty()
+                    && self.pad_released.is_empty()
+                    && self.input.wheel == [0.0, 0.0];
+                let clock_settled = self.paused() || !session.reads_clock_for(None);
+                self.resting = !self.hud
+                    && !self.replaying()
+                    && sound.is_none()
+                    && self.pointer_behind.is_none()
+                    && input_settled
+                    && clock_settled
+                    && session.is_quiescent()
+                    && report.executed.is_empty()
+                    && report.committed.is_empty()
+                    && report.pending.is_empty();
                 Frame::Shown(Box::new(Shown {
                     report,
                     picture,
@@ -817,6 +893,7 @@ impl Play {
                 }))
             }
             Err(error) => {
+                self.resting = false;
                 // Where in a Kernel it failed, traced again only when the
                 // failure is news: a scene failing every frame is traced once.
                 let told = session.told(&error);

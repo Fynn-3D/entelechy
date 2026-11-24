@@ -84,14 +84,16 @@ impl Evaluator {
         if self.awaited.is_empty() {
             return Vec::new();
         }
-        graph
-            .outputs
+        outputs
             .iter()
-            .zip(outputs)
-            .filter(|((name, source), _)| {
-                matches!(source, Source::Node { .. }) && self.awaited.contains(name)
+            .filter(|(name, _)| {
+                self.awaited.contains(name)
+                    && graph
+                        .outputs
+                        .iter()
+                        .any(|(out, source)| out == name && matches!(source, Source::Node { .. }))
             })
-            .map(|(_, output)| output.clone())
+            .cloned()
             .collect()
     }
 

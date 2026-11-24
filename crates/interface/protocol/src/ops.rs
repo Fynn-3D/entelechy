@@ -495,6 +495,30 @@ pub fn operations() -> Vec<Operation> {
             "executed, reused, committed, outputs, timings, measured, device, let_go (nodes let go to make room in the Host); in the Player, ignored (the context fields it gave, which the window's own input stands in for) and a note",
         ),
         op(
+            "warp",
+            "Steps causal state forward across many ticks without evaluating unasked outputs, stopping early when `until` becomes non-zero or non-finite, or once a clockless scene settles.",
+            with_context(vec![
+                needs("steps", Ty::Int, "ticks to advance, 1 to 100000"),
+                may("dt", Ty::Num, "seconds between ticks; 1/60 when not given"),
+                may(
+                    "nodes",
+                    Ty::List(Box::new(Ty::Str)),
+                    "keep these nodes materialized across the warp alongside state",
+                ),
+                may(
+                    "until",
+                    Ty::Str,
+                    "a `node` or `node.port` whose element 0's first number stops the warp once non-zero or non-finite",
+                ),
+                may(
+                    "settle",
+                    Ty::Bool,
+                    "first wait for every `async` run to land",
+                ),
+            ]),
+            "steps (ticks run), active (ticks that advanced state), time (causal seconds of the last tick), millis, stopped (`\"steps\"` | `\"until\"` | `\"settled\"` | `\"nonfinite\"`), until (when `until` was given), executed, reused, committed, let_go",
+        ),
+        op(
             "read",
             "Reads an output or a node's port.",
             vec![
@@ -521,7 +545,7 @@ pub fn operations() -> Vec<Operation> {
                     "how many elements from `from` to answer as numbers, at most 4096; 1 when not given",
                 ),
             ],
-            "a picture: width, height, format, data (base64). Any other Field: shape, extent, count, schema, `fields` (each number's name in an element of several, `hp`, `pos.x`), and its summary (each number's min, max, sum, mean, how many were not zero, and how many were not finite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64)",
+            "a picture: width, height, format, data (base64). Any other Field: shape, extent, count, schema, `fields` (each number's name in an element of several, `hp`, `pos.x`), and its summary (each number's min, max, min_at, max_at, sum, mean, rms, how many were not zero, and when any were not finite: nonfinite, nan, inf, first_nonfinite), or `values` from `from` (a number, or a list for an element of several), or format and data (base64)",
         ),
         op(
             "write",
@@ -619,10 +643,11 @@ pub fn operations() -> Vec<Operation> {
                 may(
                     "at",
                     Ty::Either(vec![
+                        Ty::Numbers(&["x"]),
                         Ty::Numbers(&["x", "y"]),
                         Ty::Numbers(&["x", "y", "z"]),
                     ]),
-                    "the element in a grid or a volume; or `element`",
+                    "the element in rows, a grid or a volume; or `element`",
                 ),
                 may("element", Ty::Int, "the element in rows, or a scan's step"),
             ]),

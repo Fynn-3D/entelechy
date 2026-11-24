@@ -249,6 +249,10 @@ impl WindowHooks for DevHooks {
         !self.folder.is_empty()
     }
 
+    fn is_serving(&self) -> bool {
+        self.requests.is_some()
+    }
+
     fn choose_folder(&mut self, session: &mut Session) -> bool {
         let Some(dir) = rfd::FileDialog::new()
             .set_title("Choose a folder for the scene")
@@ -292,6 +296,19 @@ impl entelechy_protocol::Served for ServedRunner<'_> {
             let answer =
                 serde_json::json!({ "paused": self.0.play.paused(), "time": self.0.play.time() });
             return Some((entelechy_protocol::envelope(id, Ok(answer)), false));
+        }
+        if request.get("op").and_then(Json::as_str) == Some("warp") {
+            let view = self.0.view();
+            let window_ctx = self.0.play.context(view);
+            let result =
+                entelechy_protocol::warp_for_window(&mut self.0.session, request, &window_ctx).map(
+                    |(answer, advanced)| {
+                        self.0.play.advance_clock(advanced);
+                        let _ = self.0.frame();
+                        answer
+                    },
+                );
+            return Some((entelechy_protocol::envelope(id, result), false));
         }
         if request.get("op").and_then(Json::as_str) != Some("evaluate") {
             return None;

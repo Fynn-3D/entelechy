@@ -72,6 +72,11 @@ pub trait WindowHooks: Sized {
     /// Polls background protocol requests between frames, when serving.
     fn poll_pending(_runner: &mut WindowRunner<Self>, _event_loop: &ActiveEventLoop) {}
 
+    /// Whether background protocol requests may arrive on a channel.
+    fn is_serving(&self) -> bool {
+        false
+    }
+
     /// Whether Cmd+O / Ctrl+O opens a folder chooser.
     fn wants_folder(&self) -> bool {
         false
@@ -622,6 +627,18 @@ impl<H: WindowHooks> ApplicationHandler for WindowRunner<H> {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         H::poll_pending(self, event_loop);
         self.wear(event_loop);
+        let has_pad = self
+            .gamepad
+            .as_ref()
+            .is_some_and(|gamepad| gamepad.connected() > 0);
+        if self.play.resting() && !has_pad {
+            let sleep_ms = if self.hooks.is_serving() { 16 } else { 250 };
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                Instant::now() + Duration::from_millis(sleep_ms),
+            ));
+            return;
+        }
+        event_loop.set_control_flow(ControlFlow::Poll);
         if let Some(window) = &self.window {
             window.request_redraw();
         }

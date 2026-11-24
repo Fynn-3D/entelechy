@@ -191,6 +191,7 @@ impl Session {
             .map_err(|error| self.with_refusal(error));
         self.failing = report.as_ref().err().map(|error| self.told(error));
         let report = report?;
+        self.has_evaluated = true;
         if let Backing::Documents(docs) = &mut self.backing {
             docs.history.ran();
         }

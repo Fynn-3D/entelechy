@@ -461,3 +461,74 @@ fn a_locked_pointer_moves_past_the_edges_and_release_all_lets_buttons_go() {
     assert!(!input.key(87) && !input.pointer_down && !input.pointer_right);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A scene without `time.read`, sound or changing state settles to a `0 Hz`
+/// resting snapshot after confirming its first frame, wakes on any input,
+/// and a `time.read` scene rests only while paused.
+#[test]
+fn settled_scenes_rest_at_zero_hz_and_wake_on_input_or_clock() {
+    let dir = std::env::temp_dir().join(format!("entelechy-play-rest-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("scene.esn"),
+        "\
+kernel r.still@1 {
+    requires { field.write; input.read; }
+    output result: Image;
+    compute {
+        let p = pointer();
+        return vec4(p.x / 8.0, p.y / 4.0, 0.25, 1.0);
+    }
+}
+node pic: r.still@1 { domain = vec2(4, 2); }
+output view <- pic.result;
+",
+    )
+    .unwrap();
+    let mut session = open(&dir);
+    let mut play = Play::new(racing);
+
+    // Frame 1 executes `pic` -> not resting yet.
+    let f1 = shown(&mut play, &mut session);
+    assert!(!f1.report.executed.is_empty());
+    assert!(!play.resting());
+
+    // Frame 2 confirms Frame 1 and executes 0 nodes -> settles to 0 Hz!
+    let f2 = shown(&mut play, &mut session);
+    assert!(f2.report.executed.is_empty());
+    assert!(play.resting());
+
+    // Moving the pointer wakes it immediately.
+    play.pointer(3.0, 1.0);
+    assert!(!play.resting());
+
+    // A scene with `time.read` stays awake while playing, and rests once paused.
+    std::fs::write(
+        dir.join("scene.esn"),
+        "\
+kernel r.clocked@1 {
+    requires { field.write; time.read; }
+    output result: Image;
+    compute { return vec4(sin(time()) * 0.5 + 0.5, 0.0, 0.0, 1.0); }
+}
+node pic: r.clocked@1 { domain = vec2(4, 2); }
+output view <- pic.result;
+",
+    )
+    .unwrap();
+    session.sync();
+    shown(&mut play, &mut session);
+    shown(&mut play, &mut session);
+    assert!(!play.resting(), "time.read keeps live frames running");
+
+    play.pause(true);
+    shown(&mut play, &mut session);
+    shown(&mut play, &mut session);
+    assert!(
+        play.resting(),
+        "pausing holds time still and lets the frame rest"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

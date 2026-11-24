@@ -114,7 +114,7 @@ pub struct StateCopy {
 pub use clocked::DeviceTimes;
 pub use memory::{HeldBytes, MemoryMap};
 pub use remember::Warm;
-pub use session::Session;
+pub use session::{Session, WarpError, WarpOutcome, WarpStop};
 
 #[cfg(feature = "documents")]
 pub use entelechy_documents::sources::{

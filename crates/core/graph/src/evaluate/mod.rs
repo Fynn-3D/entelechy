@@ -65,16 +65,35 @@ enum Demand<'a> {
     /// A frame: what something reads ([`Graph::read_through`]), with the
     /// nodes pinned to be read.
     Frame,
+    /// State producers, `demand`, and what they read, skipping unasked
+    /// graph outputs (`warp`).
+    State(&'a BTreeSet<NodeId>),
     /// These, what they read, state producers and outputs never produced.
     For(&'a BTreeSet<NodeId>),
     /// Only what these read, for a trial reporting no output.
     Read(&'a BTreeSet<NodeId>),
 }
 
-/// The report of an evaluation that reports one: every one but a
-/// [`Demand::Read`].
-fn reported(report: Option<Report>) -> Result<Report, EvaluateError> {
-    report.ok_or(EvaluateError::Graph(GraphError::NoOutput))
+enum Evaluated {
+    None,
+    Frame(Report),
+    State(StepReport),
+}
+
+/// The report of an evaluation that reports a full frame.
+fn reported(outcome: Evaluated) -> Result<Report, EvaluateError> {
+    match outcome {
+        Evaluated::Frame(report) => Ok(report),
+        Evaluated::None | Evaluated::State(_) => Err(EvaluateError::Graph(GraphError::NoOutput)),
+    }
+}
+
+/// The report of a headless causal state step ([`Evaluator::evaluate_state`]).
+fn state_reported(outcome: Evaluated) -> Result<StepReport, EvaluateError> {
+    match outcome {
+        Evaluated::State(report) => Ok(report),
+        Evaluated::None | Evaluated::Frame(_) => Err(EvaluateError::Graph(GraphError::NoOutput)),
+    }
 }
 
 /// The nodes an evaluation reused: those of its plan it reached, in order,
@@ -217,6 +236,46 @@ pub struct Report {
     /// Nodes whose cached outputs were let go to make room in the Host:
     /// a later frame that asks for one runs it again. Above zero frame
     /// after frame, the scene holds more than the Host's budget.
+    pub let_go: usize,
+}
+
+/// What one headless causal state step ([`Evaluator::evaluate_state`]) did,
+/// advancing `<~` state and demanded probe nodes without requiring unasked
+/// graph outputs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StepReport {
+    /// Nodes that executed, in evaluation order.
+    pub executed: Vec<NodeId>,
+    /// Nodes whose cached outputs were reused.
+    pub reused: Reused,
+    /// How many groups the step bound to find their keys.
+    pub bound: usize,
+    /// Sources whose state advanced in this step's commit.
+    pub committed: Vec<(NodeId, String)>,
+    /// Groups that ran as one Kernel: the executing node and the nodes it
+    /// absorbed.
+    pub fused: Fusions,
+    /// Each executed node's Kernel time, in evaluation order.
+    pub timings: Vec<(NodeId, std::time::Duration)>,
+    /// Each node that kept the step's thread waiting for the device.
+    pub waits: Vec<(NodeId, std::time::Duration)>,
+    /// Each executed node's runs in a clocked step.
+    pub clocked: Vec<(NodeId, std::ops::Range<usize>)>,
+    /// Where each executed node ran, in evaluation order.
+    pub placements: Vec<Placed>,
+    /// State ports carried into a new layout by their migration Kernel.
+    pub migrated: Migrated,
+    /// State ports whose layout changed with no migration, restarted from
+    /// the initial source, with why.
+    pub reset: Reset,
+    /// `async` nodes with a run in flight; their readers took the last
+    /// output.
+    pub pending: Vec<NodeId>,
+    /// `async` nodes whose run landed before this step's nodes ran.
+    pub landed: Vec<NodeId>,
+    /// Groups a backend refused to run fused, found since the last report.
+    pub refused: Vec<Refused>,
+    /// Nodes whose cached outputs were let go to make room in the Host.
     pub let_go: usize,
 }
 
@@ -816,6 +875,14 @@ struct FrameReach {
     read: Arc<BTreeSet<NodeId>>,
 }
 
+/// What a headless state step reads, with the demanded nodes and asleep
+/// nodes it was found under.
+struct StateReach {
+    demand: BTreeSet<NodeId>,
+    asleep: BTreeSet<NodeId>,
+    read: Arc<BTreeSet<NodeId>>,
+}
+
 /// A plan's layout, with the plan and the reach it was found for.
 struct LayoutFor {
     groups: Arc<Vec<Group>>,
@@ -989,6 +1056,9 @@ pub struct Evaluator {
     /// What a frame of the graph in `shape` reads, and the pins and the
     /// nodes asleep it was found under.
     frame_needed: Option<FrameReach>,
+    /// What a headless state step of the graph in `shape` reads, kept so
+    /// repeated `warp` ticks share one [`Layout`] and [`Quiet`] state.
+    state_needed: Option<StateReach>,
     /// The layout of the last plan run, with the plan and the reach it
     /// was found for.
     layout: Option<LayoutFor>,
@@ -1462,6 +1532,31 @@ impl Evaluator {
         .and_then(reported)
     }
 
+    /// Evaluates one headless causal state step: every `<~` state producer,
+    /// `demand`, and what they read while awake, skipping unasked graph
+    /// outputs (`picture`, `sound`).
+    pub fn evaluate_state(
+        &mut self,
+        graph: &impl AsGraph,
+        runtime: &mut Runtime,
+        externals: &BTreeMap<String, Handle>,
+        context: &Context,
+        params: &BTreeMap<String, Value>,
+        demand: &BTreeSet<NodeId>,
+    ) -> Result<StepReport, EvaluateError> {
+        self.recover(runtime);
+        self.confirm(runtime)?;
+        self.evaluate_with(
+            graph,
+            runtime,
+            externals,
+            context,
+            params,
+            Demand::State(demand),
+        )
+        .and_then(state_reported)
+    }
+
     /// Whether `node`'s outputs were let go cold: its key and epoch kept,
     /// its Fields made again when read ([`Evaluator::warm_for_reading`]).
     pub fn is_cold(&self, node: &NodeId) -> bool {
@@ -1553,6 +1648,21 @@ impl Evaluator {
                 let read = Arc::new(graph.read_awake(self.pinned.iter().cloned(), asleep));
                 self.frame_needed = Some(FrameReach {
                     pins: self.pinned.clone(),
+                    asleep: asleep.clone(),
+                    read: Arc::clone(&read),
+                });
+                return Some(read);
+            }
+            Demand::State(demand) => {
+                if let Some(known) = &self.state_needed
+                    && known.demand == *demand
+                    && known.asleep == *asleep
+                {
+                    return Some(Arc::clone(&known.read));
+                }
+                let read = Arc::new(graph.read_state_awake(demand.iter().cloned(), asleep));
+                self.state_needed = Some(StateReach {
+                    demand: demand.clone(),
                     asleep: asleep.clone(),
                     read: Arc::clone(&read),
                 });
@@ -1756,8 +1866,8 @@ impl Evaluator {
         Some(made)
     }
 
-    /// Evaluates what `demand` asks; the report is `None` only for a
-    /// [`Demand::Read`].
+    /// Evaluates what `demand` asks; the report is [`Evaluated::None`] only
+    /// for a [`Demand::Read`].
     fn evaluate_with(
         &mut self,
         graph: &dyn AsGraph,
@@ -1766,7 +1876,7 @@ impl Evaluator {
         context: &Context,
         params: &BTreeMap<String, Value>,
         demand: Demand<'_>,
-    ) -> Result<Option<Report>, EvaluateError> {
+    ) -> Result<Evaluated, EvaluateError> {
         // An external the caller supplies nothing for reads its fallback,
         // written into a copy of the graph only when one is in use.
         let substituted = self.with_fallbacks(graph, externals);
@@ -1792,8 +1902,8 @@ impl Evaluator {
             self.pruned = true;
         }
         let landed = self.land(runtime)?;
-        // Who sleeps on a frame, by what the last left: none on a trial.
-        let asleep = if matches!(demand, Demand::Frame) && !self.trial {
+        // Who sleeps on a frame or state step, by what the last left: none on a trial.
+        let asleep = if matches!(demand, Demand::Frame | Demand::State(_)) && !self.trial {
             self.asleep(graph, runtime, externals)?
         } else {
             BTreeSet::new()
@@ -1803,7 +1913,7 @@ impl Evaluator {
         let (migrated, reset) = self.reconcile_state(&groups, runtime, context)?;
         // From here to the commit, a failure leaves state as it was: a
         // migration's replaced state is put back.
-        let evaluated = (|| -> Result<Option<Report>, EvaluateError> {
+        let evaluated = (|| -> Result<Evaluated, EvaluateError> {
             let layout = self.layout_of(graph, &groups, needed.as_ref());
             // Absorbed nodes release their cached outputs.
             let stale: Vec<NodeId> = layout
@@ -1823,14 +1933,16 @@ impl Evaluator {
             let mut pending = Vec::new();
             // What is asked for by name is made, though let go cold.
             let asked = match demand {
-                Demand::For(demand) => demand.clone(),
+                Demand::For(demand) | Demand::State(demand) => demand.clone(),
                 _ => BTreeSet::new(),
             };
-            // A frame leans on the last when nothing it was made from moved
-            // but the clock and input: the same plan, ledger, parameters and
-            // Fields. Then a group that does not move, none of whose reads
-            // changed, keeps its entry unbound.
-            let leans = matches!(demand, Demand::Frame) && !self.trial && !self.recalling();
+            // A frame or state step leans on the last when nothing it was
+            // made from moved but the clock and input: the same plan,
+            // ledger, parameters and Fields. Then a group that does not
+            // move, none of whose reads changed, keeps its entry unbound.
+            let leans = matches!(demand, Demand::Frame | Demand::State(_))
+                && !self.trial
+                && !self.recalling();
             let last = if leans { self.quiet.take() } else { None };
             let ledger_now = self.ledger.version();
             let mut lean = last.as_ref().is_some_and(|last| {
@@ -2054,7 +2166,71 @@ impl Evaluator {
             self.weigh_alike(&layout, &ran);
             if matches!(demand, Demand::Read(_)) {
                 self.wait_for_checks(checks, runtime)?;
-                return Ok(None);
+                return Ok(Evaluated::None);
+            }
+            if matches!(demand, Demand::State(_)) {
+                self.wait_for_checks(checks, runtime)?;
+                let mut present_outputs = Vec::new();
+                for (name, source) in &layout.compiled.outputs {
+                    let found = match source {
+                        CompiledSource::External { slot, .. } => scene.external_handles[*slot],
+                        CompiledSource::Node {
+                            producer,
+                            port,
+                            known,
+                        } => self.ledger.entry(producer).and_then(|cached| match known {
+                            Some((names, slot, _)) if Arc::ptr_eq(&cached.output_names, names) => {
+                                Some(cached.outputs[*slot])
+                            }
+                            _ => cached
+                                .output_names
+                                .iter()
+                                .position(|n| n == port)
+                                .map(|idx| cached.outputs[idx]),
+                        }),
+                    };
+                    if let Some(handle) = found {
+                        present_outputs.push((name.clone(), handle));
+                    }
+                }
+                let committed = if self.trial {
+                    Vec::new()
+                } else {
+                    let committed = self.commit(graph, runtime)?;
+                    let awaited = self.awaited_of(graph, &present_outputs);
+                    self.confirm_outputs(awaited, runtime);
+                    self.remember_frame(executed.iter().chain(reused.iter()), runtime);
+                    self.chill_made_once(&groups, &held, runtime);
+                    committed
+                };
+                if leans {
+                    let (saved_params, saved_externals) =
+                        kept_quiet.unwrap_or_else(|| (params.clone(), externals.clone()));
+                    self.quiet = Some(Quiet {
+                        layout: Arc::clone(&layout),
+                        ledger: self.ledger.version(),
+                        params: saved_params,
+                        externals: saved_externals,
+                        steady,
+                    });
+                }
+                return Ok(Evaluated::State(StepReport {
+                    executed,
+                    reused,
+                    bound: bound_groups,
+                    committed,
+                    fused,
+                    timings,
+                    waits,
+                    clocked,
+                    placements,
+                    migrated,
+                    reset,
+                    pending,
+                    landed,
+                    refused: std::mem::take(&mut self.refused),
+                    let_go,
+                }));
             }
             let mut outputs = Vec::with_capacity(layout.compiled.outputs.len());
             for (name, source) in &layout.compiled.outputs {
@@ -2139,7 +2315,7 @@ impl Evaluator {
                     steady,
                 });
             }
-            Ok(Some(Report {
+            Ok(Evaluated::Frame(Report {
                 output,
                 executed,
                 timings,
@@ -2585,6 +2761,11 @@ impl Evaluator {
     /// Whether any node's run is still going.
     pub fn has_running(&self) -> bool {
         !self.running.is_empty()
+    }
+
+    /// Whether any fused group is still preparing off the frame.
+    pub fn has_pending_fusions(&self) -> bool {
+        !self.pending.is_empty()
     }
 
     fn take_landed(

@@ -1,9 +1,9 @@
-//! Operations that run the scene: one evaluation, and the state runs
-//! see.
+//! Operations that run the scene: one evaluation, multi-tick headless
+//! warps, and the state runs see.
 
 use serde_json::{Value as Json, json};
 
-use entelechy_session::Session;
+use entelechy_session::{Session, WarpError, WarpOutcome};
 
 use crate::request::Request;
 use crate::wire::{context_of, evaluation_error, failure, place_json, report_json};
@@ -100,4 +100,113 @@ pub(crate) fn reset(session: &mut Session, request: &Request) -> Result<Json, Js
         .reset_port(&entelechy_graph::NodeId(node.clone().into()), port)
         .map_err(|e| failure(e.to_string()))?;
     Ok(json!({ "reset": true, "node": node, "port": port }))
+}
+
+/// Steps causal state forward across many ticks without evaluating unasked
+/// outputs.
+pub(crate) fn warp(session: &mut Session, request: &Request) -> Result<Json, Json> {
+    let context = context_of(session, request.json())?;
+    let time_given = request.get("time").is_some();
+    warp_with_context(session, request.json(), &context, time_given).map(|(answer, _)| answer)
+}
+
+/// Runs a `warp` request under `base_context` (used directly by `serve` and
+/// by a served Player window, which also receives `(steps, dt)` to advance
+/// its own clock).
+pub fn warp_for_window(
+    session: &mut Session,
+    request: &Json,
+    window_context: &entelechy_kernel::Context,
+) -> Result<(Json, f64), Json> {
+    crate::ops::check(request)?;
+    let mut base = *window_context;
+    let time_given = request.get("time").is_some();
+    if let Some(t) = request.get("time").and_then(Json::as_f64) {
+        base.time = t;
+    }
+    warp_with_context(session, request, &base, time_given)
+}
+
+fn warp_with_context(
+    session: &mut Session,
+    request: &Json,
+    context: &entelechy_kernel::Context,
+    time_given: bool,
+) -> Result<(Json, f64), Json> {
+    let steps_i64 = request
+        .get("steps")
+        .and_then(Json::as_i64)
+        .ok_or_else(|| failure("`warp` needs `steps` as a positive integer"))?;
+    if steps_i64 <= 0 {
+        return Err(failure(format!(
+            "`steps` must be between 1 and 100000, got {steps_i64}"
+        )));
+    }
+    let steps = steps_i64 as u64;
+    let dt = request
+        .get("dt")
+        .and_then(Json::as_f64)
+        .unwrap_or(1.0 / 60.0);
+    if request.get("settle").and_then(Json::as_bool) == Some(true) {
+        session.settle().map_err(|e| evaluation_error(&e, None))?;
+    }
+    let nodes: Vec<entelechy_graph::NodeId> = request
+        .get("nodes")
+        .and_then(Json::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(Json::as_str)
+                .map(|node| entelechy_graph::NodeId(node.to_owned().into()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let until = request.get("until").and_then(Json::as_str);
+    let outcome = session
+        .warp(context, time_given, steps, dt, &nodes, until)
+        .map_err(|err| match err {
+            WarpError::Message(msg) => failure(msg),
+            WarpError::Evaluate {
+                step,
+                context: step_ctx,
+                error,
+            } => {
+                let mut json = evaluation_error(&error, None);
+                if step > 0 {
+                    json["step"] = json!(step);
+                    json["time"] = json!(step_ctx.time);
+                }
+                if let Some(place) = session.failure_place(&error, &step_ctx) {
+                    place_json(&mut json, &place);
+                }
+                json
+            }
+        })?;
+    let advanced_seconds = (outcome.steps as f64) * dt;
+    Ok((warp_json(&outcome), advanced_seconds))
+}
+
+fn warp_json(outcome: &WarpOutcome) -> Json {
+    let mut answer = json!({
+        "steps": outcome.steps,
+        "active": outcome.active,
+        "time": outcome.time,
+        "millis": outcome.elapsed.as_secs_f64() * 1000.0,
+        "stopped": outcome.stopped.as_str(),
+        "executed": outcome.last.executed.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "reused": outcome.last.reused.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "committed": outcome.last.committed.iter().map(|(node, port)| json!([node.to_string(), port])).collect::<Vec<_>>(),
+        "let_go": outcome.last.let_go,
+    });
+    if let Some(value) = outcome.until_value {
+        answer["until"] = if value.is_finite() {
+            json!(value)
+        } else if value.is_nan() {
+            json!("NaN")
+        } else if value.is_sign_positive() {
+            json!("Infinity")
+        } else {
+            json!("-Infinity")
+        };
+    }
+    answer
 }

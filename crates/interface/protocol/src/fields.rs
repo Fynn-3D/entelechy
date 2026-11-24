@@ -317,25 +317,75 @@ fn values(
     Ok(answer)
 }
 
+/// Coordinate of flat element `index` in `domain`: a whole index for `Rows`,
+/// `[x, y]` for `Grid`, or `[x, y, z]` for `Volume` (matching `trace`).
+fn coord_json(domain: entelechy_kernel::Domain, index: usize) -> Json {
+    match domain {
+        entelechy_kernel::Domain::Rows(_) => json!(index),
+        entelechy_kernel::Domain::Grid(w, _) => {
+            let w = (w as usize).max(1);
+            json!([index % w, index / w])
+        }
+        entelechy_kernel::Domain::Volume(w, h, _) => {
+            let w = (w as usize).max(1);
+            let h = (h as usize).max(1);
+            let plane = w * h;
+            json!([index % w, (index / w) % h, index / plane])
+        }
+    }
+}
+
 /// Each number of the elements, over every element: its least, its most,
-/// its sum and its mean (a truth value counted as 0 or 1), how many were
-/// not zero, and how many were not finite.
+/// where each first appears (`min_at`, `max_at`), its sum, mean and
+/// root-mean-square (`rms`, a truth value counted as 0 or 1), how many were
+/// not zero, and when any were not finite: `nonfinite`, `nan`, `inf`, and
+/// `first_nonfinite`.
 fn summary(
     session: &mut Session,
     handle: entelechy_kernel::Handle,
     described: Json,
 ) -> Result<Json, Json> {
     let data = session.field(handle).map_err(|e| failure(e.to_string()))?;
+    let domain = data.domain();
     let schema = data.schema().clone();
     let per = schema.value_words().max(1);
     let words = data.values();
-    // Per number of an element: least, most, sum, finite count, how many
-    // were not finite and how many were not zero.
-    let mut seen: Vec<(f64, f64, f64, u64, u64, u64)> = Vec::new();
-    for element in words.chunks_exact(per) {
+    #[derive(Clone)]
+    struct Stat {
+        least: f64,
+        least_at: Option<usize>,
+        most: f64,
+        most_at: Option<usize>,
+        sum: f64,
+        sum_sq: f64,
+        finite: u64,
+        nan: u64,
+        inf: u64,
+        first_nonfinite: Option<usize>,
+        nonzero: u64,
+    }
+    impl Default for Stat {
+        fn default() -> Self {
+            Self {
+                least: f64::INFINITY,
+                least_at: None,
+                most: f64::NEG_INFINITY,
+                most_at: None,
+                sum: 0.0,
+                sum_sq: 0.0,
+                finite: 0,
+                nan: 0,
+                inf: 0,
+                first_nonfinite: None,
+                nonzero: 0,
+            }
+        }
+    }
+    let mut seen: Vec<Stat> = Vec::new();
+    for (idx, element) in words.chunks_exact(per).enumerate() {
         let numbers = Number::of_element(&schema, element);
         if seen.is_empty() {
-            seen = vec![(f64::INFINITY, f64::NEG_INFINITY, 0.0, 0, 0, 0); numbers.len()];
+            seen = vec![Stat::default(); numbers.len()];
         }
         for (slot, number) in seen.iter_mut().zip(numbers) {
             let v = match number {
@@ -346,29 +396,65 @@ fn summary(
                 Number::Bool(v) => f64::from(u8::from(v)),
             };
             if v != 0.0 {
-                slot.5 += 1;
+                slot.nonzero += 1;
             }
             if v.is_finite() {
-                slot.0 = slot.0.min(v);
-                slot.1 = slot.1.max(v);
-                slot.2 += v;
-                slot.3 += 1;
+                if v < slot.least || slot.least_at.is_none() {
+                    slot.least = v;
+                    slot.least_at = Some(idx);
+                }
+                if v > slot.most || slot.most_at.is_none() {
+                    slot.most = v;
+                    slot.most_at = Some(idx);
+                }
+                slot.sum += v;
+                slot.sum_sq += v * v;
+                slot.finite += 1;
             } else {
-                slot.4 += 1;
+                if v.is_nan() {
+                    slot.nan += 1;
+                } else {
+                    slot.inf += 1;
+                }
+                if slot.first_nonfinite.is_none() {
+                    slot.first_nonfinite = Some(idx);
+                }
             }
         }
     }
     let each: Vec<Json> = seen
         .into_iter()
-        .map(|(least, most, sum, finite, other, nonzero)| {
-            let mut one = if finite == 0 {
-                json!({ "min": null, "max": null, "sum": null, "mean": null })
+        .map(|stat| {
+            let nonfinite = stat.nan + stat.inf;
+            let mut one = if stat.finite == 0 {
+                json!({
+                    "min": null,
+                    "max": null,
+                    "min_at": null,
+                    "max_at": null,
+                    "sum": null,
+                    "mean": null,
+                    "rms": null,
+                })
             } else {
-                json!({ "min": least, "max": most, "sum": sum, "mean": sum / finite as f64 })
+                let n = stat.finite as f64;
+                json!({
+                    "min": stat.least,
+                    "max": stat.most,
+                    "min_at": stat.least_at.map(|at| coord_json(domain, at)),
+                    "max_at": stat.most_at.map(|at| coord_json(domain, at)),
+                    "sum": stat.sum,
+                    "mean": stat.sum / n,
+                    "rms": (stat.sum_sq / n).sqrt(),
+                })
             };
-            one["nonzero"] = json!(nonzero);
-            if other > 0 {
-                one["nonfinite"] = json!(other);
+            one["nonzero"] = json!(stat.nonzero);
+            if nonfinite > 0 {
+                one["nonfinite"] = json!(nonfinite);
+                one["nan"] = json!(stat.nan);
+                one["inf"] = json!(stat.inf);
+                one["first_nonfinite"] =
+                    json!(stat.first_nonfinite.map(|at| coord_json(domain, at)));
             }
             one
         })

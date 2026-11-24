@@ -1424,6 +1424,7 @@ pub unsafe extern "C" fn entelechy_request(
         ));
         let (response, _quit) = entelechy_protocol::respond_line(&mut s.session, &line);
         s.session.act_for(before);
+        s.play.wake();
         s.response = c_string(&response);
         0
     });

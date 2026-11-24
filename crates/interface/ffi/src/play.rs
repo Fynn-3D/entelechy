@@ -521,6 +521,17 @@ pub unsafe extern "C" fn entelechy_play_replaying(session: *const EntelechySessi
     unsafe { enter(session) }.is_some_and(|s| s.play.replaying()) as c_int
 }
 
+/// Whether the play has settled to a fixed-point `0 Hz` snapshot where
+/// further frames with no new input, resize or protocol mutation would
+/// evaluate nothing: 1 or 0.
+///
+/// # Safety
+/// `session` is NULL or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_play_resting(session: *const EntelechySession) -> c_int {
+    unsafe { enter(session) }.is_some_and(|s| s.play.resting()) as c_int
+}
+
 /// The Kernels still waiting their turn to prepare (a page prepares a few
 /// each frame, and a frame waits until the scene's are all prepared): what
 /// a page shows while it loads. Zero once they are, or where they prepare

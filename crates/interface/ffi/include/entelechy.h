@@ -210,6 +210,9 @@ void entelechy_play_sound_opened(EntelechySession *session, const char *descript
 const char *entelechy_play_said(EntelechySession *session);
 /* Whether a replay is playing, 1 or 0. */
 int entelechy_play_replaying(const EntelechySession *session);
+/* Whether the play has settled at a fixed-point 0 Hz snapshot until new
+ * input, resize or protocol mutation arrives, 1 or 0. */
+int entelechy_play_resting(const EntelechySession *session);
 /* The Kernels still waiting their turn to prepare (a page prepares a few a
  * frame, and frames wait until the scene's are prepared); 0 once they are,
  * or where they prepare on threads. */

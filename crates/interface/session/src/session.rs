@@ -53,6 +53,9 @@ pub struct Session {
     /// The context the last frame was evaluated under, which outputs let
     /// go cold are made again under when read ([`Session::warm`]).
     pub(super) last_context: Context,
+    /// Whether at least one evaluation or warp tick has succeeded since the
+    /// scene opened or state was last reset.
+    pub(super) has_evaluated: bool,
     /// Why the last evaluation failed, until one succeeds.
     pub(super) failing: Option<String>,
     /// Whether what only shows is shown from the processor while the
@@ -237,6 +240,7 @@ impl Session {
             board: crate::clipboard::Board::default(),
             watched: crate::preparing::Watched::default(),
             last_context: Context::default(),
+            has_evaluated: false,
             failing: None,
             shown_while_building: false,
             handed: BTreeSet::new(),
@@ -751,6 +755,57 @@ impl Session {
         self.evaluator.has_running()
     }
 
+    /// Whether the session has no background work in flight: no `async`
+    /// node running, no fused Kernel preparing, and no scene waiting to
+    /// prepare or land.
+    pub fn is_quiescent(&self) -> bool {
+        !self.evaluator.has_running()
+            && !self.evaluator.has_pending_fusions()
+            && self.preparing_left() == 0
+            && !self.scene_waiting()
+    }
+
+    /// Whether any node reached by a frame (`demand` `None`) or by a state
+    /// step (`demand` `Some`) reads the clock (`time.read`) or a timed
+    /// image sequence.
+    pub fn reads_clock_for(&self, demand: Option<&BTreeSet<entelechy_graph::NodeId>>) -> bool {
+        #[cfg(feature = "documents")]
+        if let Backing::Documents(docs) = &self.backing
+            && !docs.scene.files().sequences.is_empty()
+        {
+            return true;
+        }
+        let Some(graph) = self.graph() else {
+            return false;
+        };
+        let handles = self.backing.handles();
+        let fallbacks = graph
+            .fallbacks
+            .iter()
+            .filter(|(name, _)| !handles.contains_key(name))
+            .filter_map(|(_, source)| match source {
+                entelechy_graph::Source::Node { node, .. } => Some(node.clone()),
+                entelechy_graph::Source::External(_) => None,
+            });
+        let reached = match demand {
+            None => graph.read_through(self.pins.iter().cloned().chain(fallbacks)),
+            Some(extra) => {
+                graph.read_state_awake(extra.iter().cloned().chain(fallbacks), &BTreeSet::new())
+            }
+        };
+        let at = graph.index();
+        reached.iter().any(|id| {
+            at.get(id)
+                .and_then(|idx| self.runtime.kernel(&graph.nodes[*idx].kernel))
+                .is_some_and(|version| {
+                    version
+                        .manifest()
+                        .requires
+                        .contains(entelechy_abi::Capability::TimeRead)
+                })
+        })
+    }
+
     pub(super) fn one_frame_in_flight(&self) {
         if self.runtime.has_device() {
             self.runtime.settle_device();
@@ -850,6 +905,7 @@ impl Session {
             }
         };
         self.failing = None;
+        self.has_evaluated = true;
         #[cfg(feature = "documents")]
         if let Backing::Documents(docs) = &mut self.backing {
             docs.history.ran();
@@ -995,6 +1051,7 @@ impl Session {
     /// sources on the next evaluation.
     pub fn reset_state(&mut self) {
         self.evaluator.reset_state(&mut self.runtime);
+        self.has_evaluated = false;
         #[cfg(feature = "documents")]
         if let Backing::Documents(docs) = &mut self.backing {
             docs.history
@@ -1348,6 +1405,351 @@ impl Session {
             .image(handle)
             .map_err(|e| SessionError::Observe(e.to_string()))
     }
+
+    /// Resolves `target` (`node` or `node.port`, including placed subgraphs
+    /// and repeated nodes) to the producing `(node, port)` in the loaded
+    /// graph.
+    pub fn resolve_port(&self, target: &str) -> Result<(entelechy_graph::NodeId, String), String> {
+        let graph = self
+            .graph()
+            .ok_or_else(|| "no scene is loaded".to_owned())?;
+        let whole = entelechy_graph::NodeId(target.to_owned().into());
+        if let Some(found) = graph.producer(&whole, "result") {
+            return Ok(found);
+        }
+        if let Some((node, port)) = entelechy_graph::split_port(target)
+            && let Some(found) = graph.producer(&node, &port)
+        {
+            return Ok(found);
+        }
+        #[cfg(feature = "documents")]
+        let hint = {
+            let known: Vec<&str> = graph.nodes.iter().map(|n| n.id.0.as_str()).collect();
+            let near = entelechy_language::nearest(target, known.iter().copied());
+            entelechy_language::suggestion(near)
+        };
+        #[cfg(not(feature = "documents"))]
+        let hint = String::new();
+        Err(format!(
+            "`{target}` is not a node or `node.port` of this scene{hint}"
+        ))
+    }
+
+    /// Reads the first scalar number of element 0 of `handle` as `f64`.
+    fn first_scalar(&mut self, handle: Handle, label: &str) -> Result<f64, String> {
+        let data = self.field(handle).map_err(|e| format!("`{label}`: {e}"))?;
+        if data.domain().count() == 0 {
+            return Err(format!("`{label}` has 0 elements"));
+        }
+        let schema = data.schema();
+        let per = schema.value_words().max(1);
+        let words = data.values();
+        let numbers = entelechy_kernel::Number::of_element(schema, &words[..per]);
+        let Some(first) = numbers.first().copied() else {
+            return Err(format!("`{label}` holds no scalar number"));
+        };
+        Ok(match first {
+            entelechy_kernel::Number::Float(v) => f64::from(v),
+            entelechy_kernel::Number::Double(v) => v,
+            entelechy_kernel::Number::Int(v) => f64::from(v),
+            entelechy_kernel::Number::Long(v) => v as f64,
+            entelechy_kernel::Number::Bool(v) => f64::from(u8::from(v)),
+        })
+    }
+
+    /// Steps causal `<~` state forward up to `steps` ticks separated by `dt`
+    /// seconds without evaluating unasked viewport or audio outputs, stopping
+    /// early when `until` becomes non-zero or non-finite, or once a clockless
+    /// scene settles to a fixed point.
+    #[allow(clippy::too_many_arguments)]
+    pub fn warp(
+        &mut self,
+        base_context: &Context,
+        time_given: bool,
+        steps: u64,
+        dt: f64,
+        nodes: &[entelechy_graph::NodeId],
+        until: Option<&str>,
+    ) -> Result<WarpOutcome, WarpError> {
+        const MAX_WARP_STEPS: u64 = 100_000;
+        if steps == 0 || steps > MAX_WARP_STEPS {
+            return Err(WarpError::Message(format!(
+                "`steps` must be between 1 and {MAX_WARP_STEPS}, got {steps}"
+            )));
+        }
+        if !dt.is_finite() || dt < 0.0 {
+            return Err(WarpError::Message(format!(
+                "`dt` must be a non-negative finite number of seconds, got {dt}"
+            )));
+        }
+        self.confirm().map_err(|error| WarpError::Evaluate {
+            step: 0,
+            context: Box::new(self.last_context),
+            error: Box::new(error),
+        })?;
+        self.one_frame_in_flight();
+
+        let until_target = match until {
+            Some(target) => Some((
+                target,
+                self.resolve_port(target).map_err(WarpError::Message)?,
+            )),
+            None => None,
+        };
+        let mut requested_producers = Vec::with_capacity(nodes.len());
+        for node in nodes {
+            let (producer, _) = self
+                .resolve_port(node.0.as_str())
+                .map_err(WarpError::Message)?;
+            requested_producers.push(producer);
+        }
+
+        // Pin `until` and `nodes` across the warp so fusion cannot absorb
+        // them and their materialized Fields stay readable after returning.
+        let mut temporary_pins = Vec::new();
+        for candidate in requested_producers
+            .iter()
+            .chain(until_target.as_ref().map(|(_, (n, _))| n))
+        {
+            if !self.pins.contains(candidate) && !temporary_pins.contains(candidate) {
+                temporary_pins.push(candidate.clone());
+                self.pins.push(candidate.clone());
+            }
+        }
+        self.repin();
+
+        let result =
+            (|| -> Result<WarpOutcome, WarpError> {
+                let mut demand: BTreeSet<entelechy_graph::NodeId> =
+                    requested_producers.into_iter().collect();
+                if let Some((_, (ref node, _))) = until_target {
+                    demand.insert(node.clone());
+                }
+                demand.extend(self.fed_sources());
+                demand.extend(self.written_sources());
+
+                let start_time = if time_given {
+                    base_context.time
+                } else if self.has_evaluated {
+                    self.last_context.time + dt
+                } else {
+                    0.0
+                };
+                let clock_moves = dt != 0.0 && self.reads_clock_for(Some(&demand));
+                let began = entelechy_kernel::clock::now();
+                let mut active = 0u64;
+                let mut last_report: Option<entelechy_graph::StepReport> = None;
+                let mut final_time = start_time;
+                let mut stopped = WarpStop::Steps;
+                let mut until_value = None;
+                let mut ran_steps = 0u64;
+
+                let mut held_input = entelechy_abi::InputState::default();
+                held_input.pointer = base_context.input.pointer;
+                held_input.sticks = base_context.input.sticks;
+                held_input.pads = base_context.input.pads;
+                for button in 0..entelechy_abi::BUTTONS {
+                    if base_context.input.button(button) {
+                        held_input.set_button(button, true);
+                    }
+                }
+                for code in 0..256 {
+                    if base_context.input.key(code) {
+                        held_input.set_key(code, true);
+                    }
+                }
+
+                for index in 0..steps {
+                    #[cfg(feature = "documents")]
+                    self.place_by_rows();
+                    let mut step_context = *base_context;
+                    step_context.time = start_time + (index as f64) * dt;
+                    if index > 0 {
+                        step_context.input = held_input;
+                    }
+                    #[cfg(feature = "documents")]
+                    if let Backing::Documents(docs) = &mut self.backing {
+                        let store = Arc::clone(docs.scene.store());
+                        docs.inputs.select_frames(
+                            store.as_ref(),
+                            self.runtime.host_mut(),
+                            step_context.time,
+                        );
+                    }
+                    self.hold_progress();
+                    self.repin();
+                    self.await_written();
+                    let graph = self.backing.shared_graph().cloned().ok_or_else(|| {
+                        WarpError::Evaluate {
+                            step: index + 1,
+                            context: Box::new(step_context),
+                            error: Box::new(no_scene()),
+                        }
+                    })?;
+                    let step = match self.evaluator.evaluate_state(
+                        &graph,
+                        &mut self.runtime,
+                        self.backing.handles(),
+                        &step_context,
+                        self.backing.params(),
+                        &demand,
+                    ) {
+                        Ok(step) => step,
+                        Err(error) => {
+                            self.tally();
+                            let error = self.with_refusal(error);
+                            self.failing = Some(self.told(&error));
+                            return Err(WarpError::Evaluate {
+                                step: index + 1,
+                                context: Box::new(step_context),
+                                error: Box::new(error),
+                            });
+                        }
+                    };
+                    self.failing = None;
+                    self.last_context = step_context;
+                    self.has_evaluated = true;
+                    final_time = step_context.time;
+                    ran_steps = index + 1;
+                    if !step.committed.is_empty() {
+                        active += 1;
+                    }
+                    #[cfg(feature = "documents")]
+                    if let Backing::Documents(docs) = &mut self.backing {
+                        docs.history.ran();
+                    }
+                    self.feed_fonts();
+                    #[cfg(feature = "documents")]
+                    {
+                        self.feed_file_nodes();
+                        self.feed_field_nodes();
+                    }
+                    self.let_go_of_input_copies();
+                    #[cfg(feature = "documents")]
+                    self.write_confirmed();
+                    self.write_bundled_confirmed();
+                    #[cfg(feature = "documents")]
+                    self.follow_rows();
+
+                    if let Some((label, (ref u_node, ref u_port))) = until_target {
+                        let handle = self.evaluator.cached(u_node, u_port).ok_or_else(|| {
+                            WarpError::Message(format!(
+                                "`{label}` produced no value on step {}",
+                                index + 1
+                            ))
+                        })?;
+                        let value = self
+                            .first_scalar(handle, label)
+                            .map_err(WarpError::Message)?;
+                        until_value = Some(value);
+                        if !value.is_finite() {
+                            stopped = WarpStop::NonFinite;
+                            last_report = Some(step);
+                            break;
+                        }
+                        if value != 0.0 {
+                            stopped = WarpStop::Until;
+                            last_report = Some(step);
+                            break;
+                        }
+                    }
+
+                    let settled_now = index > 0
+                        && !clock_moves
+                        && step.executed.is_empty()
+                        && step.committed.is_empty()
+                        && step.pending.is_empty()
+                        && !self.has_running()
+                        && !match &self.backing {
+                            #[cfg(feature = "documents")]
+                            Backing::Documents(docs) => docs.resized,
+                            Backing::Bundled(_) => false,
+                        };
+                    last_report = Some(step);
+                    if settled_now {
+                        stopped = WarpStop::Settled;
+                        break;
+                    }
+                }
+
+                Ok(WarpOutcome {
+                    steps: ran_steps,
+                    active,
+                    time: final_time,
+                    elapsed: entelechy_kernel::clock::since(began),
+                    stopped,
+                    until_value,
+                    last: last_report.expect("steps >= 1"),
+                })
+            })();
+
+        for pin in &temporary_pins {
+            self.unpin(pin);
+        }
+        result
+    }
+}
+
+/// Why a [`Session::warp`] stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WarpStop {
+    /// Ran all requested `steps`.
+    Steps,
+    /// The `until` target's first scalar became non-zero.
+    Until,
+    /// The `until` target's first scalar became `NaN` or infinite.
+    NonFinite,
+    /// Reached a fixed point where no state, async run, or clock-reading
+    /// node can change further.
+    Settled,
+}
+
+impl WarpStop {
+    /// Wire name returned by the protocol's `warp` operation.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Steps => "steps",
+            Self::Until => "until",
+            Self::NonFinite => "nonfinite",
+            Self::Settled => "settled",
+        }
+    }
+}
+
+/// Outcome of stepping causal state across many ticks ([`Session::warp`]).
+#[derive(Clone, Debug)]
+pub struct WarpOutcome {
+    /// How many ticks ran.
+    pub steps: u64,
+    /// How many ticks advanced at least one `<~` state port.
+    pub active: u64,
+    /// Causal time of the final tick that ran, in seconds.
+    pub time: f64,
+    /// Wall-clock duration spent inside the warp.
+    pub elapsed: std::time::Duration,
+    /// Why stepping stopped.
+    pub stopped: WarpStop,
+    /// Value of `until`'s first scalar on the stopping tick, when `until`
+    /// was given.
+    pub until_value: Option<f64>,
+    /// Report of the final tick that ran.
+    pub last: entelechy_graph::StepReport,
+}
+
+/// Why a [`Session::warp`] could not complete.
+#[derive(Debug)]
+pub enum WarpError {
+    /// Invalid target, step count, or probe read failure.
+    Message(String),
+    /// Graph evaluation failed on `step` (1-based) under `context`.
+    Evaluate {
+        /// 1-based tick index that faulted.
+        step: u64,
+        /// Context of the faulting tick.
+        context: Box<Context>,
+        /// Underlying evaluation error.
+        error: Box<EvaluateError>,
+    },
 }
 
 fn finish_each<T: Sync>(items: &[T], f: impl Fn(&T) + Sync) {

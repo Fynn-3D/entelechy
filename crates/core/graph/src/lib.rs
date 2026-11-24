@@ -17,7 +17,7 @@ pub use entelechy_abi::{Context, Domain, InputState, Value};
 pub use entelechy_ir::KernelId;
 pub use evaluate::{
     Bound, EvaluateError, Evaluator, Fusions, Held, Holding, Placed, PlanEntry, Refused, Report,
-    Reused, binding_fault, borrowed_domain, type_fault,
+    Reused, StepReport, binding_fault, borrowed_domain, type_fault,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -573,6 +573,54 @@ impl Graph {
             }
         }
         self.read_by_awake(seeds, asleep)
+    }
+
+    /// The nodes a headless state step runs: every state producer and its
+    /// initial source (`<~`), `also`, what they read through `<-` while
+    /// awake, and any `awake` row producer of the nodes reached. Unasked
+    /// graph outputs (`picture`, `sound`) and the subgraphs only they read
+    /// stay untouched.
+    pub fn read_state_awake(
+        &self,
+        also: impl IntoIterator<Item = NodeId>,
+        asleep: &BTreeSet<NodeId>,
+    ) -> BTreeSet<NodeId> {
+        let mut seeds: BTreeSet<NodeId> = also.into_iter().collect();
+        for node in &self.nodes {
+            for binding in node.inputs.values() {
+                if let Binding::Previous {
+                    source, initial, ..
+                } = binding
+                {
+                    for source in [source, initial] {
+                        if let Source::Node { node, .. } = source {
+                            seeds.insert(node.clone());
+                        }
+                    }
+                }
+            }
+        }
+        let mut reached = self.read_by_awake(seeds, asleep);
+        let at = self.index();
+        loop {
+            let mut awake_seeds = BTreeSet::new();
+            for id in &reached {
+                let Some(node) = at.get(id).map(|idx| &self.nodes[*idx]) else {
+                    continue;
+                };
+                for awake in &node.awake {
+                    if let Source::Node { node: source, .. } = &awake.source
+                        && !reached.contains(source)
+                    {
+                        awake_seeds.insert(source.clone());
+                    }
+                }
+            }
+            if awake_seeds.is_empty() {
+                return reached;
+            }
+            reached.extend(self.read_by_awake(awake_seeds, asleep));
+        }
     }
 
     /// `seeds` and every node they read through `<-`, in turn.

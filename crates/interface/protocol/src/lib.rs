@@ -36,7 +36,7 @@ use crate::request::Request;
 
 pub use answers::{Answers, Served};
 pub use envelope::{envelope, parse_request};
-pub use run::{evaluation_json, measure_asked};
+pub use run::{evaluation_json, measure_asked, warp_for_window};
 pub use transport::{Incoming, Reply, listen, serve, stdin_into, stdin_lines};
 pub use wire::{
     CONTEXT_FIELDS, context_given, context_of, report_json, trace_json, type_name, value_from_json,
@@ -80,7 +80,7 @@ fn respond_parsed(session: &mut Session, parsed: &Result<(Json, Json), Json>) ->
 }
 
 /// The operations that run or read the scene.
-const RUNS_THE_SCENE: [&str; 4] = ["evaluate", "read", "write", "trace"];
+const RUNS_THE_SCENE: [&str; 5] = ["evaluate", "warp", "read", "write", "trace"];
 
 /// Handles one request by the function for the operation it names.
 pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
@@ -111,6 +111,7 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "retire" => create::retire(session, &request),
         "param" => create::param(session, &request),
         "evaluate" => run::evaluate(session, &request),
+        "warp" => run::warp(session, &request),
         "reset" => run::reset(session, &request),
         // A window's clock is its own (the Player answers this); a serve's
         // is its caller's.
@@ -454,5 +455,205 @@ mod tests {
                 wrong.join("\n")
             );
         }
+    }
+
+    #[test]
+    fn warp_advances_state_skips_unasked_outputs_and_stops_on_until_settled_or_nonfinite() {
+        let dir =
+            std::env::temp_dir().join(format!("entelechy-protocol-warp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // `view` divides by zero (`1 / 0`) if ever executed while `gate == 0`,
+        // proving `warp` never evaluates unasked viewport outputs!
+        let scene = "\
+kernel w.seed@1 { requires { field.write; } output result: Rows<Int>; compute { return 0; } }
+kernel w.step@1 {
+    requires { field.read; field.write; }
+    input prev: Rows<Int>;
+    param cap: Int = 1000;
+    output result: Rows<Int>;
+    compute {
+        let v = at(prev, 0);
+        if v < cap { return v + 1; }
+        return v;
+    }
+}
+kernel w.done@1 {
+    requires { field.read; field.write; }
+    input count: Rows<Int>;
+    param target: Int = 25;
+    output result: Rows<Bool>;
+    compute { return at(count, 0) >= target; }
+}
+kernel w.boom@1 {
+    requires { field.read; field.write; }
+    input count: Rows<Int>;
+    output result: Rows<Float>;
+    compute {
+        if at(count, 0) >= 30 { return 0.0 / 0.0; }
+        return 0.0;
+    }
+}
+kernel w.view@1 {
+    requires { field.read; field.write; }
+    input count: Rows<Int>;
+    param gate: Int = 0;
+    output result: Image;
+    compute {
+        let safe = 1 / gate;
+        return vec4(float(at(count, 0) + safe) / 100.0, 0.0, 0.0, 1.0);
+    }
+}
+param cap: Int = 1000;
+param target: Int = 25;
+param gate: Int = 0;
+node seed: w.seed@1 { domain = 1; }
+node counter: w.step@1 { prev <~ counter.result from seed.result; cap = cap; domain = 1; }
+node reached: w.done@1 { count <- counter.result; target = target; domain = 1; }
+node unstable: w.boom@1 { count <- counter.result; domain = 1; }
+node view: w.view@1 { count <- counter.result; gate = gate; domain = vec2(8, 8); }
+output result <- view.result;
+";
+        std::fs::write(dir.join("scene.esn"), scene).unwrap();
+        let mut session = Session::open(
+            &dir.join("scene.esn"),
+            None,
+            entelechy_session::DEFAULT_BUDGET_WORDS,
+        );
+        session.sync();
+
+        // 1. Warp 10 ticks without `until`: `view` (`1 / 0`) is never run.
+        let w1 = handle(
+            &mut session,
+            &json!({ "op": "warp", "steps": 10, "dt": 0.1 }),
+        )
+        .unwrap();
+        assert_eq!(w1["steps"], 10);
+        assert_eq!(w1["active"], 10);
+        assert_eq!(w1["stopped"], "steps");
+        assert!((w1["time"].as_f64().unwrap() - 0.9).abs() < 1e-9);
+        assert!(!w1["executed"].as_array().unwrap().contains(&json!("view")));
+
+        // 2. Next warp without `time` continues from 1.0 s and stops when `reached` becomes true (at count == 25, 15 ticks later).
+        let w2 = handle(
+            &mut session,
+            &json!({ "op": "warp", "steps": 100, "dt": 0.1, "until": "reached" }),
+        )
+        .unwrap();
+        assert_eq!(w2["steps"], 15, "{w2}");
+        assert_eq!(w2["stopped"], "until", "{w2}");
+        assert_eq!(w2["until"], 1.0, "{w2}");
+        assert!((w2["time"].as_f64().unwrap() - 2.4).abs() < 1e-9);
+        let c_summary = handle(&mut session, &json!({ "op": "read", "node": "counter" })).unwrap();
+        assert_eq!(c_summary["summary"][0]["max"], 25.0);
+
+        // 3. Warp with `until: "unstable"` stops immediately on NaN at count == 30 (5 ticks later).
+        let w3 = handle(
+            &mut session,
+            &json!({ "op": "warp", "steps": 100, "dt": 0.1, "until": "unstable" }),
+        )
+        .unwrap();
+        assert_eq!(w3["steps"], 5, "{w3}");
+        assert_eq!(w3["stopped"], "nonfinite", "{w3}");
+        assert_eq!(w3["until"], "NaN", "{w3}");
+
+        // 4. Cap the counter at 32 in a clockless scene: warp of 500 stops early once settled!
+        handle(
+            &mut session,
+            &json!({ "op": "param", "name": "cap", "value": 32 }),
+        )
+        .unwrap();
+        let w4 = handle(
+            &mut session,
+            &json!({ "op": "warp", "steps": 500, "dt": 0.1 }),
+        )
+        .unwrap();
+        assert_eq!(w4["stopped"], "settled", "{w4}");
+        assert!(w4["steps"].as_u64().unwrap() <= 4, "{w4}");
+
+        // 5. Open `gate = 1` and run a Porch `evaluate`: viewport renders count == 32 cleanly.
+        handle(
+            &mut session,
+            &json!({ "op": "param", "name": "gate", "value": 1 }),
+        )
+        .unwrap();
+        let ev = handle(&mut session, &json!({ "op": "evaluate", "time": 4.0 })).unwrap();
+        assert!(ev["executed"].as_array().unwrap().contains(&json!("view")));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn summary_reports_rms_extrema_coordinates_and_nonfinite_places_for_trace() {
+        let dir =
+            std::env::temp_dir().join(format!("entelechy-protocol-summary-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let scene = "\
+kernel s.grid@1 {
+    requires { field.write; }
+    output result: Grid<Vec2>;
+    compute {
+        let c = coord();
+        let x = float(c.x - 1) * 3.0 + float(c.y) * 4.0;
+        if c.x == 2 && c.y == 1 {
+            return vec2(x, 0.0 / 0.0);
+        }
+        if c.x == 3 && c.y == 1 {
+            return vec2(x, 1.0 / 0.0);
+        }
+        return vec2(x, -2.0);
+    }
+}
+kernel s.pic@1 {
+    requires { field.read; field.write; }
+    input g: Grid<Vec2>;
+    output result: Image;
+    compute { return vec4(sample(g).x, 0.0, 0.0, 1.0); }
+}
+node g: s.grid@1 { domain = vec2(4, 2); }
+node pic: s.pic@1 { g <- g.result; domain = vec2(4, 2); }
+output result <- pic.result;
+";
+        std::fs::write(dir.join("scene.esn"), scene).unwrap();
+        let mut session = Session::open(
+            &dir.join("scene.esn"),
+            None,
+            entelechy_session::DEFAULT_BUDGET_WORDS,
+        );
+        session.sync();
+        handle(&mut session, &json!({ "op": "pin", "node": "g" })).unwrap();
+        handle(&mut session, &json!({ "op": "evaluate", "time": 0.0 })).unwrap();
+
+        let digest = handle(
+            &mut session,
+            &json!({ "op": "read", "node": "g", "format": "summary" }),
+        )
+        .unwrap();
+        let ch0 = &digest["summary"][0];
+        // At (0, 0): -3; at (3, 1): (3-1)*3 + 1*4 = 10.
+        assert_eq!(ch0["min"], -3.0);
+        assert_eq!(ch0["min_at"], json!([0, 0]));
+        assert_eq!(ch0["max"], 10.0);
+        assert_eq!(ch0["max_at"], json!([3, 1]));
+        assert!(ch0["rms"].as_f64().unwrap() > 0.0);
+        assert!(ch0.get("nonfinite").is_none());
+
+        let ch1 = &digest["summary"][1];
+        assert_eq!(ch1["nonfinite"], 2);
+        assert_eq!(ch1["nan"], 1);
+        assert_eq!(ch1["inf"], 1);
+        assert_eq!(ch1["first_nonfinite"], json!([2, 1]));
+        assert!((ch1["rms"].as_f64().unwrap() - 2.0).abs() < 1e-9);
+
+        // Feed `first_nonfinite` straight into `trace`!
+        let traced = handle(
+            &mut session,
+            &json!({ "op": "trace", "node": "g", "at": ch1["first_nonfinite"] }),
+        )
+        .unwrap();
+        assert_eq!(traced["at"], json!([2, 1, 0]));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

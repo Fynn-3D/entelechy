@@ -11,6 +11,7 @@ const PAD_BUTTONS = [
 const BUTTON = { 0: 0, 1: 2, 2: 1 };
 const BLOCKS_AHEAD = 4;
 const AHEAD = "ahead";
+const RESTING = "resting";
 const IS_LE = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 const HELD = new Set([
   "Tab", "Escape", "F5", "F6", "F7", "F8", "F9", "F10",
@@ -279,6 +280,7 @@ class SinglePlayer {
     this.said = [];
     this.onsaid = (line) => console.log(line);
     this.hands = [];
+    this.wakeWaiter = null;
     this.downByCode = new Map();
     this.heldAt = [0, 0];
     this.swallowedButton = null;
@@ -400,24 +402,53 @@ class SinglePlayer {
     }
   }
 
+  wake() {
+    if (this.wakeWaiter) {
+      const done = this.wakeWaiter;
+      this.wakeWaiter = null;
+      done();
+    }
+  }
+
+  hand(fn) {
+    this.hands.push(fn);
+    this.wake();
+  }
+
+  waitForWake() {
+    if (this.hands.length > 0 || !this.running) return Promise.resolve();
+    return new Promise((done) => {
+      this.wakeWaiter = done;
+    });
+  }
+
+  hasConnectedPad() {
+    if (!navigator.getGamepads) return false;
+    for (const pad of navigator.getGamepads()) {
+      if (pad && pad.mapping === "standard") return true;
+    }
+    return false;
+  }
+
   releaseAll() {
     this.downByCode.clear();
     this.swallowedButton = null;
-    this.hands.push(() => {
+    this.hand(() => {
       if (this.x.entelechy_play_release) this.x.entelechy_play_release(this.session);
     });
   }
 
   listen() {
+    window.addEventListener("gamepadconnected", () => this.wake());
     window.addEventListener("keydown", (event) => {
       const text = written(event);
-      if (text) this.hands.push(() => this.typed(text));
+      if (text) this.hand(() => this.typed(text));
       const key = codeKey(event);
       if (HELD.has(event.key) || HELD.has(key)) event.preventDefault();
       if (event.repeat || !key) return;
       if (event.code) this.downByCode.set(event.code, key);
       this.startSound().catch(() => {});
-      this.hands.push(() => this.key(key, true));
+      this.hand(() => this.key(key, true));
       if (!this.running) this.run();
     });
     window.addEventListener("keyup", (event) => {
@@ -425,7 +456,7 @@ class SinglePlayer {
       if (event.code) this.downByCode.delete(event.code);
       if (HELD.has(event.key) || HELD.has(key)) event.preventDefault();
       if (!key) return;
-      this.hands.push(() => this.key(key, false));
+      this.hand(() => this.key(key, false));
     });
     window.addEventListener("blur", () => this.releaseAll());
     document.addEventListener("visibilitychange", () => {
@@ -437,6 +468,8 @@ class SinglePlayer {
             this.syncSaves();
           });
         }
+      } else {
+        this.wake();
       }
     });
     window.addEventListener("pagehide", () => {
@@ -466,23 +499,23 @@ class SinglePlayer {
       if (document.pointerLockElement === this.canvas) {
         const [dx, dy] = [event.movementX * s, event.movementY * s];
         if (this.pointer === "lock" && this.x.entelechy_play_pointer_moved) {
-          this.hands.push(() => this.x.entelechy_play_pointer_moved(this.session, dx, dy));
+          this.hand(() => this.x.entelechy_play_pointer_moved(this.session, dx, dy));
         } else {
           const [x, y] = clampHeld(dx, dy);
-          this.hands.push(() => this.x.entelechy_play_pointer(this.session, x, y));
+          this.hand(() => this.x.entelechy_play_pointer(this.session, x, y));
         }
         return;
       }
       if (this.pointer === "lock") {
         if (event.buttons !== 0 && this.x.entelechy_play_pointer_moved) {
           const [dx, dy] = [event.movementX * s, event.movementY * s];
-          this.hands.push(() => this.x.entelechy_play_pointer_moved(this.session, dx, dy));
+          this.hand(() => this.x.entelechy_play_pointer_moved(this.session, dx, dy));
         }
         return;
       }
       const [x, y] = [event.offsetX * s, event.offsetY * s];
       this.heldAt = [x, y];
-      this.hands.push(() => this.x.entelechy_play_pointer(this.session, x, y));
+      this.hand(() => this.x.entelechy_play_pointer(this.session, x, y));
     });
     this.canvas.addEventListener("pointerdown", (event) => {
       this.canvas.focus();
@@ -507,7 +540,7 @@ class SinglePlayer {
           this.canvas.setPointerCapture(event.pointerId);
         } catch {}
       }
-      this.hands.push(() => this.x.entelechy_play_button(this.session, button, 1));
+      this.hand(() => this.x.entelechy_play_button(this.session, button, 1));
       if (!this.running) this.run();
     });
     this.canvas.addEventListener("pointerup", (event) => {
@@ -516,22 +549,27 @@ class SinglePlayer {
         this.swallowedButton = null;
         return;
       }
-      this.hands.push(() => this.x.entelechy_play_button(this.session, button, 0));
+      this.hand(() => this.x.entelechy_play_button(this.session, button, 0));
     });
     this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
     this.canvas.addEventListener("wheel", (event) => {
       event.preventDefault();
       const unit = event.deltaMode === 1 ? 1 : 1 / 40;
       const [x, y] = [event.deltaX * unit, -event.deltaY * unit];
-      this.hands.push(() => this.x.entelechy_play_wheel(this.session, x, y));
+      this.hand(() => this.x.entelechy_play_wheel(this.session, x, y));
     }, { passive: false });
     const fit = () => {
       const width = Math.max(1, Math.round(this.canvas.clientWidth * scale()));
       const height = Math.max(1, Math.round(this.canvas.clientHeight * scale()));
+      let changed = false;
       for (const canvas of [this.canvas, this.shown]) {
-        canvas.width = width;
-        canvas.height = height;
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+          changed = true;
+        }
       }
+      if (changed) this.wake();
     };
     new ResizeObserver(fit).observe(this.canvas);
     fit();
@@ -656,6 +694,14 @@ class SinglePlayer {
       await this.play();
       await this.show();
       wear(this.canvas, this.pointerLook());
+      if (
+        typeof this.x.entelechy_play_resting === "function" &&
+        this.x.entelechy_play_resting(this.session) === 1 &&
+        this.hands.length === 0 &&
+        !this.hasConnectedPad()
+      ) {
+        return RESTING;
+      }
     } else if (framed < 0) {
       const error = this.text(this.x.entelechy_error(this.session));
       if (
@@ -776,7 +822,7 @@ class SinglePlayer {
         node.connect(context.destination);
         this.audio = { context, node };
         const described = `${context.sampleRate} Hz`;
-        this.hands.push(() => this.withText(described, (text) => this.x.entelechy_play_sound_opened(this.session, text)));
+        this.hand(() => this.withText(described, (text) => this.x.entelechy_play_sound_opened(this.session, text)));
       } catch (error) {
         await context.close().catch(() => {});
         throw error;
@@ -799,8 +845,19 @@ class SinglePlayer {
         this.running = false;
         return;
       }
-      await new Promise((done) => (stepped === AHEAD ? setTimeout(done, 1) : requestAnimationFrame(done)));
+      if (stepped === RESTING) {
+        await this.waitForWake();
+        if (!this.running) break;
+        await new Promise((done) => requestAnimationFrame(done));
+      } else {
+        await new Promise((done) => (stepped === AHEAD ? setTimeout(done, 1) : requestAnimationFrame(done)));
+      }
     }
+  }
+
+  stop() {
+    this.running = false;
+    this.wake();
   }
 }
 

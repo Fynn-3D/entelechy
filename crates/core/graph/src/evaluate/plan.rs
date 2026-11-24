@@ -45,6 +45,7 @@ impl Evaluator {
         self.state_keys = None;
         self.awake_nodes = None;
         self.frame_needed = None;
+        self.state_needed = None;
         self.pruned = false;
         let order = Arc::new(graph.order()?);
         let held = shared.map_or_else(|| Arc::new(graph.clone()), Arc::clone);
