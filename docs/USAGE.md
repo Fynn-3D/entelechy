@@ -169,12 +169,19 @@ compile is reported and the previous version keeps running.
 ## Player
 
 ```sh
+entelechy player
 entelechy player examples/life/scene.esn
 entelechy-player editor.esn --folder disk,checks,defined,disk_ops --folder-allow file.write,file.delete
 ```
 
 Opens a scene in a window and keeps it live; a changed Kernel compiles
-off the frames and swaps in when ready. It takes `run`'s `--library`,
+off the frames and swaps in when ready, and any compile or evaluation
+fault is shown directly on the canvas until the next working frame.
+Without `<scene.esn>` (or `--replay`), it opens an empty `0 Hz` resting
+stage: `Cmd+O` (`Ctrl+O` elsewhere, when `--folder` is not set) chooses a
+`.esn` or `.replay` file, and dropping a `.esn`, `.replay` or project
+folder onto the window switches to it in place over the same warm
+backend. It takes `run`'s `--library`,
 `--input`, `--output`, `--backend`, `--memory`, `--work`, `--small`,
 `--allow` and `--grant`, and:
 

@@ -77,6 +77,11 @@ pub trait WindowHooks: Sized {
         false
     }
 
+    /// Whether a scene is currently compiling/building in the background.
+    fn is_loading(&self) -> bool {
+        false
+    }
+
     /// Whether Cmd+O / Ctrl+O opens a folder chooser.
     fn wants_folder(&self) -> bool {
         false
@@ -84,6 +89,29 @@ pub trait WindowHooks: Sized {
 
     /// Opens the folder chooser and applies it to `session`; returns true if updated.
     fn choose_folder(&mut self, _session: &mut Session) -> bool {
+        false
+    }
+
+    /// Whether Cmd+O / Ctrl+O opens a scene or replay chooser.
+    fn wants_open_shortcut(&self) -> bool {
+        false
+    }
+
+    /// Opens a scene or replay chooser and replaces `session`/`play` in place;
+    /// returns true if switched.
+    fn open_shortcut(&mut self, _session: &mut Session, _play: &mut Play, _view: View) -> bool {
+        false
+    }
+
+    /// Opens a dropped `.esn`, `.replay`, or project folder in place; returns
+    /// true if switched.
+    fn drop_path(
+        &mut self,
+        _path: std::path::PathBuf,
+        _session: &mut Session,
+        _play: &mut Play,
+        _view: View,
+    ) -> bool {
         false
     }
 }
@@ -102,7 +130,10 @@ pub struct WindowRunner<H> {
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
     display: Option<Display>,
     presenter: Option<Presenter>,
+    last_output: Option<entelechy_kernel::Handle>,
     last_frame: Option<entelechy_kernel::Image>,
+    /// Whether the current loading card has been provably presented at least once.
+    pub loading_presented: bool,
     /// Last output picture dimensions in pixels.
     pub last_size: (u32, u32),
     audio: Option<Audio>,
@@ -138,7 +169,9 @@ impl<H: WindowHooks> WindowRunner<H> {
             surface: None,
             display,
             presenter: None,
+            last_output: None,
             last_frame: None,
+            loading_presented: false,
             last_size: (0, 0),
             audio: None,
             gamepad,
@@ -204,13 +237,19 @@ impl<H: WindowHooks> WindowRunner<H> {
         let frame = self.play.frame(&mut self.session, view);
         self.say();
         match frame {
-            Frame::Wait => None,
+            Frame::Wait => {
+                if self.play.panel().is_some() && self.show_blank_overlay() {
+                    self.loading_presented = true;
+                }
+                None
+            }
             Frame::Failed => {
-                let placement = self.blit();
+                let placement = self.show_failed();
                 self.play.landed(placement, self.last_size);
                 None
             }
             Frame::Shown(shown) => {
+                self.last_output = Some(shown.picture);
                 let presenting = clock();
                 let (placement, path, downloaded) = self.show(shown.picture);
                 self.play.placed(
@@ -236,6 +275,89 @@ impl<H: WindowHooks> WindowRunner<H> {
         }
     }
 
+    /// Resets transient output, audio, and cursor state after switching scenes.
+    pub fn after_scene_switch(&mut self) {
+        self.last_output = None;
+        self.last_frame = None;
+        self.last_size = (0, 0);
+        self.loading_presented = false;
+        self.audio = None;
+        self.audio_failed = false;
+        self.pointer_look = Some(play::PointerLook::System);
+        self.say();
+        self.update_title();
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    /// Resizes the window to fit `(width, height) * scale` when no explicit
+    /// `--window` size was requested.
+    pub fn fit_initial_output(&self, width: u32, height: u32) {
+        if self.requested.is_some() || width == 0 || height == 0 {
+            return;
+        }
+        let wanted = (width * self.scale, height * self.scale);
+        if wanted != DEFAULT_WINDOW
+            && let Some(window) = &self.window
+        {
+            let _ = window.request_inner_size(LogicalSize::new(wanted.0, wanted.1));
+        }
+    }
+
+    fn show_blank_overlay(&mut self) -> bool {
+        if let (Some(window), Some(presenter), Some(display)) =
+            (&self.window, &mut self.presenter, &self.display)
+        {
+            let size = window.inner_size();
+            let overlay = self.play.panel().map(|panel| Overlay {
+                pixels: &panel.pixels,
+                width: panel.width,
+                height: panel.height,
+                centered: panel.centered,
+            });
+            window.pre_present_notify();
+            return display
+                .present_blank(presenter, size.width, size.height, overlay)
+                .unwrap_or(false);
+        }
+        self.blit().is_some()
+    }
+
+    fn show_failed(&mut self) -> Option<Placement> {
+        if let (Some(window), Some(presenter), Some(display)) =
+            (&self.window, &mut self.presenter, &self.display)
+        {
+            let size = window.inner_size();
+            let overlay = self.play.panel().map(|panel| Overlay {
+                pixels: &panel.pixels,
+                width: panel.width,
+                height: panel.height,
+                centered: panel.centered,
+            });
+            if let Some(output) = self.last_output
+                && let Some((device, width, height)) = self.session.on_device(output)
+            {
+                window.pre_present_notify();
+                if let Ok(placement) = display.present(
+                    presenter,
+                    device,
+                    width,
+                    height,
+                    size.width,
+                    size.height,
+                    overlay,
+                ) {
+                    return placement;
+                }
+            }
+            window.pre_present_notify();
+            let _ = display.present_blank(presenter, size.width, size.height, overlay);
+            return None;
+        }
+        self.blit()
+    }
+
     fn show(
         &mut self,
         output: entelechy_kernel::Handle,
@@ -249,7 +371,9 @@ impl<H: WindowHooks> WindowRunner<H> {
                     pixels: &panel.pixels,
                     width: panel.width,
                     height: panel.height,
+                    centered: panel.centered,
                 });
+                window.pre_present_notify();
                 match display.present(
                     presenter,
                     device,
@@ -436,14 +560,11 @@ impl<H: WindowHooks> ApplicationHandler for WindowRunner<H> {
         if self.window.is_some() {
             return;
         }
-        let (width, height) = if self.last_size == (0, 0) {
-            (256, 256)
-        } else {
-            self.last_size
+        let (logical_width, logical_height) = match self.requested {
+            Some(size) => size,
+            None if self.last_size == (0, 0) => DEFAULT_WINDOW,
+            None => (self.last_size.0 * self.scale, self.last_size.1 * self.scale),
         };
-        let (logical_width, logical_height) = self
-            .requested
-            .unwrap_or((width * self.scale, height * self.scale));
         let attributes = Window::default_attributes()
             .with_title(self.hooks.initial_title())
             .with_inner_size(LogicalSize::new(logical_width, logical_height));
@@ -481,6 +602,7 @@ impl<H: WindowHooks> ApplicationHandler for WindowRunner<H> {
         window.set_ime_allowed(true);
         self.window = Some(window);
         self.update_title();
+        let _ = self.frame();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -533,6 +655,20 @@ impl<H: WindowHooks> ApplicationHandler for WindowRunner<H> {
                 self.play
                     .modifiers(m.shift_key(), m.control_key(), m.alt_key(), m.super_key());
             }
+            WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+                self.play.wake();
+            }
+            WindowEvent::DroppedFile(path) => {
+                let view = self.view();
+                if self
+                    .hooks
+                    .drop_path(path, &mut self.session, &mut self.play, view)
+                {
+                    self.after_scene_switch();
+                } else {
+                    self.say();
+                }
+            }
             WindowEvent::Ime(Ime::Preedit(text, _)) => self.composing = !text.is_empty(),
             WindowEvent::Ime(Ime::Commit(text)) => {
                 self.composing = false;
@@ -554,12 +690,28 @@ impl<H: WindowHooks> ApplicationHandler for WindowRunner<H> {
                 } else {
                     self.modifiers.control_key()
                 };
-                if self.hooks.wants_folder()
+                if (self.hooks.wants_folder() || self.hooks.wants_open_shortcut())
                     && opener
                     && matches!(&logical_key, Key::Character(c) if c.eq_ignore_ascii_case("o"))
                 {
-                    if down && !repeat && self.hooks.choose_folder(&mut self.session) {
-                        self.update_title();
+                    if down && !repeat {
+                        self.modifiers = ModifiersState::empty();
+                        self.play.release_all();
+                        if self.hooks.wants_folder() {
+                            if self.hooks.choose_folder(&mut self.session) {
+                                self.update_title();
+                            }
+                        } else {
+                            let view = self.view();
+                            if self
+                                .hooks
+                                .open_shortcut(&mut self.session, &mut self.play, view)
+                            {
+                                self.after_scene_switch();
+                            } else {
+                                self.say();
+                            }
+                        }
                     }
                     return;
                 }
@@ -631,6 +783,15 @@ impl<H: WindowHooks> ApplicationHandler for WindowRunner<H> {
             .gamepad
             .as_ref()
             .is_some_and(|gamepad| gamepad.connected() > 0);
+        if self.hooks.is_loading() {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                Instant::now() + Duration::from_millis(16),
+            ));
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
         if self.play.resting() && !has_pad {
             let sleep_ms = if self.hooks.is_serving() { 16 } else { 250 };
             event_loop.set_control_flow(ControlFlow::WaitUntil(

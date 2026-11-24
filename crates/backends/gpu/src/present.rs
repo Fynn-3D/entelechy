@@ -66,8 +66,9 @@ struct Frame {
     sizes: vec4<f32>,
     // placement x, y, width, height
     place: vec4<f32>,
-    // 1 when the surface encodes sRGB itself (values are written linear);
-    // then the overlay's width and height, zero for none
+    // x: 1 when the surface encodes sRGB itself (values are written linear);
+    // y, z: the overlay's width and height, zero for none;
+    // w: 1 when the overlay is centered in the window, 0 for top-left
     flags: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -92,8 +93,11 @@ fn encode(c: vec3<f32>) -> vec4<f32> {
 
 @fragment
 fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    if (position.x < frame.flags.y && position.y < frame.flags.z) {
-        let o = overlay[u32(position.y) * u32(frame.flags.y) + u32(position.x)];
+    let ox = select(0.0, floor((frame.sizes.x - frame.flags.y) * 0.5), frame.flags.w > 0.5);
+    let oy = select(0.0, floor((frame.sizes.y - frame.flags.z) * 0.5), frame.flags.w > 0.5);
+    let op = position.xy - vec2<f32>(ox, oy);
+    if (op.x >= 0.0 && op.y >= 0.0 && op.x < frame.flags.y && op.y < frame.flags.z) {
+        let o = overlay[u32(op.y) * u32(frame.flags.y) + u32(op.x)];
         let c = vec3<f32>(f32((o >> 16u) & 255u), f32((o >> 8u) & 255u), f32(o & 255u)) / 255.0;
         return encode(c);
     }
@@ -112,8 +116,8 @@ fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 }
 ";
 
-/// Pixels drawn over the window's top-left corner: `0x00RRGGBB`, `width`
-/// per row.
+/// Pixels drawn over the window's top-left corner (or centered when
+/// `centered` is true): `0x00RRGGBB`, `width` per row.
 #[derive(Clone, Copy, Debug)]
 pub struct Overlay<'a> {
     /// The pixels, row by row.
@@ -122,6 +126,8 @@ pub struct Overlay<'a> {
     pub width: u32,
     /// Height in window pixels.
     pub height: u32,
+    /// Whether the overlay is centered in the window instead of anchored at `(0, 0)`.
+    pub centered: bool,
 }
 
 struct WgpuPresenter {
@@ -218,6 +224,30 @@ impl Display {
                 window_height,
                 overlay,
             ),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            _ => Err("presenter belongs to a different GPU driver".to_string()),
+        }
+    }
+
+    /// Draws a pure black frame with `overlay` over its top-left corner (or
+    /// centered when `overlay.centered` is true) when no output image is
+    /// resident yet. Returns `Ok(true)` when a surface frame was presented.
+    pub fn present_blank(
+        &self,
+        presenter: &mut Presenter,
+        window_width: u32,
+        window_height: u32,
+        overlay: Option<Overlay<'_>>,
+    ) -> Result<bool, String> {
+        match (&self.0, &mut presenter.0) {
+            (DisplayDriver::Wgpu(d), PresenterDriver::Wgpu(p)) => {
+                d.present_blank(p, window_width, window_height, overlay)
+            }
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            (DisplayDriver::WebGl(_), PresenterDriver::WebGl(_)) => {
+                let _ = (window_width, window_height, overlay);
+                Ok(true)
+            }
             #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
             _ => Err("presenter belongs to a different GPU driver".to_string()),
         }
@@ -340,6 +370,51 @@ impl WgpuDisplay {
         let image = device
             .downcast_ref::<DeviceImage>()
             .ok_or_else(|| "image is resident on a different backend".to_string())?;
+        let placement = placement(width, height, window_width, window_height);
+        self.present_buffer(
+            presenter,
+            Some(&image.buffer),
+            width,
+            height,
+            placement,
+            window_width,
+            window_height,
+            overlay,
+        )
+    }
+
+    fn present_blank(
+        &self,
+        presenter: &mut WgpuPresenter,
+        window_width: u32,
+        window_height: u32,
+        overlay: Option<Overlay<'_>>,
+    ) -> Result<bool, String> {
+        self.present_buffer(
+            presenter,
+            None,
+            0,
+            0,
+            Placement::default(),
+            window_width,
+            window_height,
+            overlay,
+        )
+        .map(|placed| placed.is_some())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn present_buffer(
+        &self,
+        presenter: &mut WgpuPresenter,
+        image_buffer: Option<&wgpu::Buffer>,
+        width: u32,
+        height: u32,
+        placement: Placement,
+        window_width: u32,
+        window_height: u32,
+        overlay: Option<Overlay<'_>>,
+    ) -> Result<Option<Placement>, String> {
         let (gpu_device, queue) = (&self.device, &self.queue);
         if (presenter.config.width, presenter.config.height) != (window_width, window_height)
             && window_width > 0
@@ -349,7 +424,6 @@ impl WgpuDisplay {
             presenter.config.height = window_height;
             presenter.surface.configure(gpu_device, &presenter.config);
         }
-        let placement = placement(width, height, window_width, window_height);
         let frame: [f32; 12] = [
             window_width as f32,
             window_height as f32,
@@ -362,7 +436,7 @@ impl WgpuDisplay {
             presenter.srgb as u8 as f32,
             overlay.map_or(0.0, |o| o.width as f32),
             overlay.map_or(0.0, |o| o.height as f32),
-            0.0,
+            overlay.map_or(0.0, |o| f32::from(u8::from(o.centered))),
         ];
         let texture = match presenter.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
@@ -384,6 +458,14 @@ impl WgpuDisplay {
             .unwrap_or_else(|| vec![0; 4]);
         let overlay_buffer =
             self.buffer("blit overlay", &overlay_bytes, wgpu::BufferUsages::STORAGE);
+        let blank = image_buffer
+            .is_none()
+            .then(|| self.buffer("blit blank", &[0; 16], wgpu::BufferUsages::STORAGE));
+        let image_binding = match (image_buffer, &blank) {
+            (Some(buf), _) => buf.as_entire_binding(),
+            (None, Some(buf)) => buf.as_entire_binding(),
+            (None, None) => unreachable!(),
+        };
         let bind_group = gpu_device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("entelechy blit"),
             layout: &presenter.layout,
@@ -394,7 +476,7 @@ impl WgpuDisplay {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: image.buffer.as_entire_binding(),
+                    resource: image_binding,
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -433,6 +515,9 @@ impl WgpuDisplay {
         // Read by this frame's blit alone.
         crate::wait::discard(uniform);
         crate::wait::discard(overlay_buffer);
+        if let Some(blank) = blank {
+            crate::wait::discard(blank);
+        }
         queue.present(texture);
         Ok(Some(placement))
     }

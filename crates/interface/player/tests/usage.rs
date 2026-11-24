@@ -14,7 +14,7 @@ fn help_prints_the_usage_and_succeeds() {
         assert!(output.status.success(), "{flag}");
         let text = String::from_utf8_lossy(&output.stdout);
         assert!(
-            text.starts_with("usage:") && text.contains("entelechy-player <scene.esn>"),
+            text.starts_with("usage:") && text.contains("entelechy-player [<scene.esn>]"),
             "{flag}: {text}"
         );
         // What the session reads for the Player is named beside the Player's own flags.

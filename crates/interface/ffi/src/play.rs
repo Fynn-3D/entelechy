@@ -306,6 +306,7 @@ pub unsafe extern "C" fn entelechy_play_present(
             pixels: &panel.pixels,
             width: panel.width,
             height: panel.height,
+            centered: panel.centered,
         });
         match s.present_on(&canvas, picture, overlay) {
             Ok(Some((placement, size))) => {

@@ -944,10 +944,22 @@ impl Store for Kept {
 
     fn canonical(&self, path: &Path) -> io::Result<PathBuf> {
         match self.found(path) {
-            Some(Some(_)) => Ok(self.landed(path)),
-            Some(None) => Err(io::ErrorKind::NotFound.into()),
-            None => self.base.canonical(path),
+            Some(Some(_)) => return Ok(self.landed(path)),
+            Some(None) => return Err(io::ErrorKind::NotFound.into()),
+            None => {}
         }
+        self.base.canonical(path).or_else(|err| {
+            let at = self.landed(path);
+            if self
+                .held()
+                .iter()
+                .any(|(file, held)| held.is_some() && file.starts_with(&at))
+            {
+                Ok(at)
+            } else {
+                Err(err)
+            }
+        })
     }
 
     fn whole(&self, path: &Path) -> PathBuf {

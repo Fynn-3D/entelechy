@@ -210,6 +210,32 @@ impl crate::Warm {
         let (main, ordered) = Session::backends(backend, entelechy_gpu::Wait::blocking())?;
         Ok(Self::over(main, ordered, limits))
     }
+
+    /// Opens `backend` (`cpu`, `gpu`, `jit`, or `best`) once for a live window
+    /// that may switch scenes across sessions while sharing one device display
+    /// and compiled Kernel cache.
+    pub fn open_for_window(
+        backend: &str,
+        limits: Limits,
+        wait: entelechy_gpu::Wait,
+    ) -> Result<(Self, Option<Display>, Vec<String>), String> {
+        let mut passed_over = Vec::new();
+        let one = [backend];
+        let named: &[&str] = match backend {
+            "best" => BEST,
+            _ => &one,
+        };
+        for name in named {
+            match Session::opened(name, wait) {
+                Ok((main, ordered, display)) => {
+                    return Ok((Self::over(main, ordered, limits), display, passed_over));
+                }
+                Err(why) if named.len() > 1 => passed_over.push(format!("{name}: {why}")),
+                Err(why) => return Err(why),
+            }
+        }
+        Err(format!("no backend opens: {}", passed_over.join("; ")))
+    }
 }
 
 /// A main backend and the one for ordered work beside it.

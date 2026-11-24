@@ -20,8 +20,10 @@ use entelechy_player::window::{
     PointerMode, SystemClipboard, WindowConfig, WindowHooks, WindowRunner, clock,
 };
 use entelechy_session::bundle::{Bundle, Standalone, read_trailer};
+use entelechy_session::play::hud::loading_card;
 use entelechy_session::play::{Frame, Play};
 use entelechy_session::{Limits, Session, Wait};
+use winit::event_loop::ActiveEventLoop;
 
 const USAGE: &str = "\
 usage:
@@ -243,6 +245,33 @@ fn default_save_dir(title: &str) -> Option<PathBuf> {
 
 struct AppHooks {
     title: String,
+    badge: String,
+    save_dir: Option<PathBuf>,
+    warming: bool,
+}
+
+impl AppHooks {
+    fn finish_warming(runner: &mut WindowRunner<Self>) {
+        runner.hooks.warming = false;
+        runner.play.set_stage_card(None);
+        if !runner.session.save_slots().is_empty()
+            && let Some(dir) = &runner.hooks.save_dir
+            && let Err(why) = runner.session.allow_bundle_saves(dir)
+        {
+            eprintln!(
+                "warning: cannot configure saves in {}: {why}",
+                dir.display()
+            );
+        }
+        runner.after_scene_switch();
+        let context = runner.play.context(runner.view());
+        if let Ok(report) = runner.session.evaluate(&context)
+            && let Ok((width, height)) = runner.session.runtime().host().image_size(report.output)
+        {
+            runner.last_size = (width, height);
+            runner.fit_initial_output(width, height);
+        }
+    }
 }
 
 impl WindowHooks for AppHooks {
@@ -252,6 +281,26 @@ impl WindowHooks for AppHooks {
 
     fn title(&self, _session: &Session) -> String {
         self.title.clone()
+    }
+
+    fn is_loading(&self) -> bool {
+        self.warming
+    }
+
+    fn poll_pending(runner: &mut WindowRunner<Self>, _event_loop: &ActiveEventLoop) {
+        if !runner.hooks.warming {
+            return;
+        }
+        if !runner.session.scene_waiting() && runner.session.preparing_left() == 0 {
+            Self::finish_warming(runner);
+            return;
+        }
+        let card = loading_card(
+            &runner.hooks.badge,
+            &runner.hooks.title,
+            &runner.session.progress(),
+        );
+        runner.play.set_stage_card(Some(card));
     }
 }
 
@@ -286,17 +335,23 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let title = if app.title.is_empty() {
+        bundle.graph.name.clone()
+    } else {
+        app.title.clone()
+    };
     let chosen_backend = args
         .backend
         .as_deref()
         .or_else(|| (!app.backend.is_empty()).then_some(app.backend.as_str()))
         .unwrap_or("best");
+    let headless = args.frames.is_some();
     let loaded = match Session::open_bundle(
         bundle,
         chosen_backend,
         Limits::default(),
         Wait::blocking(),
-        false,
+        !headless,
     ) {
         Ok(loaded) => loaded,
         Err(error) => {
@@ -305,17 +360,12 @@ fn main() -> ExitCode {
         }
     };
     let mut session = loaded.session;
-    let title = if app.title.is_empty() {
-        session
-            .graph()
-            .map(|g| g.name.clone())
-            .unwrap_or_else(|| "Entelechy".into())
-    } else {
-        app.title.clone()
-    };
-    if !session.save_slots().is_empty()
-        && let Some(dir) = args.save_dir.clone().or_else(|| default_save_dir(&title))
-        && let Err(why) = session.allow_bundle_saves(&dir)
+    let save_dir = args.save_dir.clone().or_else(|| default_save_dir(&title));
+    let warming = !headless && (session.scene_waiting() || session.preparing_left() > 0);
+    if !warming
+        && !session.save_slots().is_empty()
+        && let Some(dir) = &save_dir
+        && let Err(why) = session.allow_bundle_saves(dir)
     {
         eprintln!(
             "warning: cannot configure saves in {}: {why}",
@@ -327,6 +377,10 @@ fn main() -> ExitCode {
 
     let mut play = Play::new(clock);
     play.set_standalone(true);
+    let badge = format!("native · {}", session.runtime().backend_name());
+    if warming {
+        play.set_stage_card(Some(loading_card(&badge, &title, &session.progress())));
+    }
 
     let window = args.window.or(app.window);
     if let Some(count) = args.frames {
@@ -380,13 +434,20 @@ fn main() -> ExitCode {
         loaded.display,
         gamepad,
         config,
-        AppHooks { title },
+        AppHooks {
+            title,
+            badge,
+            save_dir,
+            warming,
+        },
     );
-    let context = runner.play.context(runner.view());
-    if let Ok(report) = runner.session.evaluate(&context)
-        && let Ok((width, height)) = runner.session.runtime().host().image_size(report.output)
-    {
-        runner.last_size = (width, height);
+    if !runner.hooks.warming {
+        let context = runner.play.context(runner.view());
+        if let Ok(report) = runner.session.evaluate(&context)
+            && let Ok((width, height)) = runner.session.runtime().host().image_size(report.output)
+        {
+            runner.last_size = (width, height);
+        }
     }
     runner.run()
 }

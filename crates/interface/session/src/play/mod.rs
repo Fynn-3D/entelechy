@@ -330,6 +330,11 @@ pub struct Play {
     /// exported app where every key belongs to the scene.
     standalone: bool,
     hud: bool,
+    /// Optional centered Entelechy boot or empty-stage card shown before a scene
+    /// finishes loading or on an empty startup stage.
+    stage_card: Option<hud::StageCard>,
+    /// Source location of the active failure, when traced.
+    fault_place: Option<String>,
     stats: hud::Stats,
     panel: Option<hud::Panel>,
     reported: Reporting,
@@ -397,6 +402,8 @@ impl Play {
             preview: None,
             standalone: false,
             hud: false,
+            stage_card: None,
+            fault_place: None,
             stats: hud::Stats::default(),
             panel: None,
             reported: Reporting::default(),
@@ -523,6 +530,27 @@ impl Play {
     /// key reaches a shipped application's scene untouched.
     pub fn set_standalone(&mut self, standalone: bool) {
         self.standalone = standalone;
+    }
+
+    /// Sets or clears the centered Entelechy boot / empty-stage card.
+    pub fn set_stage_card(&mut self, card: Option<hud::StageCard>) {
+        if self.stage_card != card {
+            self.stage_card = card;
+            self.resting = false;
+        }
+    }
+
+    /// Whether the F10 frame-data overlay is currently shown.
+    pub fn hud(&self) -> bool {
+        self.hud
+    }
+
+    /// Sets whether the F10 frame-data overlay is shown, syncing device clocking.
+    pub fn set_hud(&mut self, session: &mut Session, on: bool) {
+        self.hud = on;
+        self.panel = None;
+        self.resting = false;
+        session.set_clocked(on);
     }
 
     /// A key by name (`a`, `ArrowLeft`, `F5`). F5 resets state, F6
@@ -763,6 +791,20 @@ impl Play {
     pub fn frame(&mut self, session: &mut Session, view: View) -> Frame {
         let begun = (self.clock)();
         let waited_before = session.device_waited();
+        // When an explicit stage card is shown on an empty or background-loading
+        // stage (where Kernels are not preparing in turns on `session` itself),
+        // present the card directly on a blank stage without evaluating a dummy
+        // scene Kernel.
+        if !self.shown
+            && session.preparing_left() == 0
+            && !session.scene_waiting()
+            && let Some(card) = &self.stage_card
+        {
+            let scale = view.scale.round().max(1.0) as u32;
+            self.panel = Some(hud::stage_card(card, scale));
+            self.resting = !self.hud && card.progress.is_none();
+            return Frame::Wait;
+        }
         // Kernels waiting their turn (a page) are prepared by syncs: every
         // frame then, so the turns go on.
         let due = self.replaying()
@@ -775,8 +817,24 @@ impl Play {
         // A first load still waiting for its Kernels has nothing to run
         // yet; once a frame is shown, a replacement waits behind the
         // version running.
-        if !self.shown && session.scene_waiting() {
+        if !self.shown
+            && (session.scene_waiting()
+                || (self.stage_card.is_some() && session.preparing_left() > 0))
+        {
+            if let Some(card) = &self.stage_card {
+                let scale = view.scale.round().max(1.0) as u32;
+                self.panel = Some(hud::stage_card(card, scale));
+            }
             return Frame::Wait;
+        }
+        #[cfg(feature = "documents")]
+        if !session.is_bundled()
+            && let Some(why) = session.why_no_scene()
+        {
+            self.failed(&format!("scene not loaded: {why}"), || None);
+            self.panel = Some(self.failure_overlay(session, &view));
+            self.resting = session.is_quiescent();
+            return Frame::Failed;
         }
         // A window's frames overlap the device's: the next is made while
         // the device draws this one.
@@ -836,9 +894,14 @@ impl Play {
                     .and_then(|node| session.cached(node, "result"))
                     .unwrap_or_else(|| displayed(session, &report));
                 let sound = sound(session, &report);
-                self.panel = self
-                    .hud
-                    .then(|| self.panel_for(session, &report, picture, &context));
+                self.fault_place = None;
+                self.panel = if self.hud {
+                    Some(self.panel_for(session, &report, picture, &context))
+                } else {
+                    self.stage_card
+                        .as_ref()
+                        .map(|card| hud::stage_card(card, view.scale.round().max(1.0) as u32))
+                };
                 // The frame's own work on the processor: all of it but its
                 // waits for the device, which are the device's time, not
                 // its. The device's own time is its clock's, read for a
@@ -878,6 +941,10 @@ impl Play {
                 let clock_settled = self.paused() || !session.reads_clock_for(None);
                 self.resting = !self.hud
                     && !self.replaying()
+                    && self
+                        .stage_card
+                        .as_ref()
+                        .is_none_or(|c| c.progress.is_none())
                     && sound.is_none()
                     && self.pointer_behind.is_none()
                     && input_settled
@@ -905,6 +972,7 @@ impl Play {
                 });
                 #[cfg(not(feature = "documents"))]
                 self.failed(&told, || None);
+                self.panel = Some(self.failure_overlay(session, &view));
                 Frame::Failed
             }
         }
@@ -1027,12 +1095,39 @@ impl Play {
         let message = format!("evaluation failed: {told}");
         if self.reported.failed(&message) {
             self.said.push(format!("{message}; last frame is kept"));
-            if let Some(place) = place() {
+            self.fault_place = place();
+            if let Some(place) = &self.fault_place {
                 self.said
                     .push(format!("  the failing operation is written at {place}"));
             }
         }
         self.status = message;
+    }
+
+    fn failure_overlay(&self, session: &Session, view: &View) -> hud::Panel {
+        let scale = view.scale.round().max(1.0) as u32;
+        if !self.shown && !self.standalone {
+            let detail = match &self.fault_place {
+                Some(place) => format!("{}\nat {place}", self.status),
+                None => self.status.clone(),
+            };
+            return hud::stage_card(
+                &hud::StageCard {
+                    badge: format!("native · {}", session.runtime().backend_name()),
+                    title: session.graph().map(|g| g.name.clone()),
+                    progress: Some(1.0),
+                    failed: true,
+                    detail,
+                },
+                scale,
+            );
+        }
+        let columns = ((view.window[0] / (6 * scale) as f32) as usize).max(40);
+        let mut wrapped = wrap_text(&self.status, columns, 4);
+        if let Some(place) = &self.fault_place {
+            wrapped.extend(wrap_text(&format!("at {place}"), columns, 2));
+        }
+        hud::lines(&wrapped, scale)
     }
 
     /// Records how the device showed the picture: placement (`None`:
@@ -1235,10 +1330,17 @@ impl Play {
                     .filter(|placed| placed.routed.is_none())
                     .map(|p| p.uploaded)
                     .sum::<u64>();
+            let named: Vec<String> = routed.iter().take(4).map(|p| p.node.to_string()).collect();
+            let more = if routed.len() > 4 {
+                format!(" +{}", routed.len() - 4)
+            } else {
+                String::new()
+            };
             format!(
-                " | off {} {:>3} ({})",
+                " | off {} {:>3}: {}{more} ({})",
                 routed[0].backend,
                 routed.len(),
+                named.join(", "),
                 crate::bench::bytes_text(carried)
             )
         };
@@ -1316,6 +1418,57 @@ fn displayed(session: &Session, report: &Report) -> Handle {
 /// The output a sound device plays ([`Session::sound_of`]).
 fn sound(session: &Session, report: &Report) -> Option<Handle> {
     session.sound_of(report).map(|(handle, _)| handle)
+}
+
+fn wrap_text(text: &str, columns: usize, max_lines: usize) -> Vec<String> {
+    let columns = columns.max(20);
+    let mut lines = Vec::new();
+    for raw in text.lines() {
+        let mut current = String::new();
+        for word in raw.split_whitespace() {
+            let needed = if current.is_empty() {
+                word.chars().count()
+            } else {
+                current.chars().count() + 1 + word.chars().count()
+            };
+            if needed <= columns {
+                if !current.is_empty() {
+                    current.push(' ');
+                }
+                current.push_str(word);
+            } else {
+                if !current.is_empty() {
+                    lines.push(std::mem::take(&mut current));
+                    if lines.len() >= max_lines {
+                        return lines;
+                    }
+                }
+                let mut rest = word;
+                while rest.chars().count() > columns {
+                    let split = rest
+                        .char_indices()
+                        .nth(columns)
+                        .map_or(rest.len(), |(idx, _)| idx);
+                    lines.push(rest[..split].to_owned());
+                    if lines.len() >= max_lines {
+                        return lines;
+                    }
+                    rest = &rest[split..];
+                }
+                current.push_str(rest);
+            }
+        }
+        if !current.is_empty() {
+            lines.push(current);
+            if lines.len() >= max_lines {
+                return lines;
+            }
+        }
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -1441,5 +1594,43 @@ mod tests {
         assert_eq!(key_code("\\"), Some(220));
         assert_eq!(key_code("Delete"), Some(46));
         assert_eq!(key_code("Super"), Some(91));
+    }
+
+    #[cfg(feature = "documents")]
+    #[test]
+    fn broken_scene_shows_on_canvas_fault_panel_until_repaired() {
+        fn zero_clock() -> f64 {
+            0.0
+        }
+        let store = std::sync::Arc::new(crate::Memory::default());
+        let scene = std::path::Path::new("scene.esn");
+        store.put(scene, b"output result <- missing.result;\n".to_vec());
+        let runtime = crate::Session::runtime_for("cpu", crate::Limits::default()).unwrap();
+        let mut session = crate::Session::open_in(store.clone(), scene, None, runtime);
+        let _ = session.sync();
+        let mut play = Play::new(zero_clock);
+        let view = View {
+            window: [960.0, 540.0],
+            scale: 1.0,
+            rate: 0.0,
+            queued: 0,
+        };
+        assert!(matches!(play.frame(&mut session, view), Frame::Failed));
+        assert!(
+            play.panel().is_some(),
+            "fault banner renders on canvas even with F10 off"
+        );
+
+        store.put(
+            scene,
+            b"node k: kernel { requires { field.write; } output result: Image; domain = vec2(4, 4); compute { return vec4(0.0, 0.0, 0.0, 1.0); } }\noutput result <- k.result;\n"
+                .to_vec(),
+        );
+        let _ = session.sync();
+        assert!(matches!(play.frame(&mut session, view), Frame::Shown(_)));
+        assert!(
+            play.panel().is_none(),
+            "fault banner vanishes to zero pixels once a frame succeeds"
+        );
     }
 }

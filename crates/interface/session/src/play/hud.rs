@@ -59,6 +59,81 @@ const GLYPHS: &[(char, Glyph)] = &[
     ('~', [0x00, 0x00, 0x08, 0x15, 0x02, 0x00, 0x00]),
     ('_', [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F]),
     ('#', [0x0A, 0x0A, 0x1F, 0x0A, 0x1F, 0x0A, 0x0A]),
+    ('=', [0x00, 0x00, 0x1F, 0x00, 0x1F, 0x00, 0x00]),
+    ('<', [0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02]),
+    ('>', [0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08]),
+    ('\'', [0x04, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00]),
+    ('`', [0x08, 0x04, 0x02, 0x00, 0x00, 0x00, 0x00]),
+    ('"', [0x0A, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00]),
+    ('[', [0x0E, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0E]),
+    (']', [0x0E, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0E]),
+    ('!', [0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04]),
+    ('?', [0x0E, 0x11, 0x01, 0x06, 0x04, 0x00, 0x04]),
+    (';', [0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x04, 0x08]),
+    ('@', [0x0E, 0x11, 0x17, 0x15, 0x17, 0x10, 0x0E]),
+    ('*', [0x00, 0x04, 0x15, 0x0E, 0x15, 0x04, 0x00]),
+    ('\u{00B7}', [0x00, 0x00, 0x00, 0x0C, 0x0C, 0x00, 0x00]),
+];
+
+/// Bold geometric lowercase letters for the `entelechy` display wordmark
+/// (13 rows tall, high bit leftmost of `width` columns).
+const WORDMARK_GLYPHS: &[(char, u32, [u8; 13])] = &[
+    (
+        'e',
+        7,
+        [
+            0b0000000, 0b0000000, 0b0000000, 0b0111110, 0b1100011, 0b1100011, 0b1111111, 0b1100000,
+            0b1100011, 0b0111110, 0b0000000, 0b0000000, 0b0000000,
+        ],
+    ),
+    (
+        'n',
+        7,
+        [
+            0b0000000, 0b0000000, 0b0000000, 0b1101110, 0b1110011, 0b1100011, 0b1100011, 0b1100011,
+            0b1100011, 0b1100011, 0b0000000, 0b0000000, 0b0000000,
+        ],
+    ),
+    (
+        't',
+        6,
+        [
+            0b000000, 0b011000, 0b011000, 0b111110, 0b011000, 0b011000, 0b011000, 0b011000,
+            0b011000, 0b001111, 0b000000, 0b000000, 0b000000,
+        ],
+    ),
+    (
+        'l',
+        4,
+        [
+            0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b1100, 0b0111, 0b0000,
+            0b0000, 0b0000,
+        ],
+    ),
+    (
+        'c',
+        7,
+        [
+            0b0000000, 0b0000000, 0b0000000, 0b0111110, 0b1100011, 0b1100000, 0b1100000, 0b1100000,
+            0b1100011, 0b0111110, 0b0000000, 0b0000000, 0b0000000,
+        ],
+    ),
+    (
+        'h',
+        7,
+        [
+            0b1100000, 0b1100000, 0b1100000, 0b1101110, 0b1110011, 0b1100011, 0b1100011, 0b1100011,
+            0b1100011, 0b1100011, 0b0000000, 0b0000000, 0b0000000,
+        ],
+    ),
+    (
+        'y',
+        7,
+        [
+            0b0000000, 0b0000000, 0b0000000, 0b1100011, 0b1100011, 0b1100011, 0b1100011, 0b1100011,
+            0b0111111, 0b0000011, 0b0000011, 0b1100011, 0b0111110,
+        ],
+    ),
 ];
 
 /// A glyph plus one column of space; a glyph plus a row above and below.
@@ -66,7 +141,7 @@ const CELL: (u32, u32) = (6, 9);
 const INK: u32 = 0x00E0_E0E0;
 const PAPER: u32 = 0x0000_0000;
 
-/// The rendered line: `0x00RRGGBB` pixels, `width` per row.
+/// The rendered line or centered stage card: `0x00RRGGBB` pixels, `width` per row.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Panel {
     /// Width in pixels.
@@ -75,6 +150,80 @@ pub struct Panel {
     pub height: u32,
     /// The pixels, row by row.
     pub pixels: Vec<u32>,
+    /// Whether the panel is centered in the window instead of placed at `(0, 0)`.
+    pub centered: bool,
+}
+
+/// Content of the centered Entelechy boot and empty-stage card, matching the
+/// web player's Minimalist Soul 6-square Living Seed & Open DAG screen.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StageCard {
+    /// Small Solar-Gold pill badge at the top (`native · gpu` or `live · 127.0.0.1:7788`).
+    pub badge: String,
+    /// Scene title when loading (`None` on an empty resting stage).
+    pub title: Option<String>,
+    /// Loading progress in `0.0..=1.0` (`None` on an empty resting stage, where
+    /// all three tiers of the emblem stand fully lit).
+    pub progress: Option<f32>,
+    /// Whether loading faulted.
+    pub failed: bool,
+    /// Status or instruction line below the progress bar.
+    pub detail: String,
+}
+
+/// Builds a live [`StageCard`] from `progress` as a scene's Kernels compile
+/// and build on the device.
+pub fn loading_card(badge: &str, title: &str, progress: &entelechy_kernel::Progress) -> StageCard {
+    use entelechy_kernel::Stage;
+    let now = progress.now();
+    let total = now.seeds.len();
+    if total == 0 {
+        return StageCard {
+            badge: badge.to_owned(),
+            title: Some(title.to_owned()),
+            progress: Some(0.08),
+            failed: false,
+            detail: "preparing scene...".to_owned(),
+        };
+    }
+    let built = now.built();
+    let weighted: f32 = now
+        .seeds
+        .iter()
+        .map(|seed| match seed.stage {
+            Stage::Waiting => 0.0,
+            Stage::Compiling => 0.25,
+            Stage::Compiled => 0.55,
+            Stage::Building => {
+                let creep = 1.0 - (-seed.took.as_secs_f32() * 0.55).exp();
+                0.72 + 0.24 * creep
+            }
+            Stage::Built => 1.0,
+        })
+        .sum();
+    let part = (0.08 + 0.90 * (weighted / total as f32)).clamp(0.08, 0.99);
+    let detail = match now.longest() {
+        Some(seed) => {
+            let verb = match seed.stage {
+                Stage::Compiling => "compiling",
+                _ => "building",
+            };
+            let secs = seed.took.as_secs_f32();
+            if secs >= 0.2 {
+                format!("{built}/{total} · {verb} {} · {secs:.1}s", seed.id)
+            } else {
+                format!("{built}/{total} · {verb} {}", seed.id)
+            }
+        }
+        None => format!("{built}/{total} kernels ready"),
+    };
+    StageCard {
+        badge: badge.to_owned(),
+        title: Some(title.to_owned()),
+        progress: Some(part),
+        failed: false,
+        detail,
+    }
 }
 
 /// Renders `text` at `scale` device pixels per font pixel, uppercase as
@@ -107,10 +256,23 @@ pub fn lines_at_least(texts: &[String], scale: u32, columns: usize) -> Panel {
         width,
         height,
         pixels,
+        centered: false,
     }
 }
 
 fn draw(chars: &[char], pixels: &mut [u32], width: u32, top: u32, scale: u32) {
+    draw_at(chars, pixels, width, scale, top + scale, scale, INK);
+}
+
+fn draw_at(
+    chars: &[char],
+    pixels: &mut [u32],
+    width: u32,
+    left: u32,
+    top: u32,
+    scale: u32,
+    color: u32,
+) {
     for (column, c) in chars.iter().enumerate() {
         let Some((_, glyph)) = GLYPHS.iter().find(|(name, _)| name == c) else {
             continue;
@@ -120,23 +282,386 @@ fn draw(chars: &[char], pixels: &mut [u32], width: u32, top: u32, scale: u32) {
                 if bits & (0x10 >> bit) == 0 {
                     continue;
                 }
-                let x0 = (column as u32 * CELL.0 + 1 + bit) * scale;
-                let y0 = top + (row as u32 + 1) * scale;
-                for y in y0..y0 + scale {
-                    let start = (y * width + x0) as usize;
-                    pixels[start..start + scale as usize].fill(INK);
-                }
+                let x0 = left + (column as u32 * CELL.0 + bit) * scale;
+                let y0 = top + row as u32 * scale;
+                fill_rect(pixels, width, x0, y0, scale, scale, color);
             }
         }
     }
 }
 
-/// Stamps the panel into the top-left of a `0x00RRGGBB` frame, clipped.
+fn fill_rect(pixels: &mut [u32], stride: u32, x: u32, y: u32, w: u32, h: u32, color: u32) {
+    let total_h = pixels.len() as u32 / stride.max(1);
+    let x1 = (x + w).min(stride);
+    let y1 = (y + h).min(total_h);
+    if x >= x1 || y >= y1 {
+        return;
+    }
+    for row in y..y1 {
+        let start = (row * stride + x) as usize;
+        let end = (row * stride + x1) as usize;
+        pixels[start..end].fill(color);
+    }
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> Vec<char> {
+    let lower: Vec<char> = text.chars().map(|c| c.to_ascii_lowercase()).collect();
+    if lower.len() <= max_chars {
+        return lower;
+    }
+    let keep = max_chars.saturating_sub(3);
+    let mut out = lower[..keep].to_vec();
+    out.extend(['.', '.', '.']);
+    out
+}
+
+fn wrap_card_lines(text: &str, max_cols: usize, max_lines: usize) -> Vec<Vec<char>> {
+    let mut lines: Vec<String> = Vec::new();
+    for raw in text.lines() {
+        let mut current = String::new();
+        for word in raw.split_whitespace() {
+            let wlen = word.chars().count();
+            let needed = if current.is_empty() {
+                wlen
+            } else {
+                current.chars().count() + 1 + wlen
+            };
+            if needed <= max_cols {
+                if !current.is_empty() {
+                    current.push(' ');
+                }
+                current.push_str(word);
+            } else {
+                if !current.is_empty() {
+                    lines.push(std::mem::take(&mut current));
+                    if lines.len() >= max_lines {
+                        break;
+                    }
+                }
+                let mut rest = word;
+                while rest.chars().count() > max_cols && lines.len() < max_lines {
+                    let split = rest
+                        .char_indices()
+                        .nth(max_cols)
+                        .map_or(rest.len(), |(idx, _)| idx);
+                    lines.push(rest[..split].to_owned());
+                    rest = &rest[split..];
+                }
+                if lines.len() >= max_lines {
+                    break;
+                }
+                current.push_str(rest);
+            }
+        }
+        if lines.len() >= max_lines {
+            break;
+        }
+        if !current.is_empty() {
+            lines.push(current);
+            if lines.len() >= max_lines {
+                break;
+            }
+        }
+    }
+    lines
+        .into_iter()
+        .map(|line| line.chars().map(|c| c.to_ascii_lowercase()).collect())
+        .collect()
+}
+
+/// Renders the centered Entelechy boot / empty-stage card at `scale` device
+/// pixels per logical pixel.
+pub fn stage_card(card: &StageCard, scale: u32) -> Panel {
+    const CARD_BG: u32 = 0x0005_0505;
+    const CARD_BORDER: u32 = 0x0026_2626;
+    const SOLAR_GOLD: u32 = 0x00FF_B000;
+    const PURE_WHITE: u32 = 0x00FF_FFFF;
+    const TIER2_DIM: u32 = 0x0037_3737;
+    const TIER3_DIM: u32 = 0x0028_2828;
+    const HORIZON: u32 = 0x0059_5959;
+    const TRACK: u32 = 0x0026_2626;
+    const SUBTLE_TRACK: u32 = 0x001A_1A1A;
+    const MUTED: u32 = 0x008C_8C8C;
+    const FAULT_BAR: u32 = 0x00FF_3B30;
+    const FAULT_TEXT: u32 = 0x00FC_A5A5;
+
+    let s = scale.max(1);
+    let card_w = 348 * s;
+    let pad_y = 28 * s;
+    let badge_chars = truncate_chars(&card.badge, 42);
+    let badge_text_w = badge_chars.len().saturating_sub(1) as u32 * CELL.0 * s + 5 * s;
+    let badge_w = badge_text_w + 16 * s;
+    let badge_h = 15 * s;
+
+    let emblem_px = |v: u32| (v * 3 * s) / 2;
+    let emblem_w = emblem_px(50);
+    let emblem_h = emblem_px(42);
+
+    let wm_unit = 2 * s;
+    let wm_letters = "entelechy";
+    let wm_units_w: u32 = wm_letters
+        .chars()
+        .filter_map(|c| WORDMARK_GLYPHS.iter().find(|(ch, _, _)| *ch == c))
+        .map(|(_, w, _)| *w + 1)
+        .sum::<u32>()
+        .saturating_sub(1);
+    let wm_w = wm_units_w * wm_unit;
+    let wm_h = 13 * wm_unit;
+
+    let title_chars = card.title.as_deref().map(|t| truncate_chars(t, 44));
+    let detail_rows = wrap_card_lines(&card.detail, 48, 5);
+
+    let mut y = pad_y;
+    let badge_y = y;
+    y += badge_h + 16 * s;
+    let emblem_y = y;
+    y += emblem_h + 12 * s;
+    let wm_y = y;
+    y += wm_h;
+    let title_y = if title_chars.is_some() {
+        y += 14 * s;
+        let at = y;
+        y += 7 * s;
+        Some(at)
+    } else {
+        None
+    };
+    y += 16 * s;
+    let bar_y = y;
+    let bar_h = 2 * s;
+    y += bar_h + 14 * s;
+    let detail_y = y;
+    let detail_h = if detail_rows.is_empty() {
+        7 * s
+    } else {
+        (detail_rows.len() as u32 - 1) * 10 * s + 7 * s
+    };
+    y += detail_h + pad_y;
+    let card_h = y;
+
+    let mut pixels = vec![CARD_BG; (card_w * card_h) as usize];
+    let border = s.min(2);
+    fill_rect(&mut pixels, card_w, 0, 0, card_w, border, CARD_BORDER);
+    fill_rect(
+        &mut pixels,
+        card_w,
+        0,
+        card_h - border,
+        card_w,
+        border,
+        CARD_BORDER,
+    );
+    fill_rect(&mut pixels, card_w, 0, 0, border, card_h, CARD_BORDER);
+    fill_rect(
+        &mut pixels,
+        card_w,
+        card_w - border,
+        0,
+        border,
+        card_h,
+        CARD_BORDER,
+    );
+
+    // Top badge (`native · gpu` or `live · 127.0.0.1:7788`).
+    if !badge_chars.is_empty() {
+        let bx = (card_w - badge_w) / 2;
+        fill_rect(
+            &mut pixels,
+            card_w,
+            bx,
+            badge_y,
+            badge_w,
+            badge_h,
+            SOLAR_GOLD,
+        );
+        draw_at(
+            &badge_chars,
+            &mut pixels,
+            card_w,
+            bx + 8 * s,
+            badge_y + 4 * s,
+            s,
+            0x0000_0000,
+        );
+    }
+
+    // 6-Square Living Seed & Open DAG emblem (`viewBox="0 0 50 42"`).
+    let ex = (card_w - emblem_w) / 2;
+    let t2_color = match card.progress {
+        None => PURE_WHITE,
+        Some(p) if p >= 0.28 => PURE_WHITE,
+        Some(_) => TIER2_DIM,
+    };
+    let t3_color = match card.progress {
+        None => PURE_WHITE,
+        Some(p) if p >= 0.55 => PURE_WHITE,
+        Some(_) => TIER3_DIM,
+    };
+    let sq = emblem_px(10);
+    for gx in [0, 20, 40] {
+        fill_rect(
+            &mut pixels,
+            card_w,
+            ex + emblem_px(gx),
+            emblem_y + emblem_px(2),
+            sq,
+            sq,
+            t3_color,
+        );
+    }
+    for gx in [10, 30] {
+        fill_rect(
+            &mut pixels,
+            card_w,
+            ex + emblem_px(gx),
+            emblem_y + emblem_px(12),
+            sq,
+            sq,
+            t2_color,
+        );
+    }
+    fill_rect(
+        &mut pixels,
+        card_w,
+        ex + emblem_px(20),
+        emblem_y + emblem_px(22),
+        sq,
+        sq,
+        SOLAR_GOLD,
+    );
+    fill_rect(
+        &mut pixels,
+        card_w,
+        ex + emblem_px(15),
+        emblem_y + emblem_px(38),
+        emblem_px(20),
+        emblem_px(2).max(s),
+        HORIZON,
+    );
+
+    // Bold geometric `entelechy` wordmark.
+    let mut wx = (card_w - wm_w) / 2;
+    for ch in wm_letters.chars() {
+        let Some((_, gw, rows)) = WORDMARK_GLYPHS.iter().find(|(c, _, _)| *c == ch) else {
+            continue;
+        };
+        for (row, bits) in rows.iter().enumerate() {
+            for col in 0..*gw {
+                if bits & (1 << (gw - 1 - col)) != 0 {
+                    fill_rect(
+                        &mut pixels,
+                        card_w,
+                        wx + col * wm_unit,
+                        wm_y + row as u32 * wm_unit,
+                        wm_unit,
+                        wm_unit,
+                        PURE_WHITE,
+                    );
+                }
+            }
+        }
+        wx += (*gw + 1) * wm_unit;
+    }
+
+    // Optional scene title.
+    if let (Some(at_y), Some(chars)) = (title_y, &title_chars)
+        && !chars.is_empty()
+    {
+        let tw = (chars.len() as u32 * CELL.0 - 1) * s;
+        draw_at(
+            chars,
+            &mut pixels,
+            card_w,
+            card_w.saturating_sub(tw) / 2,
+            at_y,
+            s,
+            PURE_WHITE,
+        );
+    }
+
+    // Progress bar (or quiet Solar-Seed horizon tick on an empty resting stage).
+    let bar_w = 260 * s;
+    let bar_x = (card_w - bar_w) / 2;
+    match card.progress {
+        Some(part) => {
+            fill_rect(&mut pixels, card_w, bar_x, bar_y, bar_w, bar_h, TRACK);
+            let fill_color = if card.failed { FAULT_BAR } else { SOLAR_GOLD };
+            let fill_w = if card.failed {
+                bar_w
+            } else {
+                ((part.clamp(0.06, 1.0) * bar_w as f32).round() as u32).clamp(1, bar_w)
+            };
+            fill_rect(&mut pixels, card_w, bar_x, bar_y, fill_w, bar_h, fill_color);
+        }
+        None => {
+            let line_h = s;
+            fill_rect(
+                &mut pixels,
+                card_w,
+                bar_x,
+                bar_y,
+                bar_w,
+                line_h,
+                SUBTLE_TRACK,
+            );
+            let tick_w = if card.failed { bar_w } else { 24 * s };
+            let tick_color = if card.failed { FAULT_BAR } else { SOLAR_GOLD };
+            fill_rect(
+                &mut pixels,
+                card_w,
+                (card_w - tick_w) / 2,
+                bar_y,
+                tick_w,
+                bar_h,
+                tick_color,
+            );
+        }
+    }
+
+    // Detail / status lines (wrapped and centered).
+    let detail_color = if card.failed { FAULT_TEXT } else { MUTED };
+    for (idx, row_chars) in detail_rows.iter().enumerate() {
+        if row_chars.is_empty() {
+            continue;
+        }
+        let dw = (row_chars.len() as u32 * CELL.0 - 1) * s;
+        draw_at(
+            row_chars,
+            &mut pixels,
+            card_w,
+            card_w.saturating_sub(dw) / 2,
+            detail_y + idx as u32 * 10 * s,
+            s,
+            detail_color,
+        );
+    }
+
+    Panel {
+        width: card_w,
+        height: card_h,
+        pixels,
+        centered: true,
+    }
+}
+
+/// Stamps the panel into the top-left (or center when `panel.centered`) of a
+/// `0x00RRGGBB` frame, clipped.
 pub fn stamp(panel: &Panel, frame: &mut [u32], frame_width: u32, frame_height: u32) {
-    let width = panel.width.min(frame_width) as usize;
-    for y in 0..panel.height.min(frame_height) as usize {
+    let ox = if panel.centered {
+        frame_width.saturating_sub(panel.width) / 2
+    } else {
+        0
+    };
+    let oy = if panel.centered {
+        frame_height.saturating_sub(panel.height) / 2
+    } else {
+        0
+    };
+    let width = panel.width.min(frame_width.saturating_sub(ox)) as usize;
+    let height = panel.height.min(frame_height.saturating_sub(oy)) as usize;
+    for y in 0..height {
         let from = y * panel.width as usize;
-        let to = y * frame_width as usize;
+        let to = (oy as usize + y) * frame_width as usize + ox as usize;
         frame[to..to + width].copy_from_slice(&panel.pixels[from..from + width]);
     }
 }

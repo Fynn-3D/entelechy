@@ -305,7 +305,7 @@ its value, and the result. Nothing is committed by the trace.",
         },
         Command {
             name: "player",
-            args: "<scene.esn> [...]",
+            args: "[<scene.esn>] [...]",
             summary: "Run the Player.",
             doc: "\
 The Player: `entelechy-player` beside `entelechy`, run with the same arguments,
