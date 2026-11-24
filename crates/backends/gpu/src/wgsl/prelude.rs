@@ -431,7 +431,7 @@ pub(crate) fn emit_preamble(
     out: &mut String,
     module: &Module,
     with_output: bool,
-    packed: &[usize],
+    packs: &[Vec<usize>],
     longs: Longs,
 ) {
     let manifest = &module.manifest;
@@ -439,8 +439,9 @@ pub(crate) fn emit_preamble(
         out.push_str(LONG_PAIR_WORDS.trim_start());
     }
     let context_len = CONTEXT_HEAD + manifest.inputs.len();
+    let packed_total: usize = packs.iter().map(Vec::len).sum();
     // Packed input offsets follow the parameters, four per slot.
-    let params_len = (param_slots(module).1 + packed.len().div_ceil(4)).max(1);
+    let params_len = (param_slots(module).1 + packed_total.div_ceil(4)).max(1);
     let _ = writeln!(
         out,
         "@group(0) @binding({CONTEXT_BINDING}) var<uniform> ctx: array<vec4<f32>, {context_len}>;"
@@ -464,14 +465,16 @@ pub(crate) fn emit_preamble(
             );
         }
     }
-    if !packed.is_empty() {
+    for pack_idx in 0..packs.len() {
         let _ = writeln!(
             out,
-            "@group(0) @binding({PACKED_BINDING}) var<storage, read> inputs_packed: array<u32>;"
+            "@group(0) @binding({}) var<storage, read> {}: array<u32>;",
+            packed_binding(pack_idx),
+            packed_buffer_name(pack_idx),
         );
     }
     for (index, port) in manifest.inputs.iter().enumerate() {
-        if packed.contains(&index) {
+        if packs.iter().any(|group| group.contains(&index)) {
             continue;
         }
         // A memory's binding is read-write.
@@ -790,7 +793,7 @@ fn settle_left() {{
         } else {
             port.ty.schema.element_bytes()
         };
-        let (buffer, offset) = input_source(module, packed, index, encoding);
+        let (buffer, offset) = input_source(module, packs, index, encoding);
         let (expr, _) = load_expr(
             module,
             element,

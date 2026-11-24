@@ -22,9 +22,29 @@ pub fn emit_packed_longs(module: &Module, packed: &[usize], longs: Longs) -> Str
 
 /// [`emit_packed_longs`], an emitting scatter landing `half`.
 pub fn emit_packed_half(module: &Module, packed: &[usize], longs: Longs, half: Half) -> String {
+    let groups = if packed.is_empty() {
+        Vec::new()
+    } else {
+        vec![packed.to_vec()]
+    };
+    emit_packed_groups_half(module, &groups, longs, half)
+}
+
+/// Emits the module's shader with multiple `packs` input groups and `longs` mode.
+pub fn emit_packed_groups_longs(module: &Module, packs: &[Vec<usize>], longs: Longs) -> String {
+    emit_packed_groups_half(module, packs, longs, first_half(module, longs))
+}
+
+/// [`emit_packed_groups_longs`], an emitting scatter landing `half`.
+pub fn emit_packed_groups_half(
+    module: &Module,
+    packs: &[Vec<usize>],
+    longs: Longs,
+    half: Half,
+) -> String {
     let manifest = &module.manifest;
     let mut out = String::new();
-    emit_preamble(&mut out, module, true, packed, longs);
+    emit_preamble(&mut out, module, true, packs, longs);
     // One store per written output; a scatter stores the entry's pairs.
     let scattering = matches!(manifest.mode, Mode::Scatter { .. });
     for (k, port) in manifest
@@ -63,25 +83,17 @@ pub fn emit_packed_half(module: &Module, packed: &[usize], longs: Longs, half: H
             function,
             &function_name(index),
             false,
-            packed,
+            packs,
             longs,
         );
         out.push('\n');
     }
-    emit_function(
-        &mut out,
-        module,
-        &module.entry,
-        "entry",
-        true,
-        packed,
-        longs,
-    );
+    emit_function(&mut out, module, &module.entry, "entry", true, packs, longs);
     if let Some(merge) = &module.merge {
-        emit_function(&mut out, module, merge, "merge", false, packed, longs);
+        emit_function(&mut out, module, merge, "merge", false, packs, longs);
     }
     if let Some(init) = &module.init {
-        emit_function(&mut out, module, init, "init", false, packed, longs);
+        emit_function(&mut out, module, init, "init", false, packs, longs);
         // Ordered work: one invocation walks the rows, carrying the value.
         let _ = writeln!(
             out,

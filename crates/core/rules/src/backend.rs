@@ -524,6 +524,13 @@ pub trait Backend: Send + Sync {
         false
     }
 
+    /// Whether this backend executes general compute passes and hardware
+    /// rasterization on a GPU device (`true` on `wgpu`, `false` on a WebGL2
+    /// fragment-only driver or a processor backend).
+    fn has_compute_device(&self) -> bool {
+        self.has_device()
+    }
+
     /// Downloads the words in the first `byte_len` bytes of a resource
     /// this backend left resident.
     fn download(

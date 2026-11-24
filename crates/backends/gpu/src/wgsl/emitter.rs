@@ -8,7 +8,7 @@ pub(crate) fn emit_function(
     function: &Function,
     name: &str,
     entry: bool,
-    packed: &[usize],
+    packed: &[Vec<usize>],
     longs: Longs,
 ) {
     let args = if entry && module.manifest.mode == Mode::Scan {
@@ -113,8 +113,8 @@ pub(crate) struct Emitter<'a> {
     out: &'a mut String,
     module: &'a Module,
     function: &'a Function,
-    /// The inputs read from the pack.
-    packed: &'a [usize],
+    /// The input groups read from packed storage buffers.
+    packed: &'a [Vec<usize>],
     /// The enclosing loops and eaches, innermost last: each its id and
     /// whether it carries a value (an each does not).
     loops: Vec<(ValueId, bool)>,

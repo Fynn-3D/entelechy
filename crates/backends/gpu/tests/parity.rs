@@ -3316,3 +3316,80 @@ fn sliced_map_dispatches_match_cpu_across_rows_grids_volumes_and_failures() {
     };
     assert_eq!(cpu_err, gpu_err);
 }
+
+#[test]
+fn packed_input_groups_splits_wide_grids_across_multiple_storage_buffers() {
+    let rows_n = 12usize;
+    let float_grids_n = 4usize;
+    let vec4_grids_n = 9usize;
+    let ports: String = (0..rows_n)
+        .map(|k| format!("input r{k}: Rows<Int>; "))
+        .chain((0..float_grids_n).map(|k| format!("input fg{k}: Grid<Float>; ")))
+        .chain((0..vec4_grids_n).map(|k| format!("input vg{k}: Grid<Vec4>; ")))
+        .collect();
+    let r_sum = (0..rows_n)
+        .map(|k| format!("at(r{k}, 0)"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let fg_sum = (0..float_grids_n)
+        .map(|k| format!("sample(fg{k})"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let vg_sum = (0..vec4_grids_n)
+        .map(|k| format!("sample(vg{k}).x"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let module = compile(&format!(
+        "kernel test.multi_pack@1 {{
+            requires {{ field.read; field.write; }}
+            {ports}
+            output result: Image;
+            output extra: Grid<Vec4>;
+            compute {{
+                let s = float({r_sum}) + {fg_sum} + {vg_sum};
+                return {{ result: vec4(s, 0.0, 0.0, 1.0), extra: vec4(0.0, s, 0.0, 1.0) }};
+            }}
+        }}"
+    ))
+    .unwrap();
+    let accounted = entelechy_ir::account(&module).unwrap();
+    // 25 inputs + 2 outputs + 1 failure = 28 storage bindings.
+    assert_eq!(entelechy_gpu::wgsl::bindings(&accounted), (2, 28));
+
+    let groups8 = entelechy_gpu::wgsl::packed_input_groups(&accounted, 28, 8);
+    assert_eq!(groups8.len(), 4);
+    let packed8: usize = groups8.iter().map(Vec::len).sum();
+    assert_eq!(28 - packed8 + groups8.len(), 8);
+    for group in &groups8 {
+        let grids_in_group = group.iter().filter(|&&idx| idx >= rows_n).count();
+        assert!(
+            grids_in_group <= 3,
+            "expected <= 3 grids per pack buffer, got {grids_in_group} in {group:?}"
+        );
+    }
+
+    let groups10 = entelechy_gpu::wgsl::packed_input_groups(&accounted, 28, 10);
+    assert_eq!(groups10.len(), 3);
+    let packed10: usize = groups10.iter().map(Vec::len).sum();
+    assert_eq!(28 - packed10 + groups10.len(), 10);
+
+    let wgsl = entelechy_gpu::wgsl::emit_packed_groups_longs(
+        &accounted,
+        &groups8,
+        entelechy_gpu::wgsl::Longs::Pairs,
+    );
+    assert!(wgsl.contains("@binding(91) var<storage, read> inputs_packed:"));
+    assert!(wgsl.contains("@binding(93) var<storage, read> inputs_packed_1:"));
+    assert!(wgsl.contains("@binding(94) var<storage, read> inputs_packed_2:"));
+    assert!(wgsl.contains("@binding(95) var<storage, read> inputs_packed_3:"));
+
+    if let Some(gpu) = gpu() {
+        let pruned = entelechy_gpu::wgsl::pruned(&wgsl);
+        let _shader = gpu
+            .device()
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("test.multi_pack@1"),
+                source: wgpu::ShaderSource::Wgsl(pruned.as_str().into()),
+            });
+    }
+}

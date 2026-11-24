@@ -411,15 +411,24 @@ impl WgpuBackend {
             }
         }
         // What the pass binds for its inputs: each its own, except packed ones,
-        // copied into one buffer before it runs, each at the word offset the
-        // parameters carry after their own.
+        // copied into their assigned pack buffers before it runs, each at the
+        // word offset the parameters carry after their own.
         let mut bound_inputs: Vec<(u32, wgpu::Buffer)> =
-            Vec::with_capacity(input_buffers.len() + 1);
-        let mut packs: Vec<(wgpu::Buffer, u64, u64)> = Vec::new();
-        let mut offsets: Vec<u32> = Vec::new();
-        let mut packed_words = 0u64;
+            Vec::with_capacity(input_buffers.len() + pipeline.packed.len());
         for (index, buffer) in input_buffers.iter().enumerate() {
-            if pipeline.packed.contains(&index) {
+            if !pipeline.packed.iter().any(|group| group.contains(&index)) {
+                bound_inputs.push((wgsl::INPUT_BINDING + index as u32, buffer.clone()));
+            }
+        }
+        type PackSliceCopy = (wgpu::Buffer, u64, u64);
+        let max_binding_bytes = self.device.limits().max_storage_buffer_binding_size;
+        let mut pack_copies: Vec<(wgpu::Buffer, Vec<PackSliceCopy>)> =
+            Vec::with_capacity(pipeline.packed.len());
+        let mut offsets: Vec<u32> = Vec::new();
+        for (pack_idx, group) in pipeline.packed.iter().enumerate() {
+            let mut packed_words = 0u64;
+            let mut copies_in_group = Vec::with_capacity(group.len());
+            for &index in group {
                 let extent = input_extents[index];
                 let words = module.manifest.inputs[index]
                     .ty
@@ -431,21 +440,28 @@ impl WgpuBackend {
                     )
                 })?;
                 offsets.push(offset);
-                packs.push((buffer.clone(), packed_words * 4, words * 4));
+                copies_in_group.push((input_buffers[index].clone(), packed_words * 4, words * 4));
                 packed_words += words;
-            } else {
-                bound_inputs.push((wgsl::INPUT_BINDING + index as u32, buffer.clone()));
             }
-        }
-        let pack = (!packs.is_empty()).then(|| {
-            self.spare.take(
+            let byte_size = (packed_words * 4).max(16).div_ceil(16) * 16;
+            if byte_size > max_binding_bytes {
+                for (prev_pack, _) in pack_copies {
+                    self.spare.keep(prev_pack, None);
+                }
+                return Err(ExecutionError::Device(format!(
+                    "`{}` packs {} MiB of inputs into one storage binding, past the device's {} MiB limit",
+                    module.manifest.id,
+                    byte_size / (1024 * 1024),
+                    max_binding_bytes / (1024 * 1024),
+                )));
+            }
+            let pack = self.spare.take(
                 &self.device,
-                (packed_words * 4).max(16).div_ceil(16) * 16,
+                byte_size,
                 wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            )
-        });
-        if let Some(pack) = &pack {
-            bound_inputs.push((wgsl::PACKED_BINDING, pack.clone()));
+            );
+            bound_inputs.push((wgsl::packed_binding(pack_idx), pack.clone()));
+            pack_copies.push((pack, copies_in_group));
         }
         // Context head (see `wgsl::CONTEXT_HEAD`), then one [w, h, d, 0] per
         // input; extents and the fold are the bits of `u32`s. Built after
@@ -632,8 +648,8 @@ impl WgpuBackend {
         for (from, to, size) in &copies {
             encoder.copy_buffer_to_buffer(from, 0, to, 0, *size);
         }
-        if let Some(pack) = &pack {
-            for (from, at, size) in &packs {
+        for (pack, copies_in_group) in &pack_copies {
+            for (from, at, size) in copies_in_group {
                 if *size > 0 {
                     encoder.copy_buffer_to_buffer(from, 0, pack, *at, *size);
                 }

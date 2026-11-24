@@ -972,6 +972,12 @@ pub(crate) fn rasterize(
     // The keys the sorting pass draws small triangles into, a pixel each,
     // cleared to none.
     let pixels = u64::from(width) * u64::from(height);
+    let est_ops = u64::from(triangle_count)
+        .saturating_mul(64)
+        .saturating_add(pixels.saturating_mul(16));
+    if gpu.wait.parks_with_host() && !gpu.measured() && gpu.page_queue.full(pixels, est_ops) {
+        gpu.drain_page()?;
+    }
     let keys = scratch(
         if pipelines.here { pixels * 2 } else { 4 },
         wgpu::BufferUsages::COPY_DST,
@@ -1138,6 +1144,12 @@ pub(crate) fn rasterize(
     // node, and reports the device's clock where there is one.
     let timing = gpu.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
     let submission = gpu.submit(encoder.finish());
+    if gpu.wait.parks_with_host() && !gpu.measured() {
+        gpu.page_queue.note(pixels, est_ops);
+        if triangle_count >= 500_000 {
+            gpu.drain_page()?;
+        }
+    }
     gpu.settle_measured(submission, timing);
     if let Some(error) = gpu.wait.block_on(guard.pop()) {
         return Err(ExecutionError::Device(format!(

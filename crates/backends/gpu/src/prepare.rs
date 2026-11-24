@@ -20,10 +20,10 @@ pub(crate) struct Pipeline<P = Pass> {
     /// Whether a scatter's entry emits pairs, combining them into the
     /// target as it runs: the target is then ready before the entry.
     pub(crate) emits: bool,
-    /// The inputs its passes read from one buffer, copied there before they
-    /// run, where binding each would exceed the device's limit; see
-    /// [`wgsl::packed_inputs`].
-    pub(crate) packed: Vec<usize>,
+    /// The input groups its passes read from packed storage buffers, copied
+    /// there before they run, where binding each would exceed the device's
+    /// limit; see [`wgsl::packed_input_groups`].
+    pub(crate) packed: Vec<Vec<usize>>,
 }
 
 /// A prefix fold's three passes: a block a walk, the blocks' totals
@@ -411,8 +411,8 @@ type BuiltPipeline = (Pipeline, Vec<Arc<CachedPass>>);
 pub(crate) struct Lazy {
     id: String,
     module: Validated,
-    /// Its inputs packed into one buffer, known before it is built.
-    pub(crate) packed: Vec<usize>,
+    /// Its input groups packed into storage buffers, known before it is built.
+    pub(crate) packed: Vec<Vec<usize>>,
     device: wgpu::Device,
     wait: Wait,
     passes: Arc<PassCache>,
@@ -601,10 +601,10 @@ impl WgpuBackend {
         }
     }
 
-    /// The inputs `module` packs into one buffer on this device.
-    pub(crate) fn packing(&self, module: &Validated) -> Vec<usize> {
+    /// The input groups `module` packs into storage buffers on this device.
+    pub(crate) fn packing(&self, module: &Validated) -> Vec<Vec<usize>> {
         let limits = self.device.limits();
-        wgsl::packed_inputs(
+        wgsl::packed_input_groups(
             module,
             limits.max_buffers_and_acceleration_structures_per_shader_stage as usize,
             limits.max_storage_buffers_per_shader_stage as usize,
@@ -624,9 +624,9 @@ impl WgpuBackend {
         let failure = usize::from(wgsl::can_fail(module));
         let emitting = usize::from(!wgsl::emitted_pairs(module).is_empty())
             * (1 + usize::from(wgsl::highs_beside(module)));
-        // Inputs packed into one buffer bind as one.
-        let packed = self.packing(module).len();
-        let storage = unpacked - packed + usize::from(packed > 0);
+        let groups = self.packing(module);
+        let packed_count: usize = groups.iter().map(Vec::len).sum();
+        let storage = unpacked - packed_count + groups.len();
         let limits = self.device.limits();
         let most_storage = limits.max_storage_buffers_per_shader_stage as usize;
         let most_uniform = limits.max_uniform_buffers_per_shader_stage as usize;
@@ -784,22 +784,23 @@ impl WgpuBackend {
         }
         let written = wgsl::written_outputs(module);
         let packed = self.packing(module);
+        let is_packed = |index: usize| packed.iter().any(|group| group.contains(&index));
         let longs = self.longs(module);
-        let source = wgsl::emit_packed_longs(module, &packed, longs);
+        let source = wgsl::emit_packed_groups_longs(module, &packed, longs);
         let mut entries = vec![
             uniform_entry(wgsl::CONTEXT_BINDING),
             uniform_entry(wgsl::PARAMS_BINDING),
             storage_entry(wgsl::OUTPUT_BINDING, false),
         ];
         for (index, port) in module.manifest.inputs.iter().enumerate() {
-            if packed.contains(&index) {
+            if is_packed(index) {
                 continue;
             }
             let memory = module.manifest.memories.contains(&port.name);
             entries.push(storage_entry(wgsl::INPUT_BINDING + index as u32, !memory));
         }
-        if !packed.is_empty() {
-            entries.push(storage_entry(wgsl::PACKED_BINDING, true));
+        for pack_idx in 0..packed.len() {
+            entries.push(storage_entry(wgsl::packed_binding(pack_idx), true));
         }
         for k in 1..written {
             entries.push(storage_entry(wgsl::output_binding(module, k), false));
@@ -817,7 +818,7 @@ impl WgpuBackend {
         }
         let main = self.pass(&module.manifest.id.to_string(), &source, &entries)?;
         let reduce = if module.manifest.mode == entelechy_ir::Mode::Reduce {
-            let reduce_source = wgsl::emit_reduce_packed_longs(module, &packed, longs);
+            let reduce_source = wgsl::emit_reduce_packed_groups_longs(module, &packed, longs);
             // The map pass's bindings, then the fold's own.
             let (count_binding, in_binding, out_binding) = wgsl::reduce_bindings(module);
             let mut entries = vec![
@@ -825,12 +826,12 @@ impl WgpuBackend {
                 uniform_entry(wgsl::PARAMS_BINDING),
             ];
             for index in 0..module.manifest.inputs.len() {
-                if !packed.contains(&index) {
+                if !is_packed(index) {
                     entries.push(storage_entry(wgsl::INPUT_BINDING + index as u32, true));
                 }
             }
-            if !packed.is_empty() {
-                entries.push(storage_entry(wgsl::PACKED_BINDING, true));
+            for pack_idx in 0..packed.len() {
+                entries.push(storage_entry(wgsl::packed_binding(pack_idx), true));
             }
             entries.extend([
                 uniform_entry(count_binding),
@@ -963,7 +964,7 @@ impl WgpuBackend {
                                     .then(|| {
                                         self.pass(
                                             &format!("{} lows", module.manifest.id),
-                                            &wgsl::emit_packed_half(
+                                            &wgsl::emit_packed_groups_half(
                                                 module,
                                                 &packed,
                                                 longs,

@@ -144,34 +144,53 @@ pub(crate) struct WgpuBackend {
     test_slice_limit: usize,
 }
 
-/// Runs and elements queued on a page's device before draining.
-const PAGE_PACE_RUNS: u32 = 10;
-const PAGE_PACE_ELEMENTS: u64 = 3_500_000;
+/// Runs, elements, and estimated IR operations queued on a page's device before
+/// draining, keeping Windows WDDM's 2-second TDR watchdog safe even on laptop
+/// integrated GPUs (`crbug.com/369219127`).
+const PAGE_PACE_RUNS: u32 = 8;
+const PAGE_PACE_ELEMENTS: u64 = 2_500_000;
+const PAGE_PACE_OPS: u64 = 2_000_000_000;
+const PAGE_SLICE_OPS: u64 = 1_400_000_000;
 const PAGE_SLICE_VOLUME_ELEMENTS: usize = 131_072;
+const PAGE_SLICE_MIN_VOLUME_ELEMENTS: usize = 16_384;
 const PAGE_SLICE_LARGE_ELEMENTS: usize = 524_288;
+const PAGE_SLICE_MIN_GRID_ELEMENTS: usize = 196_608;
 const PAGE_SLICE_THRESHOLD: usize = 2_100_000;
 
 #[derive(Clone, Default)]
-pub(crate) struct PageQueue(Arc<(std::sync::atomic::AtomicU32, std::sync::atomic::AtomicU64)>);
+pub(crate) struct PageQueue(
+    Arc<(
+        std::sync::atomic::AtomicU32,
+        std::sync::atomic::AtomicU64,
+        std::sync::atomic::AtomicU64,
+    )>,
+);
 
 impl PageQueue {
-    pub(crate) fn note(&self, elements: u64) {
+    pub(crate) fn note(&self, elements: u64, ops: u64) {
         self.0.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.0
             .1
             .fetch_add(elements, std::sync::atomic::Ordering::Relaxed);
+        self.0
+            .2
+            .fetch_add(ops, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub(crate) fn clear(&self) {
         self.0.0.store(0, std::sync::atomic::Ordering::Relaxed);
         self.0.1.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.0.2.store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub(crate) fn full(&self, incoming_elements: u64) -> bool {
+    pub(crate) fn full(&self, incoming_elements: u64, incoming_ops: u64) -> bool {
         let runs = self.0.0.load(std::sync::atomic::Ordering::Relaxed);
         let elements = self.0.1.load(std::sync::atomic::Ordering::Relaxed);
+        let ops = self.0.2.load(std::sync::atomic::Ordering::Relaxed);
         runs >= PAGE_PACE_RUNS
-            || (runs > 0 && elements.saturating_add(incoming_elements) > PAGE_PACE_ELEMENTS)
+            || (runs > 0
+                && (elements.saturating_add(incoming_elements) > PAGE_PACE_ELEMENTS
+                    || ops.saturating_add(incoming_ops) > PAGE_PACE_OPS))
     }
 }
 
@@ -365,20 +384,39 @@ impl WgpuBackend {
         Ok(())
     }
 
-    fn slice_limit_for(&self, domain: entelechy_abi::Domain) -> usize {
+    fn slice_limit_for(
+        &self,
+        module: &Validated,
+        params: &[Value],
+        domain: entelechy_abi::Domain,
+    ) -> usize {
         if self.test_slice_limit > 0 {
             return self.test_slice_limit;
         }
         if !self.wait.parks_with_host() || self.measured() {
             return usize::MAX;
         }
-        if domain.depth() >= 16 {
+        let mut cap = if domain.depth() >= 16 {
             PAGE_SLICE_VOLUME_ELEMENTS
         } else if domain.count() > PAGE_SLICE_THRESHOLD {
             PAGE_SLICE_LARGE_ELEMENTS
         } else {
             usize::MAX
+        };
+        let typical = module.typical_work_given(params).max(1);
+        let total_ops = (domain.count() as u64).saturating_mul(typical);
+        if total_ops > PAGE_SLICE_OPS {
+            let floor = if domain.depth() >= 16 {
+                PAGE_SLICE_MIN_VOLUME_ELEMENTS
+            } else {
+                PAGE_SLICE_MIN_GRID_ELEMENTS
+            };
+            let by_ops = usize::try_from(PAGE_SLICE_OPS / typical)
+                .unwrap_or(usize::MAX)
+                .max(floor);
+            cap = cap.min(by_ops);
         }
+        cap
     }
 
     /// This backend computing every `Long` as a pair of 32-bit words, as on
@@ -685,10 +723,12 @@ impl Backend for WgpuBackend {
             _ => domain,
         };
         outputs_fit(module, output_domain, scope)?;
-        let slice_limit = self.slice_limit_for(domain);
+        let typical = module.typical_work_given(&invocation.params).max(1);
+        let total_ops = (domain.count() as u64).saturating_mul(typical);
+        let slice_limit = self.slice_limit_for(module, &invocation.params, domain);
         if self.wait.parks_with_host()
             && !self.measured()
-            && self.page_queue.full(domain.count() as u64)
+            && self.page_queue.full(domain.count() as u64, total_ops)
         {
             self.drain_page()?;
         }
@@ -777,15 +817,21 @@ impl Backend for WgpuBackend {
             let timing = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
             let sub = self.submit(encoder.finish());
             if self.wait.parks_with_host() && !self.measured() {
-                self.page_queue.note(element_count as u64);
+                self.page_queue.note(element_count as u64, total_ops);
             }
             self.settle_measured(sub.clone(), timing);
             sub
         } else {
-            // Drain any queued work before running a sliced heavy map, and drain
-            // after each slice so no single burst exceeds a browser GPU watchdog.
+            let total_slices = (further_slices.len() + 1) as u64;
+            let per_slice_elems = (element_count as u64).div_ceil(total_slices);
+            let per_slice_ops = total_ops.div_ceil(total_slices);
             let _ = self.submit(encoder.finish());
-            self.drain_page()?;
+            if self.wait.parks_with_host() && !self.measured() {
+                self.page_queue.note(per_slice_elems, per_slice_ops);
+                if self.page_queue.full(per_slice_elems, per_slice_ops) {
+                    self.drain_page()?;
+                }
+            }
             let scale_bytes = invocation.context.scale.to_le_bytes();
             let one_bytes = 1.0f32.to_le_bytes();
             let last_idx = further_slices.len() - 1;
@@ -817,7 +863,17 @@ impl Backend for WgpuBackend {
                     slice_encoder.copy_buffer_to_buffer(word, 0, back, 0, wgsl::FAILURE_BYTES);
                 }
                 let sub = self.submit(slice_encoder.finish());
-                self.drain_page()?;
+                if self.wait.parks_with_host() && !self.measured() {
+                    self.page_queue.note(per_slice_elems, per_slice_ops);
+                    let need_drain = if idx == last_idx {
+                        total_ops >= PAGE_PACE_OPS
+                    } else {
+                        self.page_queue.full(per_slice_elems, per_slice_ops)
+                    };
+                    if need_drain {
+                        self.drain_page()?;
+                    }
+                }
                 last_sub = Some(sub);
             }
             self.written
@@ -827,10 +883,10 @@ impl Backend for WgpuBackend {
                 .clear();
             last_sub.expect("further_slices is non-empty")
         };
-        // The packed inputs' copy is read by this run alone and goes back to
-        // the pile now that its submission is queued.
+        // The packed inputs' copies are read by this run alone and go back to
+        // the pile now that its submissions are queued.
         for (binding, buffer) in &bound_inputs {
-            if *binding == wgsl::PACKED_BINDING {
+            if wgsl::is_packed_binding(*binding) {
                 self.spare.keep(buffer.clone(), None);
             }
         }
@@ -923,6 +979,13 @@ impl Backend for WgpuBackend {
         let domain = execution_domain(module, invocation, scope).ok()?;
         if scope.size(*invocation.inputs.get(input)?).ok()? != domain {
             return None;
+        }
+        if self.wait.parks_with_host() {
+            let elems = (domain.count() as u64).saturating_mul(u64::from(repeat));
+            let ops = elems.saturating_mul(module.typical_work_given(&invocation.params).max(1));
+            if elems > PAGE_PACE_ELEMENTS || ops > PAGE_PACE_OPS {
+                return None;
+            }
         }
         Some(self.repeated(prepared, module, invocation, scope, repeat, input))
     }
@@ -1343,6 +1406,10 @@ impl Backend for GpuBackend {
 
     fn has_device(&self) -> bool {
         self.inner().has_device()
+    }
+
+    fn has_compute_device(&self) -> bool {
+        self.inner().has_compute_device()
     }
 
     fn download(

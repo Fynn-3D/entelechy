@@ -193,8 +193,39 @@ pub fn brace_depth(module: &Module) -> usize {
         .unwrap_or(1)
 }
 
-/// Binding index of the buffer that packs inputs; see [`packed_inputs`].
+/// Binding index of the first buffer that packs inputs; see [`packed_inputs`].
 pub const PACKED_BINDING: u32 = 91;
+/// Binding index of the second packed-input buffer (`inputs_packed_1`);
+/// further pack buffers follow consecutively up to [`MAX_PACK_BUFFERS`].
+pub const EXTRA_PACKED_BINDING: u32 = 93;
+/// Maximum number of packed-input storage buffers a wide Kernel splits its
+/// packed read-only inputs across so each stays well under WebGPU's `128 MiB`
+/// `maxStorageBufferBindingSize` ceiling.
+pub const MAX_PACK_BUFFERS: usize = 4;
+
+/// Binding index of packed-input buffer `pack` (`0..MAX_PACK_BUFFERS`).
+pub const fn packed_binding(pack: usize) -> u32 {
+    if pack == 0 {
+        PACKED_BINDING
+    } else {
+        EXTRA_PACKED_BINDING + (pack as u32 - 1)
+    }
+}
+
+/// Whether `binding` is one of the packed-input storage bindings.
+pub const fn is_packed_binding(binding: u32) -> bool {
+    binding == PACKED_BINDING
+        || (binding >= EXTRA_PACKED_BINDING
+            && binding < EXTRA_PACKED_BINDING + (MAX_PACK_BUFFERS as u32 - 1))
+}
+
+pub(crate) fn packed_buffer_name(pack: usize) -> String {
+    if pack == 0 {
+        "inputs_packed".to_owned()
+    } else {
+        format!("inputs_packed_{pack}")
+    }
+}
 
 /// `(uniforms, storage)` buffers the module's widest pass binds unpacked:
 /// context and parameters, every input, every written output, the
@@ -214,12 +245,31 @@ pub fn bindings(module: &Module) -> (usize, usize) {
     (2, storage)
 }
 
+fn packing_candidates(module: &Module) -> (Vec<usize>, usize) {
+    let inputs = &module.manifest.inputs;
+    let read_only = |k: &usize| !module.manifest.memories.contains(&inputs[*k].name);
+    let rows = |k: &usize| inputs[*k].shape() == Shape::Rows;
+    let rows_cands: Vec<usize> = (0..inputs.len())
+        .rev()
+        .filter(|k| read_only(k) && rows(k))
+        .collect();
+    let rows_count = rows_cands.len();
+    let mut wide_cands: Vec<usize> = (0..inputs.len())
+        .filter(|k| read_only(k) && !rows(k))
+        .collect();
+    // Pack narrower element schemas (`Float` / `Int` grids and volumes) before
+    // wide `Vec4` / struct textures so multi-megabyte maps stay resident in
+    // their own zero-copy bindings whenever slots allow.
+    wide_cands.sort_by_key(|&k| (inputs[k].ty.schema.value_words(), std::cmp::Reverse(k)));
+    let mut candidates = rows_cands;
+    candidates.extend(wide_cands);
+    (candidates, rows_count)
+}
+
 /// The inputs packed into one buffer so the module binds at most `most`
 /// buffers and `most_storage` storage buffers: the fewest that fit, read-
 /// only inputs only (a memory keeps its own), rows before grids and
-/// volumes and the last declared first within each. A pack is copied
-/// whole before every run, and a grid or a volume is the kind as large
-/// as an image or a window; rows are most often a handful of words.
+/// volumes, narrower elements first, and the last declared first within each.
 /// Packing `k` inputs saves `k - 1` bindings. Empty when the module fits,
 /// or when packing every read-only input is still too wide.
 pub fn packed_inputs(module: &Module, most: usize, most_storage: usize) -> Vec<usize> {
@@ -230,14 +280,7 @@ pub fn packed_inputs(module: &Module, most: usize, most_storage: usize) -> Vec<u
     if over == 0 {
         return Vec::new();
     }
-    let inputs = &module.manifest.inputs;
-    let read_only = |k: &usize| !module.manifest.memories.contains(&inputs[*k].name);
-    let rows = |k: &usize| inputs[*k].shape() == Shape::Rows;
-    let candidates: Vec<usize> = (0..inputs.len())
-        .rev()
-        .filter(|k| read_only(k) && rows(k))
-        .chain((0..inputs.len()).rev().filter(|k| read_only(k) && !rows(k)))
-        .collect();
+    let (candidates, _) = packing_candidates(module);
     if candidates.len() < over + 1 {
         return Vec::new();
     }
@@ -246,26 +289,89 @@ pub fn packed_inputs(module: &Module, most: usize, most_storage: usize) -> Vec<u
     packed
 }
 
+/// Packed read-only input groups (`1..=MAX_PACK_BUFFERS` buffers) so `module`
+/// fits within `(most, most_storage)` while spreading packed grids and volumes
+/// across multiple buffers to stay under WebGPU's `128 MiB` per-binding limit.
+pub fn packed_input_groups(module: &Module, most: usize, most_storage: usize) -> Vec<Vec<usize>> {
+    let (uniforms, storage) = bindings(module);
+    let over = (uniforms + storage)
+        .saturating_sub(most)
+        .max(storage.saturating_sub(most_storage));
+    if over == 0 {
+        return Vec::new();
+    }
+    let inputs = &module.manifest.inputs;
+    let (candidates, rows_count) = packing_candidates(module);
+    if candidates.len() < over + 1 {
+        return Vec::new();
+    }
+    let fixed_storage = storage.saturating_sub(inputs.len());
+    let avail_slots = most_storage
+        .saturating_sub(fixed_storage)
+        .min(most.saturating_sub(uniforms + fixed_storage));
+    let max_packs = MAX_PACK_BUFFERS
+        .min(avail_slots)
+        .min(candidates.len().saturating_sub(over));
+    let mut pack_count = 1usize;
+    while pack_count < max_packs {
+        let total = over + pack_count;
+        let grids = total.saturating_sub(rows_count);
+        if grids <= pack_count * 3 {
+            break;
+        }
+        pack_count += 1;
+    }
+    if pack_count <= 1 {
+        let mut single = candidates[..over + 1].to_vec();
+        single.sort_unstable();
+        return vec![single];
+    }
+    let chosen = &candidates[..over + pack_count];
+    let mut groups: Vec<Vec<usize>> = vec![Vec::new(); pack_count];
+    let mut wide_chosen = Vec::new();
+    for &idx in chosen {
+        if inputs[idx].shape() == Shape::Rows {
+            groups[0].push(idx);
+        } else {
+            wide_chosen.push(idx);
+        }
+    }
+    wide_chosen.sort_by_key(|&k| (inputs[k].ty.schema.value_words(), k));
+    for (slot, idx) in wide_chosen.into_iter().enumerate() {
+        groups[slot % pack_count].push(idx);
+    }
+    for group in &mut groups {
+        group.sort_unstable();
+    }
+    groups.retain(|group| !group.is_empty());
+    groups
+}
+
 /// `(buffer, offset prefix)` input `index` reads from: its own buffer, or
-/// the pack at the offset the parameters carry, in the input's load unit
-/// (words, or bytes where it is narrow).
+/// its assigned pack buffer at the offset the parameters carry, in the input's
+/// load unit (words, or bytes where it is narrow).
 fn input_source(
     module: &Module,
-    packed: &[usize],
+    packs: &[Vec<usize>],
     index: usize,
     encoding: Encoding,
 ) -> (String, String) {
-    let Some(slot) = packed.iter().position(|&k| k == index) else {
-        return (format!("in{index}"), String::new());
-    };
-    let first = param_slots(module).1;
-    let offset = format!("params[{}u][{}u]", first + slot / 4, slot % 4);
-    let offset = if encoding == Encoding::Word {
-        offset
-    } else {
-        format!("{offset} * 4u")
-    };
-    ("inputs_packed".to_owned(), format!("{offset} + "))
+    let mut base_slot = 0usize;
+    for (pack_idx, group) in packs.iter().enumerate() {
+        if let Some(pos) = group.iter().position(|&k| k == index) {
+            let slot = base_slot + pos;
+            let first = param_slots(module).1;
+            let offset = format!("params[{}u][{}u]", first + slot / 4, slot % 4);
+            let offset = if encoding == Encoding::Word {
+                offset
+            } else {
+                format!("{offset} * 4u")
+            };
+            return (packed_buffer_name(pack_idx), format!("{offset} + "));
+        }
+        base_slot += group.len();
+    }
+    (format!("in{index}"), String::new())
 }
 
 /// Bytes of the failure record, rounded to sixteen: the first failure,

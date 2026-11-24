@@ -1100,6 +1100,13 @@ impl Runtime {
         self.backend.name()
     }
 
+    /// Whether the main backend executes general compute and native
+    /// rasterization on a GPU device (`true` on `wgpu`, `false` on WebGL2 or
+    /// processor backends).
+    pub fn has_compute_device(&self) -> bool {
+        self.backend.has_compute_device()
+    }
+
     /// Waits for the backend's device to finish what it was given. See
     /// [`Backend::settle_device`].
     pub fn settle_device(&self) {

@@ -784,6 +784,10 @@ impl Backend for WebGlBackend {
         true
     }
 
+    fn has_compute_device(&self) -> bool {
+        false
+    }
+
     fn set_measured(&self, on: bool) {
         self.measured.store(on, Ordering::Relaxed);
     }

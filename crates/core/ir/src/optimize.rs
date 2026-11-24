@@ -29,9 +29,19 @@ use crate::{
     Value, ValueId,
 };
 
+/// Always written out where called, regardless of call count or caller size.
+const TINY_INLINE_LIMIT: usize = 16;
+
 /// A function of at most this many instructions, nested blocks counted,
-/// is written out where it is called.
+/// is written out where it is called once, or several times within
+/// [`INLINE_DUP_LIMIT`].
 const INLINE_LIMIT: usize = 96;
+
+/// Maximum net instruction growth (`(total_calls - 1) * callee_size`) allowed
+/// across the module when writing out a non-tiny function called in more than
+/// one place; beyond this, keeping the shared helper avoids compound WGSL/HLSL
+/// blowup while preserving single-call inlining.
+const INLINE_DUP_LIMIT: usize = 160;
 
 /// A function taking a record or array of at least this many words is
 /// written out where it is called up to [`INLINE_BIG_LIMIT`] instructions,
@@ -39,7 +49,10 @@ const INLINE_LIMIT: usize = 96;
 const BIG_ARG_WORDS: usize = 32;
 /// The most instructions of a function taking a wide argument that is
 /// still written out where it is called.
-const INLINE_BIG_LIMIT: usize = 1024;
+const INLINE_BIG_LIMIT: usize = 384;
+/// The most instructions a caller grows to by writing out non-tiny calls,
+/// keeping compound shaders from exploding quadratically in driver compilers.
+const INLINE_CALLER_LIMIT: usize = 1024;
 /// An `each` builder whose elements together hold at most this many
 /// instructions, nested blocks counted, is written out element by
 /// element; a longer one runs as a builder's loop (or, for a backend that
@@ -49,13 +62,32 @@ const UNROLL_LIMIT: usize = 512;
 /// Optimizes every function of a module. The result computes the same
 /// words and validates whenever the input does.
 pub fn optimize(module: Module) -> Module {
-    let writers = crate::validate::writers(&module.functions);
     let memories: Vec<bool> = module
         .manifest
         .inputs
         .iter()
         .map(|port| module.manifest.memories.contains(&port.name))
         .collect();
+    // Narrow wide input-element arguments to addresses before writing calls
+    // out, so functions taking wide input records (`Env`, `Pose`, `Solid`)
+    // specialize to `Int` addresses rather than duplicating wide bodies.
+    let pre_writers = crate::validate::writers(&module.functions);
+    let pre_ctx = Ctx {
+        structs: &module.structs,
+        writers: &pre_writers,
+        memories: &memories,
+    };
+    let functions: Vec<Function> = module
+        .functions
+        .iter()
+        .map(|f| pre_ctx.function(f))
+        .collect();
+    let entry = pre_ctx.function(&module.entry);
+    let merge = module.merge.as_ref().map(|f| pre_ctx.function(f));
+    let init = module.init.as_ref().map(|f| pre_ctx.function(f));
+    let (functions, entry, merge, init) = pre_ctx.read_through(functions, entry, merge, init);
+
+    let writers = crate::validate::writers(&functions);
     let ctx = Ctx {
         structs: &module.structs,
         writers: &writers,
@@ -65,24 +97,48 @@ pub fn optimize(module: Module) -> Module {
     // optimized.
     // Whether each is short enough to write out, judged once, as it is
     // optimized.
-    let mut functions: Vec<Function> = Vec::with_capacity(module.functions.len());
-    let mut inlinable: Vec<bool> = Vec::with_capacity(module.functions.len());
-    for function in &module.functions {
-        let flattened = inline_calls(function, &functions, &inlinable);
+    let mut inlined: Vec<Function> = Vec::with_capacity(functions.len());
+    let mut inlinable: Vec<bool> = Vec::with_capacity(functions.len());
+    for (idx, function) in functions.iter().enumerate() {
+        let flattened = inline_calls(function, &inlined, &inlinable);
         let optimized = ctx.function(&flattened);
-        inlinable.push(writes_out(&optimized, &module.structs));
-        functions.push(optimized);
+        let mut module_calls = 0usize;
+        let mut count_in = |body: &[Instruction]| {
+            let mut m = HashMap::new();
+            count_calls(body, &mut m);
+            module_calls = module_calls.saturating_add(m.get(&(idx as u32)).copied().unwrap_or(0));
+        };
+        for later in &functions[idx + 1..] {
+            count_in(&later.body);
+        }
+        count_in(&entry.body);
+        if let Some(f) = &merge {
+            count_in(&f.body);
+        }
+        if let Some(f) = &init {
+            count_in(&f.body);
+        }
+        let body_size = size(&optimized.body);
+        let allow_dup = body_size <= TINY_INLINE_LIMIT
+            || module_calls <= 1
+            || module_calls.saturating_sub(1).saturating_mul(body_size) <= INLINE_DUP_LIMIT;
+        inlinable.push(allow_dup && writes_out(&optimized, &module.structs));
+        inlined.push(optimized);
     }
-    let entry = ctx.function(&inline_calls(&module.entry, &functions, &inlinable));
-    let merge = module
-        .merge
+    let entry = ctx.function(&inline_calls(&entry, &inlined, &inlinable));
+    let merge = merge
         .as_ref()
-        .map(|f| ctx.function(&inline_calls(f, &functions, &inlinable)));
-    let init = module
-        .init
+        .map(|f| ctx.function(&inline_calls(f, &inlined, &inlinable)));
+    let init = init
         .as_ref()
-        .map(|f| ctx.function(&inline_calls(f, &functions, &inlinable)));
-    let (functions, entry, merge, init) = ctx.read_through(functions, entry, merge, init);
+        .map(|f| ctx.function(&inline_calls(f, &inlined, &inlinable)));
+    let post_writers = crate::validate::writers(&inlined);
+    let post_ctx = Ctx {
+        structs: &module.structs,
+        writers: &post_writers,
+        memories: &memories,
+    };
+    let (functions, entry, merge, init) = post_ctx.read_through(inlined, entry, merge, init);
     prune(Module {
         manifest: module.manifest,
         structs: module.structs,
@@ -1050,13 +1106,40 @@ fn writes_out(callee: &Function, structs: &[StructDef]) -> bool {
     size <= INLINE_LIMIT || (widest >= BIG_ARG_WORDS && size <= INLINE_BIG_LIMIT)
 }
 
+fn count_calls(body: &[Instruction], counts: &mut HashMap<u32, usize>) {
+    for instruction in body {
+        if let Op::Call(callee, _) = &instruction.op {
+            *counts.entry(*callee).or_insert(0) += 1;
+        }
+        for block in instruction.op.blocks() {
+            count_calls(&block.body, counts);
+        }
+    }
+}
+
 fn inline_calls(function: &Function, functions: &[Function], inlinable: &[bool]) -> Function {
     if !inlinable.iter().any(|yes| *yes) {
         return function.clone();
     }
+    let sizes: Vec<usize> = functions
+        .iter()
+        .enumerate()
+        .map(|(idx, f)| {
+            if inlinable.get(idx).copied().unwrap_or(false) {
+                size(&f.body)
+            } else {
+                usize::MAX
+            }
+        })
+        .collect();
+    let mut call_counts = HashMap::new();
+    count_calls(&function.body, &mut call_counts);
     let mut pass = Inline {
         functions,
         inlinable,
+        sizes: &sizes,
+        call_counts: &call_counts,
+        grown: size(&function.body),
         alias: HashMap::new(),
         next: highest(&function.body) + 1,
     };
@@ -1078,6 +1161,9 @@ fn inline_calls(function: &Function, functions: &[Function], inlinable: &[bool])
 struct Inline<'a> {
     functions: &'a [Function],
     inlinable: &'a [bool],
+    sizes: &'a [usize],
+    call_counts: &'a HashMap<u32, usize>,
+    grown: usize,
     /// Values standing for others: a call's value for what the body
     /// returned, an argument read for its operand.
     alias: HashMap<u32, ValueId>,
@@ -1086,6 +1172,27 @@ struct Inline<'a> {
 }
 
 impl Inline<'_> {
+    fn should_inline(&mut self, callee: u32) -> bool {
+        let idx = callee as usize;
+        if !self.inlinable.get(idx).copied().unwrap_or(false) {
+            return false;
+        }
+        let callee_size = self.sizes.get(idx).copied().unwrap_or(usize::MAX);
+        if callee_size <= TINY_INLINE_LIMIT {
+            return true;
+        }
+        let calls = self.call_counts.get(&callee).copied().unwrap_or(1);
+        if callee_size > INLINE_LIMIT && calls.saturating_mul(callee_size) > INLINE_BIG_LIMIT {
+            return false;
+        }
+        let next_size = self.grown.saturating_add(callee_size.saturating_sub(1));
+        if next_size > INLINE_CALLER_LIMIT {
+            return false;
+        }
+        self.grown = next_size;
+        true
+    }
+
     fn map(&self, id: ValueId) -> ValueId {
         match self.alias.get(&id.0) {
             Some(other) if *other != id => self.map(*other),
@@ -1111,11 +1218,7 @@ impl Inline<'_> {
         let mut out = Vec::with_capacity(instructions.len());
         for instruction in instructions {
             if let Op::Call(callee, args) = &instruction.op
-                && self
-                    .inlinable
-                    .get(*callee as usize)
-                    .copied()
-                    .unwrap_or(false)
+                && self.should_inline(*callee)
             {
                 let operands: Vec<ValueId> = args.iter().map(|id| self.map(*id)).collect();
                 let body = self.functions[*callee as usize].clone();
