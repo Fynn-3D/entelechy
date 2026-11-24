@@ -79,6 +79,8 @@ pub(crate) fn param_bytes(params: &[Value]) -> Vec<u8> {
 /// What the map pass leaves ready for the mode's remaining passes.
 pub(crate) struct Staged {
     pub(crate) encoder: wgpu::CommandEncoder,
+    pub(crate) bind_group: wgpu::BindGroup,
+    pub(crate) further_slices: Vec<(u32, u32, u32, u32, u32)>,
     pub(crate) context_buffer: wgpu::Buffer,
     pub(crate) params_buffer: wgpu::Buffer,
     pub(crate) input_buffers: Vec<wgpu::Buffer>,
@@ -346,7 +348,8 @@ impl WgpuBackend {
 
     /// Binds the inputs (memories as copies the steps may write), writes
     /// the context and the parameters, creates the output, and encodes
-    /// the map pass over `domain`.
+    /// the map pass over `domain` (sliced across `slice_limit` elements
+    /// when a large map run is paced across submissions).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn stage(
         &self,
@@ -356,12 +359,25 @@ impl WgpuBackend {
         scope: &mut Scope<'_>,
         domain: entelechy_abi::Domain,
         timing: Option<&Timing>,
+        slice_limit: usize,
     ) -> Result<Staged, ExecutionError> {
         let element_count = domain.count();
-        let (groups_x, groups_y, groups_z, fold) = match module.manifest.mode {
-            Mode::Group { size } => wgsl::group_dispatch(domain, size),
-            _ => wgsl::dispatch(domain),
+        let can_slice = slice_limit < usize::MAX
+            && timing.is_none()
+            && module.manifest.mode == Mode::Map
+            && module.manifest.memories.is_empty()
+            && !pipeline.emits;
+        let mut slices = if can_slice {
+            wgsl::map_slices(domain, slice_limit)
+        } else {
+            let (gx, gy, gz, fold) = match module.manifest.mode {
+                Mode::Group { size } => wgsl::group_dispatch(domain, size),
+                _ => wgsl::dispatch(domain),
+            };
+            vec![(gx, gy, gz, fold, 0)]
         };
+        let (groups_x, groups_y, groups_z, fold, slice_at) = slices.remove(0);
+        let further_slices = slices;
         // Inputs: bind resident buffers directly; upload the rest once and
         // leave them resident.
         let mut input_buffers: Vec<wgpu::Buffer> = Vec::with_capacity(invocation.inputs.len());
@@ -467,11 +483,11 @@ impl WgpuBackend {
             push_f32(context, window[0]);
             push_f32(context, window[1]);
             // The third word is a one the shader compiler cannot see through
-            // (`wgsl::OPAQUE_ONE`); the fourth is spare.
+            // (`wgsl::OPAQUE_ONE`); the fourth is the slice offset.
             push_f32(context, invocation.context.scale);
             push_u32(context, fold);
             push_f32(context, 1.0);
-            push_f32(context, 0.0);
+            push_u32(context, slice_at);
             // The pad: two sticks in one vec4, the triggers and how many pads
             // are connected in the next, with the samples the sound device
             // holds, the bits of a `u32`.
@@ -732,6 +748,8 @@ impl WgpuBackend {
         }
         Ok(Staged {
             encoder,
+            bind_group,
+            further_slices,
             context_buffer,
             params_buffer,
             input_buffers,

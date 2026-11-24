@@ -415,3 +415,104 @@ fn sync_turn_checked_surfaces_bundle_landing_failure() {
     assert!(missing_err.contains("not published"), "{missing_err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn finish_used_warms_window_domains_and_unsupplied_fallbacks() {
+    use entelechy_kernel::{
+        Backend, ExecutionError, Handle, Invocation, Prepared, Runtime, Scope, Validated,
+    };
+
+    #[derive(Default)]
+    struct RecordingDevice {
+        finished: std::sync::Mutex<Vec<String>>,
+    }
+    impl Backend for &'static RecordingDevice {
+        fn name(&self) -> &'static str {
+            "recording_gpu"
+        }
+        fn has_device(&self) -> bool {
+            true
+        }
+        fn prepare(&self, module: &Validated) -> Result<Box<dyn Prepared>, String> {
+            Ok(Box::new(NamedKernel(
+                module.manifest.id.to_string(),
+                std::sync::atomic::AtomicBool::new(false),
+            )))
+        }
+        fn finish(&self, prepared: &dyn Prepared) {
+            let named = prepared.as_any().downcast_ref::<NamedKernel>().unwrap();
+            if !named.1.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                self.finished.lock().unwrap().push(named.0.clone());
+            }
+        }
+        fn finished(&self, prepared: &dyn Prepared) -> bool {
+            prepared
+                .as_any()
+                .downcast_ref::<NamedKernel>()
+                .unwrap()
+                .1
+                .load(std::sync::atomic::Ordering::SeqCst)
+        }
+        fn execute(
+            &self,
+            _prepared: &dyn Prepared,
+            module: &Validated,
+            invocation: &Invocation,
+            scope: &mut Scope<'_>,
+        ) -> Result<Vec<Handle>, ExecutionError> {
+            entelechy_cpu::CpuBackend.execute(module, invocation, scope)
+        }
+    }
+    struct NamedKernel(String, std::sync::atomic::AtomicBool);
+    impl Prepared for NamedKernel {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    let dir = std::env::temp_dir().join(format!(
+        "entelechy-turns-win-fallback-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("scene.esn"),
+        "kernel t.fresh@1 { requires { field.write; } output result: Rows<Int>; compute { return element(); } }\n\
+         kernel t.aim@1 { requires { field.write; } output result: Rows<Int>; compute { return 1; } }\n\
+         kernel t.view@1 { requires { field.read; field.write; } input aim: Rows<Int>; output result: Image; compute { return vec4(float(at(aim, 0)), 0.0, 0.0, 1.0); } }\n\
+         kernel t.keep@1 { requires { field.read; field.write; } input saved: Rows<Int>; output result: Rows<Int>; compute { return sample(saved); } }\n\
+         input saved: Rows<Int> = \"saves/missing.field\" else fresh.result;\n\
+         node fresh: t.fresh@1 { domain = 256; }\n\
+         node keep: t.keep@1 { saved <~ keep.result from saved; domain = 256; }\n\
+         node aim: t.aim@1 { domain = 1; }\n\
+         node view: t.view@1 { aim <- aim.result; domain = window(); }\n\
+         output picture <- view.result;\n",
+    )
+    .unwrap();
+
+    let device: &'static RecordingDevice = Box::leak(Box::default());
+    let runtime = Runtime::with_backends(
+        1 << 20,
+        Box::new(device),
+        Some(Box::new(entelechy_cpu::CpuBackend)),
+    );
+    let mut session = Session::open_with(&dir.join("scene.esn"), None, runtime);
+    session.start_from_nothing_saved();
+    session.prepare_in_turns();
+    for _ in 0..20 {
+        session.sync_a_turn();
+        if !session.scene_waiting() {
+            break;
+        }
+    }
+    let finished = device.finished.lock().unwrap().clone();
+    // `t.view@1` (`domain = window()`) and `t.fresh@1` (unsupplied fallback) must
+    // finish during loading even before Frame 1 sets a window, while `t.aim@1`
+    // (`domain = 1`) stays on the processor without building a GPU pipeline.
+    assert!(finished.iter().any(|id| id == "t.view@1"), "{finished:?}");
+    assert!(finished.iter().any(|id| id == "t.fresh@1"), "{finished:?}");
+    assert!(finished.iter().any(|id| id == "t.keep@1"), "{finished:?}");
+    assert!(!finished.iter().any(|id| id == "t.aim@1"), "{finished:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

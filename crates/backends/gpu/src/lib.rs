@@ -135,6 +135,44 @@ pub(crate) struct WgpuBackend {
     /// What the device said by itself: an error no scope caught, its loss.
     /// A readback that fails says it too, as the cause is most often there.
     heard: Arc<Mutex<Vec<String>>>,
+    /// Unsettled submissions and elements queued on a page's device since
+    /// its last wait, drained periodically so long startup bursts never
+    /// starve the browser's GPU watchdog (Windows WDDM TDR).
+    page_queue: PageQueue,
+    /// Optional per-slice element ceiling override for testing sliced map
+    /// dispatches on native devices (`0` uses the default policy).
+    test_slice_limit: usize,
+}
+
+/// Runs and elements queued on a page's device before draining.
+const PAGE_PACE_RUNS: u32 = 10;
+const PAGE_PACE_ELEMENTS: u64 = 3_500_000;
+const PAGE_SLICE_VOLUME_ELEMENTS: usize = 131_072;
+const PAGE_SLICE_LARGE_ELEMENTS: usize = 524_288;
+const PAGE_SLICE_THRESHOLD: usize = 2_100_000;
+
+#[derive(Clone, Default)]
+pub(crate) struct PageQueue(Arc<(std::sync::atomic::AtomicU32, std::sync::atomic::AtomicU64)>);
+
+impl PageQueue {
+    pub(crate) fn note(&self, elements: u64) {
+        self.0.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.0
+            .1
+            .fetch_add(elements, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn clear(&self) {
+        self.0.0.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.0.1.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn full(&self, incoming_elements: u64) -> bool {
+        let runs = self.0.0.load(std::sync::atomic::Ordering::Relaxed);
+        let elements = self.0.1.load(std::sync::atomic::Ordering::Relaxed);
+        runs >= PAGE_PACE_RUNS
+            || (runs > 0 && elements.saturating_add(incoming_elements) > PAGE_PACE_ELEMENTS)
+    }
 }
 
 /// The little-endian words a mapped readback holds, copied once.
@@ -303,7 +341,44 @@ impl WgpuBackend {
             frames: timing::Frames::default(),
             passes: Arc::default(),
             heard,
+            page_queue: PageQueue::default(),
+            test_slice_limit: 0,
         })
+    }
+
+    /// Forces map passes to slice at `limit` elements per submission, for
+    /// exercising the page slicing path on a native device.
+    pub fn with_slice_limit(mut self, limit: usize) -> Self {
+        self.test_slice_limit = limit.max(64);
+        self
+    }
+
+    pub(crate) fn drain_page(&self) -> Result<(), ExecutionError> {
+        if self.wait.parks_with_host() {
+            self.spent
+                .time(|| self.wait.drain(&self.device, &self.queue))
+                .map_err(|error| ExecutionError::Device(told(&self.heard, error)))?;
+        } else if self._waiter.is_none() {
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        }
+        self.page_queue.clear();
+        Ok(())
+    }
+
+    fn slice_limit_for(&self, domain: entelechy_abi::Domain) -> usize {
+        if self.test_slice_limit > 0 {
+            return self.test_slice_limit;
+        }
+        if !self.wait.parks_with_host() || self.measured() {
+            return usize::MAX;
+        }
+        if domain.depth() >= 16 {
+            PAGE_SLICE_VOLUME_ELEMENTS
+        } else if domain.count() > PAGE_SLICE_THRESHOLD {
+            PAGE_SLICE_LARGE_ELEMENTS
+        } else {
+            usize::MAX
+        }
     }
 
     /// This backend computing every `Long` as a pair of 32-bit words, as on
@@ -610,6 +685,13 @@ impl Backend for WgpuBackend {
             _ => domain,
         };
         outputs_fit(module, output_domain, scope)?;
+        let slice_limit = self.slice_limit_for(domain);
+        if self.wait.parks_with_host()
+            && !self.measured()
+            && self.page_queue.full(domain.count() as u64)
+        {
+            self.drain_page()?;
+        }
         // Under a profile, the device's clock around every pass; the set is
         // made first so the opening timestamp is the encoder's first command.
         let timing_set = self.timing_set(2);
@@ -620,9 +702,12 @@ impl Backend for WgpuBackend {
             scope,
             domain,
             timing_set.as_ref(),
+            slice_limit,
         )?;
         let Staged {
             mut encoder,
+            bind_group,
+            further_slices,
             context_buffer,
             params_buffer,
             input_buffers,
@@ -682,14 +767,66 @@ impl Backend for WgpuBackend {
             ),
             _ => output_buffer,
         };
-        // The failure word, copied for reading once the device is waited for,
-        // at the caller's commit.
-        if let Some((word, back)) = &failure {
-            encoder.copy_buffer_to_buffer(word, 0, back, 0, wgsl::FAILURE_BYTES);
-        }
         let scopes = Scopes::push(&self.device);
-        let timing = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
-        let submission = self.submit(encoder.finish());
+        let submission = if further_slices.is_empty() {
+            // The failure word, copied for reading once the device is waited for,
+            // at the caller's commit.
+            if let Some((word, back)) = &failure {
+                encoder.copy_buffer_to_buffer(word, 0, back, 0, wgsl::FAILURE_BYTES);
+            }
+            let timing = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
+            let sub = self.submit(encoder.finish());
+            if self.wait.parks_with_host() && !self.measured() {
+                self.page_queue.note(element_count as u64);
+            }
+            self.settle_measured(sub.clone(), timing);
+            sub
+        } else {
+            // Drain any queued work before running a sliced heavy map, and drain
+            // after each slice so no single burst exceeds a browser GPU watchdog.
+            let _ = self.submit(encoder.finish());
+            self.drain_page()?;
+            let scale_bytes = invocation.context.scale.to_le_bytes();
+            let one_bytes = 1.0f32.to_le_bytes();
+            let last_idx = further_slices.len() - 1;
+            let mut last_sub = None;
+            for (idx, &(gx, gy, gz, slice_fold, slice_at)) in further_slices.iter().enumerate() {
+                let mut slot5 = [0u8; 16];
+                slot5[0..4].copy_from_slice(&scale_bytes);
+                slot5[4..8].copy_from_slice(&slice_fold.to_le_bytes());
+                slot5[8..12].copy_from_slice(&one_bytes);
+                slot5[12..16].copy_from_slice(&slice_at.to_le_bytes());
+                self.queue.write_buffer(&context_buffer, 80, &slot5);
+                let mut slice_encoder =
+                    self.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("entelechy slice"),
+                        });
+                {
+                    let mut pass = slice_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("entelechy kernel slice"),
+                        timestamp_writes: None,
+                    });
+                    pass.set_pipeline(&pipeline.main.0);
+                    pass.set_bind_group(0, &bind_group, &[]);
+                    pass.dispatch_workgroups(gx, gy, gz);
+                }
+                if idx == last_idx
+                    && let Some((word, back)) = &failure
+                {
+                    slice_encoder.copy_buffer_to_buffer(word, 0, back, 0, wgsl::FAILURE_BYTES);
+                }
+                let sub = self.submit(slice_encoder.finish());
+                self.drain_page()?;
+                last_sub = Some(sub);
+            }
+            self.written
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .0
+                .clear();
+            last_sub.expect("further_slices is non-empty")
+        };
         // The packed inputs' copy is read by this run alone and goes back to
         // the pile now that its submission is queued.
         for (binding, buffer) in &bound_inputs {
@@ -697,10 +834,7 @@ impl Backend for WgpuBackend {
                 self.spare.keep(buffer.clone(), None);
             }
         }
-        let submitted = submission.clone();
-        // One queue runs submissions in order, so only observation waits; under
-        // `set_measured` this call waits, so its time is the work.
-        self.settle_measured(submission, timing);
+        let submitted = submission;
         // A page answers a scope by a round trip: there what it caught is
         // answered with the run's check, not before the next run.
         let scoped = if self.wait.parks_with_host() && !self.measured() {
@@ -732,6 +866,7 @@ impl Backend for WgpuBackend {
                 submitted,
                 pile: Arc::clone(&self.failures),
                 heard: Arc::clone(&self.heard),
+                page_queue: self.page_queue.clone(),
                 width: domain.width(),
                 totals_width: output_domain.width(),
                 budget: module.manifest.budget,
@@ -838,6 +973,7 @@ impl Backend for WgpuBackend {
                     .map_read(&self.device, &self.queue, staging.slice(..))
             })
             .map_err(|error| told(&self.heard, error))?;
+        self.page_queue.clear();
         let words = {
             let view = staging
                 .slice(..)
@@ -885,6 +1021,7 @@ impl Backend for WgpuBackend {
             byte_len,
             after,
             heard: Arc::clone(&self.heard),
+            page_queue: self.page_queue.clone(),
         }))
     }
 
@@ -999,6 +1136,16 @@ impl GpuBackend {
     pub fn with_pulled_vertices(self) -> Self {
         match self.0 {
             Driver::Wgpu(b) => Self(Driver::Wgpu(Box::new((*b).with_pulled_vertices()))),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(b) => Self(Driver::WebGl(b)),
+        }
+    }
+
+    /// Forces map passes on `wgpu` to slice at `limit` elements per
+    /// submission, for exercising the page slicing path on a native device.
+    pub fn with_slice_limit(self, limit: usize) -> Self {
+        match self.0 {
+            Driver::Wgpu(b) => Self(Driver::Wgpu(Box::new((*b).with_slice_limit(limit)))),
             #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
             Driver::WebGl(b) => Self(Driver::WebGl(b)),
         }

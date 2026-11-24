@@ -149,17 +149,23 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
     let h = bitcast<u32>(ctx[0].y);
     let d = bitcast<u32>(ctx[1].z);
     let fold = bitcast<u32>(ctx[5].y);
+    let slice = bitcast<u32>(ctx[5].w);
     var x = gid.x;
     var y = gid.y;
+    var z = gid.z;
     if (fold != 0u) {{
-        x = gid.x + gid.y * fold;
+        x = gid.x + gid.y * fold + slice;
         y = 0u;
+    }} else if (d > 1u) {{
+        z = gid.z + slice;
+    }} else {{
+        y = gid.y + slice;
     }}
-    if (x < w && y < h && gid.z < d && atomicLoad(&failure.blocks) <= failure.limit) {{
-        let element = (gid.z * h + y) * w + x;
+    if (x < w && y < h && z < d && atomicLoad(&failure.blocks) <= failure.limit) {{
+        let element = (z * h + y) * w + x;
         current = element;
         begin_work();
-        let coord = vec3<f32>(f32(x), f32(y), f32(gid.z));
+        let coord = vec3<f32>(f32(x), f32(y), f32(z));
         {store}
         atomicAdd(&leftover, work & {mask}u);
     }}
@@ -182,19 +188,25 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
     let h = bitcast<u32>(ctx[0].y);
     let d = bitcast<u32>(ctx[1].z);
     let fold = bitcast<u32>(ctx[5].y);
+    let slice = bitcast<u32>(ctx[5].w);
     var x = gid.x;
     var y = gid.y;
+    var z = gid.z;
     if (fold != 0u) {{
-        x = gid.x + gid.y * fold;
+        x = gid.x + gid.y * fold + slice;
         y = 0u;
+    }} else if (d > 1u) {{
+        z = gid.z + slice;
+    }} else {{
+        y = gid.y + slice;
     }}
-    if (x >= w || y >= h || gid.z >= d) {{
+    if (x >= w || y >= h || z >= d) {{
         return;
     }}
-    let element = (gid.z * h + y) * w + x;
+    let element = (z * h + y) * w + x;
     current = element;
     begin_work();
-    let coord = vec3<f32>(f32(x), f32(y), f32(gid.z));
+    let coord = vec3<f32>(f32(x), f32(y), f32(z));
     {store}
 }}"
     );

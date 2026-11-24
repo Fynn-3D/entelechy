@@ -293,12 +293,14 @@ class EntelechyInPage {
             const text = (await (await fetch(url)).text()).replaceAll('from "entelechy"', `from ${JSON.stringify(at)}`);
             const glued = URL.createObjectURL(new Blob([text], { type: "text/javascript" }));
             const [module, hosted] = await Promise.all([import(glued), import(at)]);
-            const exports = await module.default({ module_or_path: wasm || new URL("entelechy_ffi_bg.wasm", url) });
+            const wasmUrl = new URL(`entelechy_ffi_bg.wasm${new URL(url).search}`, url);
+            const exports = await module.default({ module_or_path: wasm || wasmUrl });
             hosted.bind({ exports });
             return exports;
           }
           const [module, hosted] = await Promise.all([import(url), import("entelechy")]);
-          const exports = await module.default();
+          const wasmUrl = new URL(`entelechy_ffi_bg.wasm${new URL(url).search}`, url);
+          const exports = await module.default({ module_or_path: wasm || wasmUrl });
           hosted.bind({ exports });
           return exports;
         })(),

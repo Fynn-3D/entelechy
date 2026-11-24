@@ -320,4 +320,7 @@ only after running that test on the device.
 - wgpu's error scopes are thread-local only with its `std` feature, which
   the GPU backend enables.
 - Uniforms are rewritten per node with `queue.write_buffer`, which orders
-  against submissions: a frame is not one submission.
+  against submissions: a frame is not one submission. On a page
+  (`Wait::parks_with_host`), unsettled submissions are drained periodically
+  (`PageQueue`) and large or deep-volume `Map` runs slice across `ctx[5].w`
+  so startup baking bursts never trip Windows WDDM's 2-second TDR watchdog.

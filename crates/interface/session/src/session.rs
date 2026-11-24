@@ -405,13 +405,29 @@ impl Session {
         let Some(shared) = self.backing.shared_graph().cloned() else {
             return;
         };
-        let reached = shared.read_through(self.pins.iter().cloned());
+        let handles = self.backing.handles();
+        let fallback_seeds = shared
+            .fallbacks
+            .iter()
+            .filter(|(name, _)| !handles.contains_key(name))
+            .filter_map(|(_, source)| match source {
+                entelechy_graph::Source::Node { node, .. } => Some(node.clone()),
+                entelechy_graph::Source::External(_) => None,
+            });
+        let reached = shared.read_through(self.pins.iter().cloned().chain(fallback_seeds));
+        let mut warm_context = self.last_context;
+        if warm_context.window[0] <= 0.0 || warm_context.window[1] <= 0.0 {
+            warm_context.window = [1280.0, 720.0];
+            if warm_context.scale <= 0.0 {
+                warm_context.scale = 1.0;
+            }
+        }
         let few = self.evaluator.runs_few(
             &shared,
             &self.runtime,
-            self.backing.handles(),
+            handles,
             self.backing.params(),
-            &self.last_context,
+            &warm_context,
         );
         let graph: &Graph = &shared;
         let mut wanted: BTreeMap<entelechy_ir::KernelId, bool> = BTreeMap::new();

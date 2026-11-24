@@ -25,9 +25,19 @@ impl WgpuBackend {
         // Two buffers take turns, so the output is held twice.
         let schema = &module.manifest.outputs[0].ty.schema;
         scope.can_hold(&[(schema, domain), (schema, domain)])?;
-        let staged = self.stage(pipeline, module, invocation, scope, domain, None)?;
+        let staged = self.stage(
+            pipeline,
+            module,
+            invocation,
+            scope,
+            domain,
+            None,
+            usize::MAX,
+        )?;
         let Staged {
             mut encoder,
+            bind_group: _,
+            further_slices: _,
             context_buffer,
             params_buffer,
             mut input_buffers,

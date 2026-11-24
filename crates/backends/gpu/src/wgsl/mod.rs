@@ -379,12 +379,14 @@ pub fn output_binding(module: &Module, k: usize) -> u32 {
 pub const WORKGROUP: u32 = 8;
 /// Context slots before the per-input extents: `[width, height, time,
 /// button bits]`, `[pointer.x, pointer.y, depth, rate]`, two slots of key
-/// bits, `[wheel.x, wheel.y, window.x, window.y]`, `[scale, fold, 1, 0]`,
+/// bits, `[wheel.x, wheel.y, window.x, window.y]`, `[scale, fold, 1, slice]`,
 /// where `fold` is the elements per unit of `gid.y` for a `Rows` domain,
-/// which is dispatched as a grid (else zero), the pad's two slots
+/// which is dispatched as a grid (else zero), and `slice` is the base
+/// element, row or depth offset when a large map run is sliced across
+/// submissions (else zero), the pad's two slots
 /// (`[left.x, left.y, right.x, right.y]`, `[triggers.x, triggers.y, pads,
 /// queued]`), and eight slots of the characters typed, four a slot. Each input
-/// then has `[width, height, depth, 0]`. Extents, the fold, the key bits,
+/// then has `[width, height, depth, 0]`. Extents, the fold, the slice, the key bits,
 /// the samples queued and the characters are the bits of `u32`s, read with `bitcast`, so
 /// every one is exact.
 pub const CONTEXT_HEAD: usize = 16;
@@ -431,6 +433,74 @@ pub fn dispatch(domain: entelechy_abi::Domain) -> (u32, u32, u32, u32) {
             domain.depth(),
             0,
         )
+    }
+}
+
+/// Dispatches `(groups_x, groups_y, groups_z, fold, slice)` covering `domain`
+/// with at most `max_elements` threads per slice (rounded up to one workgroup
+/// row or depth layer), bijective up to the domain bounds.
+pub fn map_slices(
+    domain: entelechy_abi::Domain,
+    max_elements: usize,
+) -> Vec<(u32, u32, u32, u32, u32)> {
+    let total = domain.count();
+    if total == 0 || total <= max_elements {
+        let (gx, gy, gz, fold) = dispatch(domain);
+        return vec![(gx, gy, gz, fold, 0)];
+    }
+    match domain.shape() {
+        entelechy_abi::Shape::Rows => {
+            let per_group = (WORKGROUP * WORKGROUP) as usize;
+            let groups_x = (max_elements / per_group).clamp(1, MAX_GROUPS as usize) as u32;
+            let yg_step = (max_elements / (groups_x as usize * per_group)).max(1) as u32;
+            let step = groups_x * WORKGROUP * WORKGROUP * yg_step;
+            let width = domain.width();
+            let mut slices = Vec::with_capacity(width.div_ceil(step) as usize);
+            let mut at = 0u32;
+            while at < width {
+                let left = width - at;
+                let gx = left.div_ceil(WORKGROUP * WORKGROUP).clamp(1, groups_x);
+                let chunk_fold = gx * WORKGROUP;
+                let gy = left
+                    .min(step)
+                    .div_ceil(chunk_fold)
+                    .div_ceil(WORKGROUP)
+                    .max(1);
+                slices.push((gx, gy, 1, chunk_fold, at));
+                at = at.saturating_add(step);
+            }
+            slices
+        }
+        entelechy_abi::Shape::Volume if domain.depth() > 1 => {
+            let gx = domain.width().div_ceil(WORKGROUP);
+            let gy = domain.height().div_ceil(WORKGROUP);
+            let layer =
+                (domain.width().max(1) as usize).saturating_mul(domain.height().max(1) as usize);
+            let step = (max_elements / layer).max(1) as u32;
+            let depth = domain.depth();
+            let mut slices = Vec::with_capacity(depth.div_ceil(step) as usize);
+            let mut z = 0u32;
+            while z < depth {
+                let count = (depth - z).min(step);
+                slices.push((gx, gy, count, 0, z));
+                z = z.saturating_add(step);
+            }
+            slices
+        }
+        _ => {
+            let gx = domain.width().div_ceil(WORKGROUP);
+            let gy_total = domain.height().div_ceil(WORKGROUP);
+            let band = (domain.width().max(1) as usize).saturating_mul(WORKGROUP as usize);
+            let yg_step = (max_elements / band).max(1) as u32;
+            let mut slices = Vec::with_capacity(gy_total.div_ceil(yg_step) as usize);
+            let mut yg = 0u32;
+            while yg < gy_total {
+                let count = (gy_total - yg).min(yg_step);
+                slices.push((gx, count, domain.depth().max(1), 0, yg * WORKGROUP));
+                yg = yg.saturating_add(yg_step);
+            }
+            slices
+        }
     }
 }
 

@@ -17,6 +17,7 @@ pub(crate) struct Coming {
     pub(crate) asked: Option<crate::wait::Asked<Result<(), wgpu::BufferAsyncError>>>,
     /// What the device said by itself ([`crate::told`]).
     pub(crate) heard: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    pub(crate) page_queue: crate::PageQueue,
 }
 
 impl Drop for Coming {
@@ -39,6 +40,7 @@ impl entelechy_rules::Downloading for Coming {
                     .map_err(|error| error.to_string())
             })
             .map_err(|error| crate::told(&self.heard, error))?;
+        self.page_queue.clear();
         let words = crate::words_of(
             &slice
                 .get_mapped_range()

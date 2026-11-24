@@ -11,6 +11,7 @@ const PAD_BUTTONS = [
 const BUTTON = { 0: 0, 1: 2, 2: 1 };
 const BLOCKS_AHEAD = 4;
 const AHEAD = "ahead";
+const IS_LE = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 const HELD = new Set([
   "Tab", "Escape", "F5", "F6", "F7", "F8", "F9", "F10",
   "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " ", "Space",
@@ -197,13 +198,65 @@ function written(event) {
   return event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.isComposing ? event.key : "";
 }
 
+async function gzipPipe(bytes, decompress) {
+  if (typeof CompressionStream !== "function" || typeof DecompressionStream !== "function") return null;
+  try {
+    const stream = new Blob([bytes])
+      .stream()
+      .pipeThrough(decompress ? new DecompressionStream("gzip") : new CompressionStream("gzip"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+async function allocAndOpenBundle(exports, bundleBytes, backendName) {
+  const owned = typeof exports.entelechy_open_bundle_owned === "function";
+  const rawOpen = owned ? exports.entelechy_open_bundle_owned : exports.entelechy_open_bundle;
+  const openBundle =
+    typeof WebAssembly.promising === "function" ? WebAssembly.promising(rawOpen) : rawOpen;
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+  const readText = (ptr) => {
+    const mem = new Uint8Array(exports.memory.buffer);
+    let end = ptr;
+    while (mem[end]) end++;
+    return dec.decode(mem.subarray(ptr, end));
+  };
+  const backendBytes = enc.encode(`${backendName || "best"}\0`);
+  const bundleLen = bundleBytes.length;
+  const dataPtr = exports.entelechy_alloc(bundleLen);
+  const backPtr = exports.entelechy_alloc(backendBytes.length);
+  if (!dataPtr || !backPtr) {
+    if (dataPtr) exports.entelechy_free(dataPtr, bundleLen);
+    if (backPtr) exports.entelechy_free(backPtr, backendBytes.length);
+    throw new Error("Entelechy has no room for the bundle");
+  }
+  let session = 0;
+  let passedOwnership = false;
+  try {
+    new Uint8Array(exports.memory.buffer, dataPtr, bundleLen).set(bundleBytes);
+    bundleBytes = null;
+    new Uint8Array(exports.memory.buffer, backPtr, backendBytes.length).set(backendBytes);
+    passedOwnership = owned;
+    session = await openBundle(dataPtr, bundleLen, backPtr);
+  } finally {
+    if (!passedOwnership) exports.entelechy_free(dataPtr, bundleLen);
+    exports.entelechy_free(backPtr, backendBytes.length);
+  }
+  if (!session) throw new Error(readText(exports.entelechy_open_error()));
+  return session;
+}
+
 class SinglePlayer {
-  constructor(exports, session, canvas, shown, pointer = "free") {
+  constructor(exports, session, canvas, shown, pointer = "free", bundleGz = null) {
     this.x = exports;
     this.session = session;
     this.canvas = canvas;
     this.shown = shown;
     this.pointer = pointer || "free";
+    this._bundleGz = bundleGz;
+    this.shownFrames = 0;
     this.context = canvas.getContext("2d");
     const promising = (name) =>
       typeof WebAssembly.promising === "function" ? WebAssembly.promising(exports[name]) : exports[name];
@@ -265,42 +318,12 @@ class SinglePlayer {
     }
 
     await told(0.35, "opening scene");
-    const owned = typeof exports.entelechy_open_bundle_owned === "function";
-    const rawOpen = owned ? exports.entelechy_open_bundle_owned : exports.entelechy_open_bundle;
-    const openBundle =
-      typeof WebAssembly.promising === "function" ? WebAssembly.promising(rawOpen) : rawOpen;
-    const enc = new TextEncoder();
-    const dec = new TextDecoder();
-    const readText = (ptr) => {
-      const mem = new Uint8Array(exports.memory.buffer);
-      let end = ptr;
-      while (mem[end]) end++;
-      return dec.decode(mem.subarray(ptr, end));
-    };
-    const backendBytes = enc.encode(`${backend || "best"}\0`);
-    const bundleLen = bundle.length;
-    const dataPtr = exports.entelechy_alloc(bundleLen);
-    const backPtr = exports.entelechy_alloc(backendBytes.length);
-    if (!dataPtr || !backPtr) {
-      if (dataPtr) exports.entelechy_free(dataPtr, bundleLen);
-      if (backPtr) exports.entelechy_free(backPtr, backendBytes.length);
-      throw new Error("Entelechy has no room for the bundle");
-    }
-    let session = 0;
-    let passedOwnership = false;
-    try {
-      new Uint8Array(exports.memory.buffer, dataPtr, bundleLen).set(bundle);
-      bundle = null;
-      new Uint8Array(exports.memory.buffer, backPtr, backendBytes.length).set(backendBytes);
-      passedOwnership = owned;
-      session = await openBundle(dataPtr, bundleLen, backPtr);
-    } finally {
-      if (!passedOwnership) exports.entelechy_free(dataPtr, bundleLen);
-      exports.entelechy_free(backPtr, backendBytes.length);
-    }
-    if (!session) throw new Error(readText(exports.entelechy_open_error()));
+    const chosenBackend = backend || "best";
+    const bundleGz = chosenBackend === "jit" ? null : await gzipPipe(bundle, false);
+    const session = await allocAndOpenBundle(exports, bundle, chosenBackend);
+    bundle = null;
 
-    const player = new SinglePlayer(exports, session, canvas, shown, pointer);
+    const player = new SinglePlayer(exports, session, canvas, shown, pointer, bundleGz);
     let left = exports.entelechy_play_preparing(session);
     let most = left;
     let high = 0.4;
@@ -626,16 +649,64 @@ class SinglePlayer {
     const framed = await this.frame(this.session, this.canvas.width, this.canvas.height, scale, rate);
     this.say();
     if (framed === 0) {
+      this.shownFrames++;
+      this._bundleGz = null;
+      this.failed = null;
       this.syncSaves();
       await this.play();
       await this.show();
       wear(this.canvas, this.pointerLook());
     } else if (framed < 0) {
       const error = this.text(this.x.entelechy_error(this.session));
+      if (
+        !this.shownFrames &&
+        this._bundleGz &&
+        /device (was )?lost|device failed|lost the device/i.test(error) &&
+        (await this.recoverFromDeviceLoss(error))
+      ) {
+        return;
+      }
       document.title = `Entelechy: ${error}`;
       if (error !== this.failed) console.error(`Entelechy: ${error}`);
       this.failed = error;
     }
+  }
+
+  async recoverFromDeviceLoss(why) {
+    const gz = this._bundleGz;
+    this._bundleGz = null;
+    if (!gz) return false;
+    const candidates = globalThis.entelechy_webgl_only ? ["jit"] : ["webgl2", "jit"];
+    for (const mode of candidates) {
+      try {
+        const raw = await gzipPipe(gz, true);
+        if (!raw) return false;
+        if (this.session) {
+          try { this.x.entelechy_close(this.session); } catch {}
+          this.session = 0;
+        }
+        if (mode === "webgl2") globalThis.entelechy_webgl_only = true;
+        const nextBackend = mode === "webgl2" ? "gpu" : "jit";
+        this.onsaid(`GPU lost (${why.slice(0, 80)}), falling back to ${mode}…`);
+        const nextSession = await allocAndOpenBundle(this.x, raw, nextBackend);
+        this.session = nextSession;
+        let left = this.x.entelechy_play_preparing(nextSession);
+        while (left > 0) {
+          left = await this.turn(nextSession);
+          this.say();
+          if (left < 0) throw new Error(this.text(this.x.entelechy_error(nextSession)));
+        }
+        this.initSaves();
+        if (this.audio) {
+          const described = `${this.audio.context.sampleRate} Hz`;
+          this.withText(described, (text) => this.x.entelechy_play_sound_opened(this.session, text));
+        }
+        return true;
+      } catch (err) {
+        this.onsaid(`${mode} fallback refused: ${err.message}`);
+      }
+    }
+    return false;
   }
 
   async show() {
@@ -643,18 +714,35 @@ class SinglePlayer {
     this.shown.style.display = presented === 0 ? "block" : "none";
     if (presented === 0) return;
     const { width, height } = this.canvas;
+    if (!width || !height) return;
     const pointer = await this.pixels(this.session, width, height);
     if (!pointer) return;
-    const words = new Uint32Array(this.x.memory.buffer, pointer, width * height);
-    const image = this.context.createImageData(width, height);
-    for (let i = 0; i < words.length; i++) {
-      const word = words[i];
-      image.data[i * 4] = (word >> 16) & 255;
-      image.data[i * 4 + 1] = (word >> 8) & 255;
-      image.data[i * 4 + 2] = word & 255;
-      image.data[i * 4 + 3] = 255;
+    const len = width * height;
+    const words = new Uint32Array(this.x.memory.buffer, pointer, len);
+    if (!this._imgData || this._imgW !== width || this._imgH !== height) {
+      this._imgData = this.context.createImageData(width, height);
+      this._imgU32 = new Uint32Array(this._imgData.data.buffer);
+      this._imgW = width;
+      this._imgH = height;
     }
-    this.context.putImageData(image, 0, 0);
+    if (IS_LE) {
+      const out32 = this._imgU32;
+      for (let i = 0; i < len; i++) {
+        const w = words[i];
+        out32[i] = 0xff000000 | ((w & 255) << 16) | (w & 0xff00) | ((w >> 16) & 255);
+      }
+    } else {
+      const data = this._imgData.data;
+      for (let i = 0; i < len; i++) {
+        const w = words[i];
+        const j = i << 2;
+        data[j] = (w >> 16) & 255;
+        data[j + 1] = (w >> 8) & 255;
+        data[j + 2] = w & 255;
+        data[j + 3] = 255;
+      }
+    }
+    this.context.putImageData(this._imgData, 0, 0);
   }
 
   async play() {

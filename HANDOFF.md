@@ -35,14 +35,18 @@ No release is planned; `v0.1.0` is the last tag.
 
 Open:
 
-1. A page on Windows (an RTX 4090) previously did not open a large scene
-   that a page on the M4 opened. Unthrottled pipeline bursts, monolithic
-   single-turn finishing, sequential `popErrorScope` waits, unbounded
-   fused IR growth (`MAX_FUSED_INSTRUCTIONS`, `MAX_FUSED_CARRIED`) and
-   swallowed bundle landing errors are fixed, and device-lost /
-   uncaptured WebGPU diagnostics now surface; hand-written mega-Kernels
-   (700 to 900 KiB of WGSL) remain to be confirmed on that Windows
-   machine's driver compiler.
+1. A page on Windows Chrome previously lost its WebGPU device on Frame 1 of
+   heavy 3D worlds (`A valid external Instance reference no longer exists`):
+   Chrome on Windows currently ignores `powerPreference: "high-performance"`
+   (`crbug.com/369219127`), and unpaced Frame-1 baking bursts exceeded
+   Windows WDDM's 2-second TDR watchdog (compounded after 3 GPU process
+   crashes by Chromium's fallback to software rendering). Windowed shader
+   warming (`WARM_AHEAD`, nominal window sizing for `runs_few` before Frame 1,
+   and unsupplied fallback reachability), periodic page queue draining
+   (`PageQueue`), sliced large/3D `Map` dispatches (`ctx[5].w`), bounded
+   fused IR growth (`MAX_FUSED_INSTRUCTIONS`, `MAX_FUSED_CARRIED`), and
+   `SinglePlayer` Frame-1 device-loss fallback are now in place; verify on
+   the Windows machine.
 2. A page's WebAssembly memory never shrinks below its peak (`Host`'s
    spare buffer retention is capped at 16 MiB on 32-bit WebAssembly
    rather than a quarter of the Host budget): about 66 MB for a

@@ -3187,3 +3187,132 @@ fn emitting_integer_sum_scatter_counts_its_high_words_when_packing_inputs() {
     // Packing 7 read-only inputs replaces 7 bindings with 1 pack, leaving 10 storage.
     assert_eq!(packed.len(), 7);
 }
+
+#[test]
+fn sliced_map_dispatches_match_cpu_across_rows_grids_volumes_and_failures() {
+    let Some(base_gpu) = gpu() else { return };
+    let sliced = base_gpu.with_slice_limit(128);
+
+    // 1. 2D Grid (accounted loop + coord/element indexing across multiple Y slices).
+    let grid_src = "kernel test.sliced_grid@1 {
+        requires { field.write; }
+        output result: Image;
+        compute {
+            let c = coord();
+            let s = loop 8 with acc = 0 until index() >= 5 { acc + index() + int(c.x) };
+            return vec4(c.x * 0.25, c.y * 0.5, float(element()), float(s));
+        }
+    }";
+    let (cpu_grid, gpu_grid) = both(&sliced, grid_src, &[], (1, 1), vec![], Domain::Grid(37, 29));
+    assert_eq!(mismatch(&cpu_grid, &gpu_grid, 1e-5), 0.0);
+
+    // 2. 1D Rows and 3D Volume (multiple element/depth slices) + checked failure in a late slice.
+    let mut host = Host::new(1 << 22);
+    let rows_mod = compile(
+        "kernel test.sliced_rows@1 {
+            requires { field.write; }
+            output result: Rows<Int>;
+            compute { return element() * 3 + 7; }
+        }",
+    )
+    .unwrap();
+    let rows_inv = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(1000),
+        context: Context::default(),
+    };
+    let cpu_rows = {
+        let mut scope = Scope::new(&mut host, all());
+        CpuBackend
+            .execute(&rows_mod, &rows_inv, &mut scope)
+            .unwrap()[0]
+    };
+    let prep_rows = sliced.prepare(&rows_mod).unwrap();
+    let gpu_rows = {
+        let mut scope = Scope::new(&mut host, all());
+        Backend::execute(
+            &sliced,
+            prep_rows.as_ref(),
+            &rows_mod,
+            &rows_inv,
+            &mut scope,
+        )
+        .unwrap()[0]
+    };
+    let gpu_rows_words =
+        Backend::download(&sliced, host.resident(gpu_rows).unwrap().unwrap(), 1000 * 4).unwrap();
+    assert_eq!(host.data(cpu_rows).unwrap().storage(), &gpu_rows_words[..]);
+
+    let vol_mod = compile(
+        "kernel test.sliced_vol@1 {
+            requires { field.write; }
+            output result: Volume<Int>;
+            compute {
+                let c = coord();
+                return int(c.x) + int(c.y) * 100 + int(c.z) * 10000 + element();
+            }
+        }",
+    )
+    .unwrap();
+    let vol_inv = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Volume(9, 7, 11),
+        context: Context::default(),
+    };
+    let cpu_vol = {
+        let mut scope = Scope::new(&mut host, all());
+        CpuBackend.execute(&vol_mod, &vol_inv, &mut scope).unwrap()[0]
+    };
+    let prep_vol = sliced.prepare(&vol_mod).unwrap();
+    let gpu_vol = {
+        let mut scope = Scope::new(&mut host, all());
+        Backend::execute(&sliced, prep_vol.as_ref(), &vol_mod, &vol_inv, &mut scope).unwrap()[0]
+    };
+    let gpu_vol_words = Backend::download(
+        &sliced,
+        host.resident(gpu_vol).unwrap().unwrap(),
+        (9 * 7 * 11) * 4,
+    )
+    .unwrap();
+    assert_eq!(host.data(cpu_vol).unwrap().storage(), &gpu_vol_words[..]);
+
+    // Checked division-by-zero occurring only in a later slice (`element() == 450`) must surface identically.
+    let fail_mod = compile(
+        "kernel test.sliced_fail@1 {
+            requires { field.write; }
+            output result: Rows<Int>;
+            compute {
+                let denom = if element() == 450 { 0 } else { 1 };
+                return 100 / denom;
+            }
+        }",
+    )
+    .unwrap();
+    let fail_inv = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Rows(600),
+        context: Context::default(),
+    };
+    let cpu_err = {
+        let mut scope = Scope::new(&mut host, all());
+        CpuBackend
+            .execute(&fail_mod, &fail_inv, &mut scope)
+            .unwrap_err()
+    };
+    let prep_fail = sliced.prepare(&fail_mod).unwrap();
+    let gpu_err = {
+        let mut scope = Scope::new(&mut host, all());
+        Backend::execute(
+            &sliced,
+            prep_fail.as_ref(),
+            &fail_mod,
+            &fail_inv,
+            &mut scope,
+        )
+        .unwrap_err()
+    };
+    assert_eq!(cpu_err, gpu_err);
+}
