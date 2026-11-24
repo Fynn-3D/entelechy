@@ -17,7 +17,7 @@ pub use entelechy_abi::{Context, Domain, InputState, Value};
 pub use entelechy_ir::KernelId;
 pub use evaluate::{
     Bound, EvaluateError, Evaluator, Fusions, Held, Holding, Placed, PlanEntry, Refused, Report,
-    Reused, StepReport, binding_fault, borrowed_domain, type_fault,
+    Reused, StateStep, binding_fault, borrowed_domain, type_fault,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;

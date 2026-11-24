@@ -297,11 +297,14 @@ impl entelechy_protocol::Served for ServedRunner<'_> {
                 serde_json::json!({ "paused": self.0.play.paused(), "time": self.0.play.time() });
             return Some((entelechy_protocol::envelope(id, Ok(answer)), false));
         }
-        if request.get("op").and_then(Json::as_str) == Some("warp") {
+        if request.get("op").and_then(Json::as_str) != Some("evaluate") {
+            return None;
+        }
+        if entelechy_protocol::steps_asked(request) {
             let view = self.0.view();
             let window_ctx = self.0.play.context(view);
             let result =
-                entelechy_protocol::warp_for_window(&mut self.0.session, request, &window_ctx).map(
+                entelechy_protocol::step_for_window(&mut self.0.session, request, &window_ctx).map(
                     |(answer, advanced)| {
                         self.0.play.advance_clock(advanced);
                         let _ = self.0.frame();
@@ -309,9 +312,6 @@ impl entelechy_protocol::Served for ServedRunner<'_> {
                     },
                 );
             return Some((entelechy_protocol::envelope(id, result), false));
-        }
-        if request.get("op").and_then(Json::as_str) != Some("evaluate") {
-            return None;
         }
         let measured = entelechy_protocol::measure_asked(request);
         self.0.session.set_measured(measured);

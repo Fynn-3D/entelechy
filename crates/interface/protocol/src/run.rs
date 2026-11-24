@@ -3,14 +3,26 @@
 
 use serde_json::{Value as Json, json};
 
-use entelechy_session::{Session, WarpError, WarpOutcome};
+use entelechy_session::{Session, StepError, StepOutcome};
 
 use crate::request::Request;
 use crate::wire::{context_of, evaluation_error, failure, place_json, report_json};
 
-/// Evaluates the scene once.
+/// Whether an `evaluate` request asks for multi-tick causal state stepping
+/// (`steps`, `dt`, or `until` given).
+pub fn steps_asked(request: &Json) -> bool {
+    request.get("steps").is_some() || request.get("dt").is_some() || request.get("until").is_some()
+}
+
+/// Evaluates the scene once, or steps causal state across `steps` ticks when
+/// `steps` / `until` is given.
 pub(crate) fn evaluate(session: &mut Session, request: &Request) -> Result<Json, Json> {
     let context = context_of(session, request.json())?;
+    if steps_asked(request.json()) {
+        let time_given = request.get("time").is_some();
+        return step_with_context(session, request.json(), &context, time_given)
+            .map(|(answer, _)| answer);
+    }
     if request.get("settle").and_then(Json::as_bool) == Some(true) {
         session.settle().map_err(|e| evaluation_error(&e, None))?;
     }
@@ -102,18 +114,10 @@ pub(crate) fn reset(session: &mut Session, request: &Request) -> Result<Json, Js
     Ok(json!({ "reset": true, "node": node, "port": port }))
 }
 
-/// Steps causal state forward across many ticks without evaluating unasked
-/// outputs.
-pub(crate) fn warp(session: &mut Session, request: &Request) -> Result<Json, Json> {
-    let context = context_of(session, request.json())?;
-    let time_given = request.get("time").is_some();
-    warp_with_context(session, request.json(), &context, time_given).map(|(answer, _)| answer)
-}
-
-/// Runs a `warp` request under `base_context` (used directly by `serve` and
-/// by a served Player window, which also receives `(steps, dt)` to advance
-/// its own clock).
-pub fn warp_for_window(
+/// Runs a stepping `evaluate` request under `window_context` for a served
+/// Player window, also returning the causal seconds advanced so the window's
+/// `Play` clock advances in lockstep.
+pub fn step_for_window(
     session: &mut Session,
     request: &Json,
     window_context: &entelechy_kernel::Context,
@@ -124,25 +128,29 @@ pub fn warp_for_window(
     if let Some(t) = request.get("time").and_then(Json::as_f64) {
         base.time = t;
     }
-    warp_with_context(session, request, &base, time_given)
+    step_with_context(session, request, &base, time_given)
 }
 
-fn warp_with_context(
+fn step_with_context(
     session: &mut Session,
     request: &Json,
     context: &entelechy_kernel::Context,
     time_given: bool,
 ) -> Result<(Json, f64), Json> {
-    let steps_i64 = request
-        .get("steps")
-        .and_then(Json::as_i64)
-        .ok_or_else(|| failure("`warp` needs `steps` as a positive integer"))?;
-    if steps_i64 <= 0 {
-        return Err(failure(format!(
-            "`steps` must be between 1 and 100000, got {steps_i64}"
-        )));
-    }
-    let steps = steps_i64 as u64;
+    let steps = match request.get("steps") {
+        Some(val) => {
+            let n = val
+                .as_i64()
+                .ok_or_else(|| failure("`steps` must be a positive integer"))?;
+            if n <= 0 {
+                return Err(failure(format!(
+                    "`steps` must be between 1 and 100000, got {n}"
+                )));
+            }
+            n as u64
+        }
+        None => 100_000,
+    };
     let dt = request
         .get("dt")
         .and_then(Json::as_f64)
@@ -162,10 +170,10 @@ fn warp_with_context(
         .unwrap_or_default();
     let until = request.get("until").and_then(Json::as_str);
     let outcome = session
-        .warp(context, time_given, steps, dt, &nodes, until)
+        .step_state(context, time_given, steps, dt, &nodes, until)
         .map_err(|err| match err {
-            WarpError::Message(msg) => failure(msg),
-            WarpError::Evaluate {
+            StepError::Message(msg) => failure(msg),
+            StepError::Evaluate {
                 step,
                 context: step_ctx,
                 error,
@@ -182,10 +190,10 @@ fn warp_with_context(
             }
         })?;
     let advanced_seconds = (outcome.steps as f64) * dt;
-    Ok((warp_json(&outcome), advanced_seconds))
+    Ok((step_json(&outcome), advanced_seconds))
 }
 
-fn warp_json(outcome: &WarpOutcome) -> Json {
+fn step_json(outcome: &StepOutcome) -> Json {
     let mut answer = json!({
         "steps": outcome.steps,
         "active": outcome.active,

@@ -162,21 +162,12 @@ impl Session {
         context: &Context,
         demand: &BTreeSet<entelechy_graph::NodeId>,
     ) -> Result<Report, EvaluateError> {
-        self.place_by_rows();
-        self.one_frame_in_flight();
-        if let Backing::Documents(docs) = &mut self.backing {
-            let store = Arc::clone(docs.scene.store());
-            docs.inputs
-                .select_frames(store.as_ref(), self.runtime.host_mut(), context.time);
-        }
-        self.hold_progress();
-        self.repin();
+        self.before_tick(context.time, true);
         let mut demand = demand.clone();
         demand.extend(self.fed_sources());
         demand.extend(self.written_sources());
         let demand = &demand;
         self.last_context = *context;
-        self.await_written();
         let graph = self.backing.shared_graph().cloned().ok_or_else(no_scene)?;
         let report = self
             .evaluator
@@ -191,13 +182,7 @@ impl Session {
             .map_err(|error| self.with_refusal(error));
         self.failing = report.as_ref().err().map(|error| self.told(error));
         let report = report?;
-        self.has_evaluated = true;
-        if let Backing::Documents(docs) = &mut self.backing {
-            docs.history.ran();
-        }
-        self.feed_fonts();
-        self.feed_file_nodes();
-        self.feed_field_nodes();
+        self.after_tick_committed();
         self.written_after(&report);
         self.follow_rows();
         Ok(report)

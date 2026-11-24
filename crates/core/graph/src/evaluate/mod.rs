@@ -76,20 +76,20 @@ enum Demand<'a> {
 
 enum Evaluated {
     None,
-    Frame(Report),
-    State(StepReport),
+    Frame(Box<Report>),
+    State(StateStep),
 }
 
 /// The report of an evaluation that reports a full frame.
 fn reported(outcome: Evaluated) -> Result<Report, EvaluateError> {
     match outcome {
-        Evaluated::Frame(report) => Ok(report),
+        Evaluated::Frame(report) => Ok(*report),
         Evaluated::None | Evaluated::State(_) => Err(EvaluateError::Graph(GraphError::NoOutput)),
     }
 }
 
 /// The report of a headless causal state step ([`Evaluator::evaluate_state`]).
-fn state_reported(outcome: Evaluated) -> Result<StepReport, EvaluateError> {
+fn state_reported(outcome: Evaluated) -> Result<StateStep, EvaluateError> {
     match outcome {
         Evaluated::State(report) => Ok(report),
         Evaluated::None | Evaluated::Frame(_) => Err(EvaluateError::Graph(GraphError::NoOutput)),
@@ -239,42 +239,17 @@ pub struct Report {
     pub let_go: usize,
 }
 
-/// What one headless causal state step ([`Evaluator::evaluate_state`]) did,
-/// advancing `<~` state and demanded probe nodes without requiring unasked
-/// graph outputs.
+/// Summary of one headless causal state step ([`Evaluator::evaluate_state`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StepReport {
+pub struct StateStep {
     /// Nodes that executed, in evaluation order.
     pub executed: Vec<NodeId>,
     /// Nodes whose cached outputs were reused.
     pub reused: Reused,
-    /// How many groups the step bound to find their keys.
-    pub bound: usize,
     /// Sources whose state advanced in this step's commit.
     pub committed: Vec<(NodeId, String)>,
-    /// Groups that ran as one Kernel: the executing node and the nodes it
-    /// absorbed.
-    pub fused: Fusions,
-    /// Each executed node's Kernel time, in evaluation order.
-    pub timings: Vec<(NodeId, std::time::Duration)>,
-    /// Each node that kept the step's thread waiting for the device.
-    pub waits: Vec<(NodeId, std::time::Duration)>,
-    /// Each executed node's runs in a clocked step.
-    pub clocked: Vec<(NodeId, std::ops::Range<usize>)>,
-    /// Where each executed node ran, in evaluation order.
-    pub placements: Vec<Placed>,
-    /// State ports carried into a new layout by their migration Kernel.
-    pub migrated: Migrated,
-    /// State ports whose layout changed with no migration, restarted from
-    /// the initial source, with why.
-    pub reset: Reset,
-    /// `async` nodes with a run in flight; their readers took the last
-    /// output.
+    /// `async` nodes with a run in flight; their readers took the last output.
     pub pending: Vec<NodeId>,
-    /// `async` nodes whose run landed before this step's nodes ran.
-    pub landed: Vec<NodeId>,
-    /// Groups a backend refused to run fused, found since the last report.
-    pub refused: Vec<Refused>,
     /// Nodes whose cached outputs were let go to make room in the Host.
     pub let_go: usize,
 }
@@ -1543,7 +1518,7 @@ impl Evaluator {
         context: &Context,
         params: &BTreeMap<String, Value>,
         demand: &BTreeSet<NodeId>,
-    ) -> Result<StepReport, EvaluateError> {
+    ) -> Result<StateStep, EvaluateError> {
         self.recover(runtime);
         self.confirm(runtime)?;
         self.evaluate_with(
@@ -2168,88 +2143,29 @@ impl Evaluator {
                 self.wait_for_checks(checks, runtime)?;
                 return Ok(Evaluated::None);
             }
-            if matches!(demand, Demand::State(_)) {
-                self.wait_for_checks(checks, runtime)?;
-                let mut present_outputs = Vec::new();
-                for (name, source) in &layout.compiled.outputs {
-                    let found = match source {
-                        CompiledSource::External { slot, .. } => scene.external_handles[*slot],
-                        CompiledSource::Node {
-                            producer,
-                            port,
-                            known,
-                        } => self.ledger.entry(producer).and_then(|cached| match known {
-                            Some((names, slot, _)) if Arc::ptr_eq(&cached.output_names, names) => {
-                                Some(cached.outputs[*slot])
-                            }
-                            _ => cached
-                                .output_names
-                                .iter()
-                                .position(|n| n == port)
-                                .map(|idx| cached.outputs[idx]),
-                        }),
-                    };
-                    if let Some(handle) = found {
-                        present_outputs.push((name.clone(), handle));
-                    }
-                }
-                let committed = if self.trial {
-                    Vec::new()
-                } else {
-                    let committed = self.commit(graph, runtime)?;
-                    let awaited = self.awaited_of(graph, &present_outputs);
-                    self.confirm_outputs(awaited, runtime);
-                    self.remember_frame(executed.iter().chain(reused.iter()), runtime);
-                    self.chill_made_once(&groups, &held, runtime);
-                    committed
-                };
-                if leans {
-                    let (saved_params, saved_externals) =
-                        kept_quiet.unwrap_or_else(|| (params.clone(), externals.clone()));
-                    self.quiet = Some(Quiet {
-                        layout: Arc::clone(&layout),
-                        ledger: self.ledger.version(),
-                        params: saved_params,
-                        externals: saved_externals,
-                        steady,
-                    });
-                }
-                return Ok(Evaluated::State(StepReport {
-                    executed,
-                    reused,
-                    bound: bound_groups,
-                    committed,
-                    fused,
-                    timings,
-                    waits,
-                    clocked,
-                    placements,
-                    migrated,
-                    reset,
-                    pending,
-                    landed,
-                    refused: std::mem::take(&mut self.refused),
-                    let_go,
-                }));
-            }
+            let state_only = matches!(demand, Demand::State(_));
             let mut outputs = Vec::with_capacity(layout.compiled.outputs.len());
             for (name, source) in &layout.compiled.outputs {
-                let handle = match source {
+                let found = match source {
                     CompiledSource::External {
                         slot,
                         name: external,
-                    } => scene.external_handles[*slot].ok_or_else(|| {
-                        EvaluateError::MissingExternal {
-                            node: NodeId(format!("output {name}").into()),
-                            name: external.clone(),
+                    } => match scene.external_handles[*slot] {
+                        Some(handle) => Some(handle),
+                        None if state_only => None,
+                        None => {
+                            return Err(EvaluateError::MissingExternal {
+                                node: NodeId(format!("output {name}").into()),
+                                name: external.clone(),
+                            });
                         }
-                    })?,
+                    },
                     CompiledSource::Node {
                         producer,
                         port,
                         known,
                     } => {
-                        let found = self.ledger.entry(producer).and_then(|cached| match known {
+                        let cached = self.ledger.entry(producer).and_then(|cached| match known {
                             Some((names, slot, _)) if Arc::ptr_eq(&cached.output_names, names) => {
                                 Some(cached.outputs[*slot])
                             }
@@ -2259,29 +2175,40 @@ impl Evaluator {
                                 .position(|n| n == port)
                                 .map(|idx| cached.outputs[idx]),
                         });
-                        found.ok_or_else(|| {
-                            // Its real outputs, for the suggestion.
-                            let near = self.ledger.entry(producer).and_then(|cached| {
-                                entelechy_abi::names::nearest(
-                                    port,
-                                    cached.output_names.iter().map(String::as_str),
-                                )
-                                .map(str::to_owned)
-                            });
-                            EvaluateError::UnknownOutput {
-                                node: producer.clone(),
-                                port: port.clone(),
-                                near,
+                        match cached {
+                            Some(handle) => Some(handle),
+                            None if state_only => None,
+                            None => {
+                                let near = self.ledger.entry(producer).and_then(|cached| {
+                                    entelechy_abi::names::nearest(
+                                        port,
+                                        cached.output_names.iter().map(String::as_str),
+                                    )
+                                    .map(str::to_owned)
+                                });
+                                return Err(EvaluateError::UnknownOutput {
+                                    node: producer.clone(),
+                                    port: port.clone(),
+                                    near,
+                                });
                             }
-                        })?
+                        }
                     }
                 };
-                outputs.push((name.clone(), handle));
+                if let Some(handle) = found {
+                    outputs.push((name.clone(), handle));
+                }
             }
-            let output = outputs
-                .first()
-                .map(|(_, handle)| *handle)
-                .ok_or(EvaluateError::Graph(GraphError::NoOutput))?;
+            let first_output = if state_only {
+                None
+            } else {
+                Some(
+                    outputs
+                        .first()
+                        .map(|(_, handle)| *handle)
+                        .ok_or(EvaluateError::Graph(GraphError::NoOutput))?,
+                )
+            };
             // A trial commits nothing, and is not remembered. Overlapping,
             // the frame commits now and its device is waited for once the
             // next frame's work has gone to it.
@@ -2315,7 +2242,17 @@ impl Evaluator {
                     steady,
                 });
             }
-            Ok(Evaluated::Frame(Report {
+            let Some(output) = first_output else {
+                self.refused.clear();
+                return Ok(Evaluated::State(StateStep {
+                    executed,
+                    reused,
+                    committed,
+                    pending,
+                    let_go,
+                }));
+            };
+            Ok(Evaluated::Frame(Box::new(Report {
                 output,
                 executed,
                 timings,
@@ -2333,7 +2270,7 @@ impl Evaluator {
                 landed,
                 refused: std::mem::take(&mut self.refused),
                 let_go,
-            }))
+            })))
         })();
         match evaluated {
             Ok(report) => {

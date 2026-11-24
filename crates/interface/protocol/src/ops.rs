@@ -469,12 +469,27 @@ pub fn operations() -> Vec<Operation> {
         ),
         op(
             "evaluate",
-            "Runs one frame.",
+            "Runs one frame, or steps causal state across `steps` ticks without evaluating unasked outputs.",
             with_context(vec![
                 may(
                     "nodes",
                     Ty::List(Box::new(Ty::Str)),
-                    "evaluate only these nodes, the state and never-produced outputs",
+                    "evaluate only these nodes, the state and never-produced outputs (or keep them materialized across `steps`)",
+                ),
+                may(
+                    "steps",
+                    Ty::Int,
+                    "causal ticks to advance (1 to 100000), skipping unasked outputs; one full frame when not given",
+                ),
+                may(
+                    "dt",
+                    Ty::Num,
+                    "seconds between ticks when stepping; 1/60 when not given",
+                ),
+                may(
+                    "until",
+                    Ty::Str,
+                    "a `node` or `node.port` whose element 0's first number stops stepping once non-zero or non-finite",
                 ),
                 may(
                     "settle",
@@ -492,31 +507,7 @@ pub fn operations() -> Vec<Operation> {
                     "time the frames on the device as they run, waiting for nothing, from this evaluation on (false stops); `device` is the latest one done, node by node",
                 ),
             ]),
-            "executed, reused, committed, outputs, timings, measured, device, let_go (nodes let go to make room in the Host); in the Player, ignored (the context fields it gave, which the window's own input stands in for) and a note",
-        ),
-        op(
-            "warp",
-            "Steps causal state forward across many ticks without evaluating unasked outputs, stopping early when `until` becomes non-zero or non-finite, or once a clockless scene settles.",
-            with_context(vec![
-                needs("steps", Ty::Int, "ticks to advance, 1 to 100000"),
-                may("dt", Ty::Num, "seconds between ticks; 1/60 when not given"),
-                may(
-                    "nodes",
-                    Ty::List(Box::new(Ty::Str)),
-                    "keep these nodes materialized across the warp alongside state",
-                ),
-                may(
-                    "until",
-                    Ty::Str,
-                    "a `node` or `node.port` whose element 0's first number stops the warp once non-zero or non-finite",
-                ),
-                may(
-                    "settle",
-                    Ty::Bool,
-                    "first wait for every `async` run to land",
-                ),
-            ]),
-            "steps (ticks run), active (ticks that advanced state), time (causal seconds of the last tick), millis, stopped (`\"steps\"` | `\"until\"` | `\"settled\"` | `\"nonfinite\"`), until (when `until` was given), executed, reused, committed, let_go",
+            "executed, reused, committed, outputs, timings, measured, device, let_go (nodes let go to make room in the Host); when `steps` or `until` is given, steps, active, time, millis, stopped (`\"steps\"` | `\"until\"` | `\"settled\"` | `\"nonfinite\"`), until; in the Player, ignored (the context fields it gave, which the window's own input stands in for) and a note",
         ),
         op(
             "read",

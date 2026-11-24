@@ -870,23 +870,45 @@ impl Session {
         let _ = taken;
     }
 
-    /// Evaluates the current graph under `context`.
-    pub fn evaluate(&mut self, context: &Context) -> Result<Report, EvaluateError> {
+    pub(super) fn before_tick(&mut self, time: f64, force_wait: bool) {
+        #[cfg(not(feature = "documents"))]
+        let _ = time;
         #[cfg(feature = "documents")]
         self.place_by_rows();
-        if !self.evaluator.overlaps() {
+        if force_wait || !self.evaluator.overlaps() {
             self.one_frame_in_flight();
         }
         #[cfg(feature = "documents")]
         if let Backing::Documents(docs) = &mut self.backing {
             let store = Arc::clone(docs.scene.store());
             docs.inputs
-                .select_frames(store.as_ref(), self.runtime.host_mut(), context.time);
+                .select_frames(store.as_ref(), self.runtime.host_mut(), time);
         }
         self.hold_progress();
         self.repin();
-        self.last_context = *context;
         self.await_written();
+    }
+
+    pub(super) fn after_tick_committed(&mut self) {
+        self.failing = None;
+        self.has_evaluated = true;
+        #[cfg(feature = "documents")]
+        if let Backing::Documents(docs) = &mut self.backing {
+            docs.history.ran();
+        }
+        self.feed_fonts();
+        #[cfg(feature = "documents")]
+        {
+            self.feed_file_nodes();
+            self.feed_field_nodes();
+        }
+        self.let_go_of_input_copies();
+    }
+
+    /// Evaluates the current graph under `context`.
+    pub fn evaluate(&mut self, context: &Context) -> Result<Report, EvaluateError> {
+        self.before_tick(context.time, false);
+        self.last_context = *context;
         let graph = self.backing.shared_graph().cloned().ok_or_else(no_scene)?;
         let evaluated = self.evaluator.evaluate(
             &graph,
@@ -904,19 +926,7 @@ impl Session {
                 return Err(error);
             }
         };
-        self.failing = None;
-        self.has_evaluated = true;
-        #[cfg(feature = "documents")]
-        if let Backing::Documents(docs) = &mut self.backing {
-            docs.history.ran();
-        }
-        self.feed_fonts();
-        #[cfg(feature = "documents")]
-        {
-            self.feed_file_nodes();
-            self.feed_field_nodes();
-        }
-        self.let_go_of_input_copies();
+        self.after_tick_committed();
         if let Some(frame) = self.runtime.end_frame() {
             self.node_clock.ended(frame, report.clocked.clone());
         }
@@ -1462,7 +1472,7 @@ impl Session {
     /// early when `until` becomes non-zero or non-finite, or once a clockless
     /// scene settles to a fixed point.
     #[allow(clippy::too_many_arguments)]
-    pub fn warp(
+    pub fn step_state(
         &mut self,
         base_context: &Context,
         time_given: bool,
@@ -1470,19 +1480,19 @@ impl Session {
         dt: f64,
         nodes: &[entelechy_graph::NodeId],
         until: Option<&str>,
-    ) -> Result<WarpOutcome, WarpError> {
-        const MAX_WARP_STEPS: u64 = 100_000;
-        if steps == 0 || steps > MAX_WARP_STEPS {
-            return Err(WarpError::Message(format!(
-                "`steps` must be between 1 and {MAX_WARP_STEPS}, got {steps}"
+    ) -> Result<StepOutcome, StepError> {
+        const MAX_STEPS: u64 = 100_000;
+        if steps == 0 || steps > MAX_STEPS {
+            return Err(StepError::Message(format!(
+                "`steps` must be between 1 and {MAX_STEPS}, got {steps}"
             )));
         }
         if !dt.is_finite() || dt < 0.0 {
-            return Err(WarpError::Message(format!(
+            return Err(StepError::Message(format!(
                 "`dt` must be a non-negative finite number of seconds, got {dt}"
             )));
         }
-        self.confirm().map_err(|error| WarpError::Evaluate {
+        self.confirm().map_err(|error| StepError::Evaluate {
             step: 0,
             context: Box::new(self.last_context),
             error: Box::new(error),
@@ -1492,7 +1502,7 @@ impl Session {
         let until_target = match until {
             Some(target) => Some((
                 target,
-                self.resolve_port(target).map_err(WarpError::Message)?,
+                self.resolve_port(target).map_err(StepError::Message)?,
             )),
             None => None,
         };
@@ -1500,12 +1510,10 @@ impl Session {
         for node in nodes {
             let (producer, _) = self
                 .resolve_port(node.0.as_str())
-                .map_err(WarpError::Message)?;
+                .map_err(StepError::Message)?;
             requested_producers.push(producer);
         }
 
-        // Pin `until` and `nodes` across the warp so fusion cannot absorb
-        // them and their materialized Fields stay readable after returning.
         let mut temporary_pins = Vec::new();
         for candidate in requested_producers
             .iter()
@@ -1519,7 +1527,7 @@ impl Session {
         self.repin();
 
         let result =
-            (|| -> Result<WarpOutcome, WarpError> {
+            (|| -> Result<StepOutcome, StepError> {
                 let mut demand: BTreeSet<entelechy_graph::NodeId> =
                     requested_producers.into_iter().collect();
                 if let Some((_, (ref node, _))) = until_target {
@@ -1538,9 +1546,9 @@ impl Session {
                 let clock_moves = dt != 0.0 && self.reads_clock_for(Some(&demand));
                 let began = entelechy_kernel::clock::now();
                 let mut active = 0u64;
-                let mut last_report: Option<entelechy_graph::StepReport> = None;
+                let mut last_report: Option<entelechy_graph::StateStep> = None;
                 let mut final_time = start_time;
-                let mut stopped = WarpStop::Steps;
+                let mut stopped = StepStop::Steps;
                 let mut until_value = None;
                 let mut ran_steps = 0u64;
 
@@ -1560,27 +1568,14 @@ impl Session {
                 }
 
                 for index in 0..steps {
-                    #[cfg(feature = "documents")]
-                    self.place_by_rows();
                     let mut step_context = *base_context;
                     step_context.time = start_time + (index as f64) * dt;
                     if index > 0 {
                         step_context.input = held_input;
                     }
-                    #[cfg(feature = "documents")]
-                    if let Backing::Documents(docs) = &mut self.backing {
-                        let store = Arc::clone(docs.scene.store());
-                        docs.inputs.select_frames(
-                            store.as_ref(),
-                            self.runtime.host_mut(),
-                            step_context.time,
-                        );
-                    }
-                    self.hold_progress();
-                    self.repin();
-                    self.await_written();
+                    self.before_tick(step_context.time, false);
                     let graph = self.backing.shared_graph().cloned().ok_or_else(|| {
-                        WarpError::Evaluate {
+                        StepError::Evaluate {
                             step: index + 1,
                             context: Box::new(step_context),
                             error: Box::new(no_scene()),
@@ -1599,32 +1594,20 @@ impl Session {
                             self.tally();
                             let error = self.with_refusal(error);
                             self.failing = Some(self.told(&error));
-                            return Err(WarpError::Evaluate {
+                            return Err(StepError::Evaluate {
                                 step: index + 1,
                                 context: Box::new(step_context),
                                 error: Box::new(error),
                             });
                         }
                     };
-                    self.failing = None;
                     self.last_context = step_context;
-                    self.has_evaluated = true;
+                    self.after_tick_committed();
                     final_time = step_context.time;
                     ran_steps = index + 1;
                     if !step.committed.is_empty() {
                         active += 1;
                     }
-                    #[cfg(feature = "documents")]
-                    if let Backing::Documents(docs) = &mut self.backing {
-                        docs.history.ran();
-                    }
-                    self.feed_fonts();
-                    #[cfg(feature = "documents")]
-                    {
-                        self.feed_file_nodes();
-                        self.feed_field_nodes();
-                    }
-                    self.let_go_of_input_copies();
                     #[cfg(feature = "documents")]
                     self.write_confirmed();
                     self.write_bundled_confirmed();
@@ -1633,22 +1616,22 @@ impl Session {
 
                     if let Some((label, (ref u_node, ref u_port))) = until_target {
                         let handle = self.evaluator.cached(u_node, u_port).ok_or_else(|| {
-                            WarpError::Message(format!(
+                            StepError::Message(format!(
                                 "`{label}` produced no value on step {}",
                                 index + 1
                             ))
                         })?;
                         let value = self
                             .first_scalar(handle, label)
-                            .map_err(WarpError::Message)?;
+                            .map_err(StepError::Message)?;
                         until_value = Some(value);
                         if !value.is_finite() {
-                            stopped = WarpStop::NonFinite;
+                            stopped = StepStop::NonFinite;
                             last_report = Some(step);
                             break;
                         }
                         if value != 0.0 {
-                            stopped = WarpStop::Until;
+                            stopped = StepStop::Until;
                             last_report = Some(step);
                             break;
                         }
@@ -1667,12 +1650,12 @@ impl Session {
                         };
                     last_report = Some(step);
                     if settled_now {
-                        stopped = WarpStop::Settled;
+                        stopped = StepStop::Settled;
                         break;
                     }
                 }
 
-                Ok(WarpOutcome {
+                Ok(StepOutcome {
                     steps: ran_steps,
                     active,
                     time: final_time,
@@ -1690,9 +1673,9 @@ impl Session {
     }
 }
 
-/// Why a [`Session::warp`] stopped.
+/// Why a [`Session::step_state`] stopped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WarpStop {
+pub enum StepStop {
     /// Ran all requested `steps`.
     Steps,
     /// The `until` target's first scalar became non-zero.
@@ -1704,8 +1687,8 @@ pub enum WarpStop {
     Settled,
 }
 
-impl WarpStop {
-    /// Wire name returned by the protocol's `warp` operation.
+impl StepStop {
+    /// Wire name returned by a multi-step `evaluate`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Steps => "steps",
@@ -1716,29 +1699,29 @@ impl WarpStop {
     }
 }
 
-/// Outcome of stepping causal state across many ticks ([`Session::warp`]).
+/// Outcome of stepping causal state across many ticks ([`Session::step_state`]).
 #[derive(Clone, Debug)]
-pub struct WarpOutcome {
+pub struct StepOutcome {
     /// How many ticks ran.
     pub steps: u64,
     /// How many ticks advanced at least one `<~` state port.
     pub active: u64,
     /// Causal time of the final tick that ran, in seconds.
     pub time: f64,
-    /// Wall-clock duration spent inside the warp.
+    /// Wall-clock duration spent stepping.
     pub elapsed: std::time::Duration,
     /// Why stepping stopped.
-    pub stopped: WarpStop,
+    pub stopped: StepStop,
     /// Value of `until`'s first scalar on the stopping tick, when `until`
     /// was given.
     pub until_value: Option<f64>,
-    /// Report of the final tick that ran.
-    pub last: entelechy_graph::StepReport,
+    /// Summary of the final tick that ran.
+    pub last: entelechy_graph::StateStep,
 }
 
-/// Why a [`Session::warp`] could not complete.
+/// Why a [`Session::step_state`] could not complete.
 #[derive(Debug)]
-pub enum WarpError {
+pub enum StepError {
     /// Invalid target, step count, or probe read failure.
     Message(String),
     /// Graph evaluation failed on `step` (1-based) under `context`.

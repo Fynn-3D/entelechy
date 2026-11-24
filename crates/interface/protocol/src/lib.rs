@@ -36,7 +36,7 @@ use crate::request::Request;
 
 pub use answers::{Answers, Served};
 pub use envelope::{envelope, parse_request};
-pub use run::{evaluation_json, measure_asked, warp_for_window};
+pub use run::{evaluation_json, measure_asked, step_for_window, steps_asked};
 pub use transport::{Incoming, Reply, listen, serve, stdin_into, stdin_lines};
 pub use wire::{
     CONTEXT_FIELDS, context_given, context_of, report_json, trace_json, type_name, value_from_json,
@@ -80,7 +80,7 @@ fn respond_parsed(session: &mut Session, parsed: &Result<(Json, Json), Json>) ->
 }
 
 /// The operations that run or read the scene.
-const RUNS_THE_SCENE: [&str; 5] = ["evaluate", "warp", "read", "write", "trace"];
+const RUNS_THE_SCENE: [&str; 4] = ["evaluate", "read", "write", "trace"];
 
 /// Handles one request by the function for the operation it names.
 pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
@@ -111,7 +111,6 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "retire" => create::retire(session, &request),
         "param" => create::param(session, &request),
         "evaluate" => run::evaluate(session, &request),
-        "warp" => run::warp(session, &request),
         "reset" => run::reset(session, &request),
         // A window's clock is its own (the Player answers this); a serve's
         // is its caller's.
@@ -522,10 +521,10 @@ output result <- view.result;
         );
         session.sync();
 
-        // 1. Warp 10 ticks without `until`: `view` (`1 / 0`) is never run.
+        // 1. Step 10 ticks without `until`: `view` (`1 / 0`) is never run.
         let w1 = handle(
             &mut session,
-            &json!({ "op": "warp", "steps": 10, "dt": 0.1 }),
+            &json!({ "op": "evaluate", "steps": 10, "dt": 0.1 }),
         )
         .unwrap();
         assert_eq!(w1["steps"], 10);
@@ -534,10 +533,10 @@ output result <- view.result;
         assert!((w1["time"].as_f64().unwrap() - 0.9).abs() < 1e-9);
         assert!(!w1["executed"].as_array().unwrap().contains(&json!("view")));
 
-        // 2. Next warp without `time` continues from 1.0 s and stops when `reached` becomes true (at count == 25, 15 ticks later).
+        // 2. Next step run without `time` continues from 1.0 s and stops when `reached` becomes true (at count == 25, 15 ticks later).
         let w2 = handle(
             &mut session,
-            &json!({ "op": "warp", "steps": 100, "dt": 0.1, "until": "reached" }),
+            &json!({ "op": "evaluate", "steps": 100, "dt": 0.1, "until": "reached" }),
         )
         .unwrap();
         assert_eq!(w2["steps"], 15, "{w2}");
@@ -547,17 +546,17 @@ output result <- view.result;
         let c_summary = handle(&mut session, &json!({ "op": "read", "node": "counter" })).unwrap();
         assert_eq!(c_summary["summary"][0]["max"], 25.0);
 
-        // 3. Warp with `until: "unstable"` stops immediately on NaN at count == 30 (5 ticks later).
+        // 3. Stepping with `until: "unstable"` stops immediately on NaN at count == 30 (5 ticks later).
         let w3 = handle(
             &mut session,
-            &json!({ "op": "warp", "steps": 100, "dt": 0.1, "until": "unstable" }),
+            &json!({ "op": "evaluate", "steps": 100, "dt": 0.1, "until": "unstable" }),
         )
         .unwrap();
         assert_eq!(w3["steps"], 5, "{w3}");
         assert_eq!(w3["stopped"], "nonfinite", "{w3}");
         assert_eq!(w3["until"], "NaN", "{w3}");
 
-        // 4. Cap the counter at 32 in a clockless scene: warp of 500 stops early once settled!
+        // 4. Cap the counter at 32 in a clockless scene: stepping 500 ticks stops early once settled!
         handle(
             &mut session,
             &json!({ "op": "param", "name": "cap", "value": 32 }),
@@ -565,7 +564,7 @@ output result <- view.result;
         .unwrap();
         let w4 = handle(
             &mut session,
-            &json!({ "op": "warp", "steps": 500, "dt": 0.1 }),
+            &json!({ "op": "evaluate", "steps": 500, "dt": 0.1 }),
         )
         .unwrap();
         assert_eq!(w4["stopped"], "settled", "{w4}");
