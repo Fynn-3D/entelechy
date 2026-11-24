@@ -183,6 +183,9 @@ impl Backend for Remembered {
     fn has_device(&self) -> bool {
         self.inner.has_device()
     }
+    fn has_compute_device(&self) -> bool {
+        self.inner.has_compute_device()
+    }
     fn download(
         &self,
         device: &(dyn Any + Send + Sync),

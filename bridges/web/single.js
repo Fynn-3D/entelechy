@@ -250,13 +250,15 @@ async function allocAndOpenBundle(exports, bundleBytes, backendName) {
 }
 
 class SinglePlayer {
-  constructor(exports, session, canvas, shown, pointer = "free", bundleGz = null) {
+  constructor(exports, session, canvas, shown, pointer = "free", bundleGz = null, needsGpu = false, onfail = null) {
     this.x = exports;
     this.session = session;
     this.canvas = canvas;
     this.shown = shown;
     this.pointer = pointer || "free";
     this._bundleGz = bundleGz;
+    this.needsGpu = !!needsGpu;
+    this.onfail = typeof onfail === "function" ? onfail : null;
     this.shownFrames = 0;
     this.context = canvas.getContext("2d");
     const promising = (name) =>
@@ -291,7 +293,7 @@ class SinglePlayer {
     this.listen();
   }
 
-  static async start({ glue, wasm, bundle, backend, pointer, canvas, shown, told = () => {} }) {
+  static async start({ glue, wasm, bundle, bundleGzip = null, backend, pointer, canvas, shown, told = () => {}, onfail = null }) {
     globalThis.entelechy_webgl_canvas = shown || null;
     globalThis.entelechy_webgl ??= makeWebGlHost();
     const host = makeHost();
@@ -321,23 +323,61 @@ class SinglePlayer {
 
     await told(0.35, "opening scene");
     const chosenBackend = backend || "best";
-    const bundleGz = chosenBackend === "jit" ? null : await gzipPipe(bundle, false);
+    const bundleGz = chosenBackend === "jit" ? null : (bundleGzip || (await gzipPipe(bundle, false)));
     const session = await allocAndOpenBundle(exports, bundle, chosenBackend);
     bundle = null;
 
-    const player = new SinglePlayer(exports, session, canvas, shown, pointer, bundleGz);
+    const needsGpu =
+      typeof exports.entelechy_play_needs_gpu === "function" && exports.entelechy_play_needs_gpu(session) === 1;
+    const hasComputeGpu =
+      typeof exports.entelechy_play_compute_gpu !== "function" || exports.entelechy_play_compute_gpu(session) === 1;
+    if (
+      needsGpu &&
+      !hasComputeGpu &&
+      chosenBackend !== "jit" &&
+      !globalThis.entelechy_webgl_only &&
+      !globalThis.entelechy_force_fallback
+    ) {
+      try { exports.entelechy_close(session); } catch {}
+      throw new Error(
+        "WebGPU compute is unavailable on this browser or graphics driver; this 3D world is too heavy for single-threaded CPU fallback (add ?on=jit to force CPU mode)"
+      );
+    }
+
+    const player = new SinglePlayer(
+      exports,
+      session,
+      canvas,
+      shown,
+      pointer,
+      needsGpu ? null : bundleGz,
+      needsGpu,
+      onfail,
+    );
     let left = exports.entelechy_play_preparing(session);
     let most = left;
     let high = 0.4;
     while (left > 0) {
       most = Math.max(most, left);
-      high = Math.max(high, 0.4 + 0.6 * (1 - left / most));
+      high = Math.max(high, 0.4 + 0.52 * (1 - left / most));
       await told(high, `preparing ${most - left} of ${most}`);
       left = await player.inTurn(() => player.turn(session));
       player.say();
       if (left < 0) throw new Error(player.text(exports.entelechy_error(session)));
     }
     player.say();
+    if (player.canvas.clientWidth > 0 && player.canvas.clientHeight > 0) {
+      await told(0.95, "building first frame");
+      for (let guard = 0; guard < 16 && player.shownFrames === 0 && !player.failed; guard++) {
+        await player.step();
+      }
+      if (player.failed) {
+        const msg = player.failed;
+        try { exports.entelechy_close(player.session); } catch {}
+        player.session = 0;
+        throw new Error(msg);
+      }
+    }
     return player;
   }
 
@@ -713,12 +753,21 @@ class SinglePlayer {
         return;
       }
       document.title = `Entelechy: ${error}`;
-      if (error !== this.failed) console.error(`Entelechy: ${error}`);
+      if (error !== this.failed) {
+        console.error(`Entelechy: ${error}`);
+        if (this.onfail) {
+          try { this.onfail(error); } catch {}
+        }
+      }
       this.failed = error;
     }
   }
 
   async recoverFromDeviceLoss(why) {
+    if (this.needsGpu && !globalThis.entelechy_force_fallback) {
+      this._bundleGz = null;
+      return false;
+    }
     const gz = this._bundleGz;
     this._bundleGz = null;
     if (!gz) return false;

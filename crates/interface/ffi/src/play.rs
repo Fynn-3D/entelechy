@@ -533,6 +533,25 @@ pub unsafe extern "C" fn entelechy_play_resting(session: *const EntelechySession
     unsafe { enter(session) }.is_some_and(|s| s.play.resting()) as c_int
 }
 
+/// Whether the loaded scene needs a compute GPU (`wgpu`) rather than WebGL2 or
+/// a single-threaded processor fallback in a browser: 1 or 0.
+///
+/// # Safety
+/// `session` is NULL or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_play_needs_gpu(session: *const EntelechySession) -> c_int {
+    unsafe { enter(session) }.is_some_and(|s| s.session.needs_compute_gpu()) as c_int
+}
+
+/// Whether the session's main backend is a compute GPU (`wgpu`): 1 or 0.
+///
+/// # Safety
+/// `session` is NULL or a live session.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn entelechy_play_compute_gpu(session: *const EntelechySession) -> c_int {
+    unsafe { enter(session) }.is_some_and(|s| s.session.runtime().has_compute_device()) as c_int
+}
+
 /// The Kernels still waiting their turn to prepare (a page prepares a few
 /// each frame, and a frame waits until the scene's are all prepared): what
 /// a page shows while it loads. Zero once they are, or where they prepare

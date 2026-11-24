@@ -249,8 +249,9 @@ type Opened = (Box<dyn Backend>, Option<Box<dyn Backend>>, Option<Display>);
 pub(super) const TURN: std::time::Duration = std::time::Duration::from_millis(12);
 /// How many Kernels at most warm their device pipelines concurrently ahead
 /// of [`Session::finish_turn`] in a page, keeping the browser's GPU process
-/// fed without flooding its main thread.
-const WARM_AHEAD: usize = 12;
+/// fed without saturating Windows DXC / Dawn worker threads past Chrome's
+/// GPU watchdog.
+const WARM_AHEAD: usize = 4;
 
 impl Session {
     pub(super) fn from_backing(runtime: Runtime, backing: Backing) -> Self {
@@ -539,7 +540,13 @@ impl Session {
     }
 
     fn warm_finishing(&mut self, preparer: &entelechy_kernel::Preparer) {
-        let target = self.finishing.len().min(WARM_AHEAD);
+        let heavy = self.finishing.iter().take(WARM_AHEAD).any(|version| {
+            version
+                .module()
+                .is_some_and(|m| m.typical_work() > 15_000 || m.functions.len() > 24)
+        });
+        let limit = if heavy { 2 } else { WARM_AHEAD };
+        let target = self.finishing.len().min(limit);
         while self.warmed < target {
             preparer.warm(&self.finishing[self.warmed]);
             self.warmed += 1;
@@ -586,6 +593,80 @@ impl Session {
     /// rather than source documents.
     pub fn is_bundled(&self) -> bool {
         matches!(self.backing, Backing::Bundled(_))
+    }
+
+    /// Whether the loaded scene requires a real compute GPU (`wgpu`) to run
+    /// interactively without locking up a single-threaded browser main thread:
+    /// true for 3D worlds using `Volume` fields, `Group` workgroups, heavy
+    /// raymarching/SDF Kernels, or large multi-pass hardware rasterization.
+    pub fn needs_compute_gpu(&self) -> bool {
+        let Some(graph) = self.graph() else {
+            return false;
+        };
+        let handles = self.backing.handles();
+        let output_seeds = graph.outputs.iter().filter_map(|(_, source)| match source {
+            entelechy_graph::Source::Node { node, .. } => Some(node.clone()),
+            entelechy_graph::Source::External(_) => None,
+        });
+        let fallback_seeds = graph
+            .fallbacks
+            .iter()
+            .filter(|(name, _)| !handles.contains_key(name))
+            .filter_map(|(_, source)| match source {
+                entelechy_graph::Source::Node { node, .. } => Some(node.clone()),
+                entelechy_graph::Source::External(_) => None,
+            });
+        let reached = graph.read_through(
+            self.pins
+                .iter()
+                .cloned()
+                .chain(output_seeds)
+                .chain(fallback_seeds),
+        );
+        let mut seen_kernels = BTreeSet::new();
+        let mut has_native_raster = false;
+        let mut has_non_map = false;
+        let mut sum_typical = 0u64;
+        for node in &graph.nodes {
+            if !reached.contains(&node.id) {
+                continue;
+            }
+            let Some(version) = self.runtime.kernel(&node.kernel) else {
+                continue;
+            };
+            if version.native().is_some() {
+                has_native_raster = true;
+                continue;
+            }
+            let manifest = version.manifest();
+            if matches!(manifest.mode, entelechy_ir::Mode::Group { .. }) {
+                return true;
+            }
+            if !matches!(
+                manifest.mode,
+                entelechy_ir::Mode::Map | entelechy_ir::Mode::Scan
+            ) {
+                has_non_map = true;
+            }
+            if manifest
+                .inputs
+                .iter()
+                .chain(&manifest.outputs)
+                .any(|port| port.shape() == entelechy_abi::Shape::Volume)
+            {
+                return true;
+            }
+            if seen_kernels.insert(version.id().clone())
+                && let Some(module) = version.module()
+            {
+                let typ = module.typical_work();
+                if typ > 8_000 {
+                    return true;
+                }
+                sum_typical = sum_typical.saturating_add(typ);
+            }
+        }
+        sum_typical > 30_000 || (has_native_raster && (reached.len() > 24 || has_non_map))
     }
 
     /// Shows what only shows from the processor while the device's

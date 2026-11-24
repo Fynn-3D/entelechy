@@ -213,6 +213,11 @@ int entelechy_play_replaying(const EntelechySession *session);
 /* Whether the play has settled at a fixed-point 0 Hz snapshot until new
  * input, resize or protocol mutation arrives, 1 or 0. */
 int entelechy_play_resting(const EntelechySession *session);
+/* Whether the loaded scene needs a compute GPU (`wgpu`) rather than WebGL2
+ * or a single-threaded processor fallback in a browser, 1 or 0. */
+int entelechy_play_needs_gpu(const EntelechySession *session);
+/* Whether the session's main backend is a compute GPU (`wgpu`), 1 or 0. */
+int entelechy_play_compute_gpu(const EntelechySession *session);
 /* The Kernels still waiting their turn to prepare (a page prepares a few a
  * frame, and frames wait until the scene's are prepared); 0 once they are,
  * or where they prepare on threads. */
