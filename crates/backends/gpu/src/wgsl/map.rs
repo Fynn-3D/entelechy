@@ -108,9 +108,38 @@ pub fn emit_full_with_subgroups(
     float32_filterable: bool,
     subgroups: SubgroupCaps,
 ) -> String {
+    emit_full_with_caps(
+        module,
+        packs,
+        textured,
+        longs,
+        half,
+        float32_filterable,
+        subgroups,
+        false,
+    )
+}
+
+/// Emits the module's compute shader with full hardware capabilities
+/// (`float32_filterable`, `subgroups`, and `shader_f16` native 16-bit float
+/// storage arrays).
+#[allow(clippy::too_many_arguments)]
+pub fn emit_full_with_caps(
+    module: &Module,
+    packs: &[Vec<usize>],
+    textured: &[usize],
+    longs: Longs,
+    half: Half,
+    float32_filterable: bool,
+    subgroups: SubgroupCaps,
+    shader_f16: bool,
+) -> String {
     let manifest = &module.manifest;
     let subgroup_group = uses_subgroup_group(module, subgroups);
     let mut out = String::new();
+    if shader_uses_f16(module, true, packs, textured, shader_f16) {
+        out.push_str("enable f16;\n");
+    }
     if subgroup_group {
         out.push_str(subgroups.directive());
     }
@@ -122,6 +151,7 @@ pub fn emit_full_with_subgroups(
         textured,
         longs,
         float32_filterable,
+        shader_f16,
     );
     if subgroup_group && longs == Longs::Native && module.holds(Type::Long) {
         out.push_str(SUBGROUP_I64_HELPERS);
@@ -139,7 +169,9 @@ pub fn emit_full_with_subgroups(
         } else {
             port.element()
         };
-        let body = if !scattering && !port.ty.schema.is_wide() {
+        let body = if let Some(native) = native_f16_output(module, k, shader_f16) {
+            native_f16_store_body(module, &format!("out{k}"), element, native)
+        } else if !scattering && !port.ty.schema.is_wide() {
             narrow_store_body(module, k, element)
         } else {
             let stride = type_words(module, element);
@@ -168,6 +200,7 @@ pub fn emit_full_with_subgroups(
             textured,
             longs,
             false,
+            shader_f16,
         );
         out.push('\n');
     }
@@ -181,15 +214,16 @@ pub fn emit_full_with_subgroups(
         textured,
         longs,
         subgroup_group,
+        shader_f16,
     );
     if let Some(merge) = &module.merge {
         emit_function(
-            &mut out, module, merge, "merge", false, packs, textured, longs, false,
+            &mut out, module, merge, "merge", false, packs, textured, longs, false, shader_f16,
         );
     }
     if let Some(init) = &module.init {
         emit_function(
-            &mut out, module, init, "init", false, packs, textured, longs, false,
+            &mut out, module, init, "init", false, packs, textured, longs, false, shader_f16,
         );
         // Ordered work: one invocation walks the rows, carrying the value.
         let _ = writeln!(

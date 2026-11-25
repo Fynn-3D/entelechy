@@ -83,7 +83,6 @@ pub(crate) struct Staged {
     pub(crate) bind_group: wgpu::BindGroup,
     pub(crate) further_slices: Vec<(u32, u32, u32, u32, u32)>,
     pub(crate) context_buffer: wgpu::Buffer,
-    pub(crate) params_buffer: wgpu::Buffer,
     pub(crate) context_slice: crate::batch::UniformSlice,
     pub(crate) params_slice: crate::batch::UniformSlice,
     pub(crate) input_buffers: Vec<Option<wgpu::Buffer>>,
@@ -109,6 +108,9 @@ pub(crate) struct Staged {
     /// The high words beside it, where it sums whole
     /// ([`wgsl::sums_whole`]).
     pub(crate) highs: Option<wgpu::Buffer>,
+    /// Optional 16-byte staging buffer checking whether an unclamped GPU-driven
+    /// indirect scatter domain resolved to a non-positive row count.
+    pub(crate) indirect_bad_check: Option<wgpu::Buffer>,
 }
 
 /// The domain the entry maps over: a reduction's and a scatter's first
@@ -429,8 +431,38 @@ impl WgpuBackend {
         slice_limit: usize,
         allow_batch: bool,
     ) -> Result<Staged, ExecutionError> {
+        self.stage_with_indirect(
+            pipeline,
+            module,
+            invocation,
+            scope,
+            domain,
+            timing,
+            slice_limit,
+            allow_batch,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn stage_with_indirect(
+        &self,
+        pipeline: &Pipeline,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+        domain: entelechy_abi::Domain,
+        timing: Option<&Timing>,
+        slice_limit: usize,
+        allow_batch: bool,
+        indirect: Option<(
+            &crate::indirect::IndirectScatterPipeline,
+            entelechy_rules::IndirectCount,
+        )>,
+    ) -> Result<Staged, ExecutionError> {
         let element_count = domain.count();
-        let can_slice = slice_limit < usize::MAX
+        let can_slice = indirect.is_none()
+            && slice_limit < usize::MAX
             && timing.is_none()
             && module.manifest.mode == Mode::Map
             && module.manifest.memories.is_empty()
@@ -628,7 +660,15 @@ impl WgpuBackend {
         // input; extents and the fold are the bits of `u32`s. Built after
         // `bind_input` so `write_words` is done with `self.staging`.
         let mut temp_buffers: Vec<wgpu::Buffer> = Vec::new();
-        let (context_slice, params_slice, pad_slices) = {
+        struct IndirectPrep {
+            ctx_tmpl: wgpu::Buffer,
+            ctx_out: wgpu::Buffer,
+            ctx_uniform: wgpu::Buffer,
+            indirect_args: wgpu::Buffer,
+            spec_slice: crate::batch::UniformSlice,
+            ctx_bytes: u64,
+        }
+        let (context_slice, params_slice, pad_slices, indirect_prep) = {
             let mut scratch = self
                 .staging
                 .lock()
@@ -697,7 +737,90 @@ impl WgpuBackend {
                 }
                 params.resize(params.len().div_ceil(16) * 16, 0);
             }
-            if batched {
+            if let Some((_, ic)) = indirect {
+                let ctx_bytes = (context.len() as u64).max(16).div_ceil(16) * 16;
+                let ctx_tmpl = self.spare.take(
+                    &self.device,
+                    ctx_bytes,
+                    wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                );
+                self.queue.write_buffer(&ctx_tmpl, 0, context);
+                let ctx_out = self.spare.take(
+                    &self.device,
+                    ctx_bytes,
+                    wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                );
+                let ctx_uniform = self.spare.take(
+                    &self.device,
+                    ctx_bytes,
+                    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                );
+                let indirect_args = self.spare.take(
+                    &self.device,
+                    16,
+                    wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::INDIRECT
+                        | wgpu::BufferUsages::COPY_SRC,
+                );
+                temp_buffers.push(ctx_tmpl.clone());
+                temp_buffers.push(ctx_out.clone());
+                temp_buffers.push(ctx_uniform.clone());
+                temp_buffers.push(indirect_args.clone());
+                let spec_raw = crate::indirect::spec_bytes(ic, (context.len() / 4) as u32);
+                let (par_slice, spec_slice, mirror_slices) = if batched {
+                    let mut all_slices: Vec<&[u8]> = Vec::with_capacity(2 + mirror_plans.len() * 2);
+                    all_slices.push(params.as_slice());
+                    all_slices.push(&spec_raw);
+                    for plan in &mirror_plans {
+                        if let Some(pad) = &plan.pad_params {
+                            all_slices.push(pad.as_slice());
+                        }
+                        for mip in &plan.mip_plans {
+                            all_slices.push(mip.params.as_slice());
+                        }
+                    }
+                    let mut allocated = self.batch.alloc_uniforms(&all_slices)?;
+                    let mut iter = allocated.drain(..);
+                    let par = iter.next().expect("params slice");
+                    let spec = iter.next().expect("indirect spec slice");
+                    (par, spec, iter.collect())
+                } else {
+                    let (_, p) = self.uniform_buffers(context, params);
+                    let spec_buf = self.take_uniform(&spec_raw);
+                    temp_buffers.push(spec_buf.clone());
+                    let mut mirror_slices = Vec::new();
+                    for plan in &mirror_plans {
+                        if let Some(pad) = &plan.pad_params {
+                            let buf = self.take_uniform(pad);
+                            temp_buffers.push(buf.clone());
+                            mirror_slices.push(crate::batch::UniformSlice::entire(buf));
+                        }
+                        for mip in &plan.mip_plans {
+                            let buf = self.take_uniform(&mip.params);
+                            temp_buffers.push(buf.clone());
+                            mirror_slices.push(crate::batch::UniformSlice::entire(buf));
+                        }
+                    }
+                    (
+                        crate::batch::UniformSlice::entire(p),
+                        crate::batch::UniformSlice::entire(spec_buf),
+                        mirror_slices,
+                    )
+                };
+                (
+                    crate::batch::UniformSlice::entire(ctx_uniform.clone()),
+                    par_slice,
+                    mirror_slices,
+                    Some(IndirectPrep {
+                        ctx_tmpl,
+                        ctx_out,
+                        ctx_uniform,
+                        indirect_args,
+                        spec_slice,
+                        ctx_bytes: context.len() as u64,
+                    }),
+                )
+            } else if batched {
                 let mut all_slices: Vec<&[u8]> = Vec::with_capacity(2 + mirror_plans.len() * 2);
                 all_slices.push(context.as_slice());
                 all_slices.push(params.as_slice());
@@ -714,7 +837,7 @@ impl WgpuBackend {
                 let ctx_slice = iter.next().expect("context slice");
                 let par_slice = iter.next().expect("params slice");
                 let mirror_slices: Vec<crate::batch::UniformSlice> = iter.collect();
-                (ctx_slice, par_slice, mirror_slices)
+                (ctx_slice, par_slice, mirror_slices, None)
             } else {
                 let (c, p) = self.uniform_buffers(context, params);
                 let mut mirror_slices = Vec::new();
@@ -734,6 +857,7 @@ impl WgpuBackend {
                     crate::batch::UniformSlice::entire(c),
                     crate::batch::UniformSlice::entire(p),
                     mirror_slices,
+                    None,
                 )
             }
         };
@@ -804,7 +928,6 @@ impl WgpuBackend {
             commit_mirrors.push((plan.handle, plan.mirror));
         }
         let context_buffer = context_slice.buffer.clone();
-        let params_buffer = params_slice.buffer.clone();
         let output_schema = &module.manifest.outputs[0].ty.schema;
         let output_words = output_schema.value_words();
         // A scatter's map pass stores a pair per source element; the
@@ -943,6 +1066,34 @@ impl WgpuBackend {
                 *image.mirror.lock().unwrap_or_else(|p| p.into_inner()) = Some(mirror);
             }
         }
+        let mut indirect_bad_check = None;
+        if let (Some((prep, ic)), Some(ip)) = (indirect, &indirect_prep) {
+            let count_buf = input_buffers[ic.slot]
+                .as_ref()
+                .expect("indirect scatter count input holds a storage buffer");
+            crate::indirect::encode_prepare_indirect(
+                &self.device,
+                prep,
+                &mut encoder,
+                &ip.spec_slice,
+                count_buf,
+                &ip.ctx_tmpl,
+                &ip.ctx_out,
+                &ip.ctx_uniform,
+                &ip.indirect_args,
+                ip.ctx_bytes,
+                timing,
+            );
+            if ic.min_val == 0 {
+                let bad_back = self.spare.take(
+                    &self.device,
+                    16,
+                    wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                );
+                encoder.copy_buffer_to_buffer(&ip.indirect_args, 12, &bad_back, 0, 4);
+                indirect_bad_check = Some(bad_back);
+            }
+        }
         if let (Some((base, count, buffer)), Some(scatter)) = (&target, &pipeline.scatter) {
             self.prepare_target(
                 &mut encoder,
@@ -952,7 +1103,7 @@ impl WgpuBackend {
                 input_buffers[*base as usize]
                     .as_ref()
                     .expect("scatter base holds a storage buffer"),
-                &context_buffer,
+                &context_slice,
                 *count,
                 output_words,
             );
@@ -971,19 +1122,27 @@ impl WgpuBackend {
             .chain(&further_outputs)
             .enumerate()
         {
-            if k < wgsl::written_outputs(module) && wgsl::output_shares_words(module, k) {
+            if k < wgsl::written_outputs(module)
+                && wgsl::output_shares_words_for(module, k, self.shader_f16)
+            {
                 encoder.clear_buffer(buffer, 0, None);
             }
         }
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("entelechy kernel"),
-                timestamp_writes: timing.map(|timing| timing.compute(Some(0), Some(1))),
+                timestamp_writes: if indirect_prep.is_some() {
+                    timing.map(|timing| timing.compute(None, Some(1)))
+                } else {
+                    timing.map(|timing| timing.compute(Some(0), Some(1)))
+                },
             });
             pass.set_pipeline(&pipeline.main.0);
             pass.set_bind_group(0, &bind_group, &[]);
             // A scan walks its rows in one invocation.
-            if module.manifest.mode == Mode::Scan {
+            if let Some(ip) = &indirect_prep {
+                pass.dispatch_workgroups_indirect(&ip.indirect_args, 0);
+            } else if module.manifest.mode == Mode::Scan {
                 pass.dispatch_workgroups(1, 1, 1);
             } else {
                 pass.dispatch_workgroups(groups_x, groups_y, groups_z);
@@ -1009,7 +1168,7 @@ impl WgpuBackend {
             self.lows(
                 &mut encoder,
                 lows,
-                &context_buffer,
+                &context_slice,
                 input_buffers[*base as usize]
                     .as_ref()
                     .expect("scatter base holds a storage buffer"),
@@ -1049,9 +1208,13 @@ impl WgpuBackend {
             });
             pass.set_pipeline(&entry.0);
             pass.set_bind_group(0, &group, &[]);
-            pass.dispatch_workgroups(groups_x, groups_y, groups_z);
+            if let Some(ip) = &indirect_prep {
+                pass.dispatch_workgroups_indirect(&ip.indirect_args, 0);
+            } else {
+                pass.dispatch_workgroups(groups_x, groups_y, groups_z);
+            }
             if let Some(counted) = counted {
-                self.spare.keep(counted, None);
+                temp_buffers.push(counted);
             }
         }
         Ok(Staged {
@@ -1060,7 +1223,6 @@ impl WgpuBackend {
             bind_group,
             further_slices,
             context_buffer,
-            params_buffer,
             context_slice,
             params_slice,
             input_buffers,
@@ -1075,6 +1237,7 @@ impl WgpuBackend {
             failure,
             target: target.map(|(_, _, buffer)| buffer),
             highs,
+            indirect_bad_check,
         })
     }
 }

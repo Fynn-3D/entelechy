@@ -995,7 +995,7 @@ impl WgpuBackend {
         let longs = self.longs(module);
         let filtered = wgsl::filtered_uses(module);
         let samplers = wgsl::samplers_for(module, &textured, self.float32_filterable);
-        let source = wgsl::emit_full_with_subgroups(
+        let source = wgsl::emit_full_with_caps(
             module,
             &packed,
             &textured,
@@ -1003,6 +1003,7 @@ impl WgpuBackend {
             wgsl::first_half(module, longs),
             self.float32_filterable,
             self.subgroups,
+            self.shader_f16,
         );
         let mut entries = vec![
             uniform_entry(wgsl::CONTEXT_BINDING),
@@ -1061,8 +1062,14 @@ impl WgpuBackend {
         let (reduce, reduce_fold) = if module.manifest.mode == entelechy_ir::Mode::Reduce {
             let max_wg = u64::from(self.device.limits().max_compute_workgroup_storage_size);
             let strategy = wgsl::reduce_strategy(module, self.subgroups, max_wg);
-            let reduce_source =
-                wgsl::emit_reduce_with_strategy(module, &packed, longs, strategy, self.subgroups);
+            let reduce_source = wgsl::emit_reduce_with_caps(
+                module,
+                &packed,
+                longs,
+                strategy,
+                self.subgroups,
+                self.shader_f16,
+            );
             // The map pass's bindings, then the fold's own.
             let (count_binding, in_binding, out_binding) = wgsl::reduce_bindings(module);
             let mut entries = vec![
@@ -1214,11 +1221,15 @@ impl WgpuBackend {
                                     .then(|| {
                                         self.pass(
                                             &format!("{} lows", module.manifest.id),
-                                            &wgsl::emit_packed_groups_half(
+                                            &wgsl::emit_full_with_caps(
                                                 module,
                                                 &packed,
+                                                &textured,
                                                 longs,
                                                 wgsl::Half::Low,
+                                                self.float32_filterable,
+                                                self.subgroups,
+                                                self.shader_f16,
                                             ),
                                             &entries,
                                         )

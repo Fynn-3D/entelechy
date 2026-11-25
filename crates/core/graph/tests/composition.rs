@@ -777,3 +777,131 @@ fn fusion_stops_past_instruction_bound() {
         cons_entry.apart
     );
 }
+
+#[test]
+fn order_hoists_value_count_producers_and_defers_consumers() {
+    let mut indep_a = node("indep_a", "test.a@1", None);
+    indep_a.domain = Some(DomainSpec::Literal(Domain::Rows(64)));
+    let mut indep_b = node("indep_b", "test.b@1", Some("indep_a"));
+    indep_b.domain = Some(DomainSpec::Literal(Domain::Rows(64)));
+
+    let mut count_src = node("count_src", "test.c@1", None);
+    count_src.domain = Some(DomainSpec::Literal(Domain::Rows(16)));
+    let mut count_node = node("count_node", "test.d@1", Some("count_src"));
+    count_node.domain = Some(DomainSpec::Literal(Domain::Rows(1)));
+
+    let mut consumer = Node {
+        id: id("consumer"),
+        kernel: "test.e@1".parse().unwrap(),
+        inputs: BTreeMap::from([
+            (
+                "n".into(),
+                Binding::Now(Source::Node {
+                    node: id("count_node"),
+                    port: "result".into(),
+                }),
+            ),
+            (
+                "data".into(),
+                Binding::Now(Source::Node {
+                    node: id("indep_b"),
+                    port: "result".into(),
+                }),
+            ),
+        ]),
+        params: BTreeMap::new(),
+        domain: Some(DomainSpec::Expr(entelechy_graph::DomainExpr::Value(
+            "n".into(),
+            0,
+        ))),
+        is_async: false,
+        awake: Vec::new(),
+        at: None,
+    };
+    let mut out = node("out", "test.out@1", Some("consumer"));
+    out.domain = Some(DomainSpec::Literal(Domain::Rows(64)));
+
+    // Put independent heavy work first in declaration order; readback-aware
+    // scheduling must hoist `count_src -> count_node` ahead of `indep_a -> indep_b`
+    // and schedule `consumer` after independent work to hide prefetch latency.
+    let g = graph(
+        vec![
+            indep_a,
+            indep_b,
+            count_src,
+            count_node,
+            consumer.clone(),
+            out,
+        ],
+        "out",
+    );
+    let ordered: Vec<&str> = g
+        .execution_order()
+        .unwrap()
+        .into_iter()
+        .map(|i| g.nodes[i].id.0.as_ref())
+        .collect();
+    let pos = |name: &str| ordered.iter().position(|n| *n == name).unwrap();
+    assert!(
+        pos("count_src") < pos("count_node"),
+        "dependency violated: {ordered:?}"
+    );
+    assert!(
+        pos("count_node") < pos("indep_a"),
+        "count producer should be hoisted ahead of independent work: {ordered:?}"
+    );
+    assert!(
+        pos("indep_b") < pos("consumer"),
+        "independent work should execute before value(port) consumer: {ordered:?}"
+    );
+
+    // Canonical `order()` preserves declaration DFS order for graph tools.
+    let canonical: Vec<&str> = g
+        .order()
+        .unwrap()
+        .into_iter()
+        .map(|i| g.nodes[i].id.0.as_ref())
+        .collect();
+    assert_eq!(
+        canonical,
+        vec![
+            "indep_a",
+            "indep_b",
+            "count_src",
+            "count_node",
+            "consumer",
+            "out"
+        ]
+    );
+
+    // Graphs without `value(...)` domains keep exact original order.
+    consumer.domain = Some(DomainSpec::Literal(Domain::Rows(16)));
+    let plain = graph(
+        vec![
+            node("indep_a", "test.a@1", None),
+            node("indep_b", "test.b@1", Some("indep_a")),
+            node("count_src", "test.c@1", None),
+            node("count_node", "test.d@1", Some("count_src")),
+            consumer,
+            node("out", "test.out@1", Some("consumer")),
+        ],
+        "out",
+    );
+    let plain_order: Vec<&str> = plain
+        .execution_order()
+        .unwrap()
+        .into_iter()
+        .map(|i| plain.nodes[i].id.0.as_ref())
+        .collect();
+    assert_eq!(
+        plain_order,
+        vec![
+            "indep_a",
+            "indep_b",
+            "count_src",
+            "count_node",
+            "consumer",
+            "out"
+        ]
+    );
+}

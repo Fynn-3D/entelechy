@@ -82,13 +82,20 @@ enum CompiledDomain {
         measured: Result<(), EvaluateError>,
         /// Manifest input slots read by `value(port)` in `expr`.
         value_slots: Vec<Option<usize>>,
+        /// GPU-driven indirect scatter row-count descriptor when `expr` is a
+        /// 1D count derived from an `Int` input port on a `Mode::Scatter` node.
+        indirect: Option<entelechy_kernel::IndirectCount>,
     },
 }
 
 /// Result of binding a compiled group: handles and cache key ready to check
 /// before allocating an [`Invocation`], or cold producers to warm first.
 pub(super) enum GroupBind {
-    Ready { handles: Vec<Handle>, key: CacheKey },
+    Ready {
+        handles: Vec<Handle>,
+        key: CacheKey,
+        indirect: Option<entelechy_kernel::IndirectCount>,
+    },
     Keyed(CacheKey, Vec<NodeId>),
     Unkeyed(Vec<NodeId>),
 }
@@ -310,10 +317,34 @@ impl CompiledPlan {
                                     manifest.inputs.iter().position(|i| i.name == port)
                                 })
                                 .collect();
+                            let indirect =
+                                if matches!(manifest.mode, entelechy_ir::Mode::Scatter { .. })
+                                    && !node.is_async
+                                {
+                                    expr.indirect_rows_spec().and_then(
+                                        |(port_name, index, scale, offset, min_val)| {
+                                            let slot = manifest
+                                                .inputs
+                                                .iter()
+                                                .position(|i| i.name == port_name)?;
+                                            (manifest.inputs[slot].element() == Type::Int)
+                                                .then_some(entelechy_kernel::IndirectCount {
+                                                    slot,
+                                                    index,
+                                                    scale,
+                                                    offset,
+                                                    min_val,
+                                                })
+                                        },
+                                    )
+                                } else {
+                                    None
+                                };
                             CompiledDomain::Expr {
                                 expr: expr.clone(),
                                 measured: measured(node, manifest, expr),
                                 value_slots,
+                                indirect,
                             }
                         }
                         None => CompiledDomain::FirstInput,
@@ -550,6 +581,7 @@ impl Evaluator {
             };
 
         let context = scene.context;
+        let mut indirect_dispatch: Option<entelechy_kernel::IndirectCount> = None;
         let domain = match &compiled.domain {
             CompiledDomain::Reduce => Domain::Rows(1),
             CompiledDomain::ReduceFault => {
@@ -563,6 +595,7 @@ impl Evaluator {
                 expr,
                 measured,
                 value_slots,
+                indirect,
             } => {
                 measured.clone()?;
                 let manifest = group.version.manifest();
@@ -578,29 +611,58 @@ impl Evaluator {
                 if !read_cold.is_empty() {
                     return Ok(GroupBind::Unkeyed(read_cold));
                 }
-                let fields: Vec<Option<Handle>> = expr_domains.iter().map(|(h, _)| *h).collect();
-                let read = Self::domain_values(node, manifest, expr, runtime, &fields)?;
-                let element = |name: &str, index: u32| read.get(&(name.to_owned(), index)).cloned();
-                let port = |name: &str| {
-                    manifest
-                        .inputs
-                        .iter()
-                        .position(|input| input.name == name)
-                        .map(|index| expr_domains[index].1)
+                // GPU-driven indirect scatter: when the count lives only on the
+                // device and the backend supports indirect scatter dispatch,
+                // keep the count on the GPU with zero GPU->CPU readback!
+                let can_indirect = if let Some(ic) = *indirect
+                    && !self.trial
+                    && cold.is_empty()
+                    && runtime.supports_indirect_scatter(&group.version)
+                    && let Some(count_handle) = expr_domains[ic.slot].0
+                {
+                    let count = expr_domains[ic.slot].1.count();
+                    count <= VALUE_MAX_ELEMENTS
+                        && (ic.index as usize) < count
+                        && runtime.host().data(count_handle).is_err()
+                        && runtime
+                            .host()
+                            .resident(count_handle)
+                            .ok()
+                            .flatten()
+                            .is_some()
+                } else {
+                    false
                 };
-                let param = |name: &str| {
-                    manifest
-                        .params
-                        .iter()
-                        .position(|p| p.name == name)
-                        .map(|index| params[index].clone())
-                        .or_else(|| graph_param(scene.graph, name, scene.params))
-                };
-                expr.resolve(&port, &param, &window_context(context), &element)
-                    .map_err(|e| EvaluateError::Domain {
-                        node: node.id.clone(),
-                        message: e.message,
-                    })?
+                if can_indirect {
+                    indirect_dispatch = *indirect;
+                    Domain::Rows(1)
+                } else {
+                    let fields: Vec<Option<Handle>> =
+                        expr_domains.iter().map(|(h, _)| *h).collect();
+                    let read = Self::domain_values(node, manifest, expr, runtime, &fields)?;
+                    let element =
+                        |name: &str, index: u32| read.get(&(name.to_owned(), index)).cloned();
+                    let port = |name: &str| {
+                        manifest
+                            .inputs
+                            .iter()
+                            .position(|input| input.name == name)
+                            .map(|index| expr_domains[index].1)
+                    };
+                    let param = |name: &str| {
+                        manifest
+                            .params
+                            .iter()
+                            .position(|p| p.name == name)
+                            .map(|index| params[index].clone())
+                            .or_else(|| graph_param(scene.graph, name, scene.params))
+                    };
+                    expr.resolve(&port, &param, &window_context(context), &element)
+                        .map_err(|e| EvaluateError::Domain {
+                            node: node.id.clone(),
+                            message: e.message,
+                        })?
+                }
             }
         };
 
@@ -619,6 +681,10 @@ impl Evaluator {
         if !cold.is_empty() {
             return Ok(GroupBind::Keyed(key, cold));
         }
-        Ok(GroupBind::Ready { handles, key })
+        Ok(GroupBind::Ready {
+            handles,
+            key,
+            indirect: indirect_dispatch,
+        })
     }
 }

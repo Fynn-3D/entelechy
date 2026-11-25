@@ -146,6 +146,101 @@ impl DomainExpr {
         out
     }
 
+    /// When this expression computes a 1D rows count as a pure integer affine
+    /// function (with optional lower clamp) of a single `value(port, index)` —
+    /// such as `value(entries)`, `max(value(count), 1)`, `max(value(count), 1) * 128`,
+    /// or `value(total) * 256 + 163840` — returns `(port, index, scale, offset, min_val)`
+    /// so a GPU backend can drive `dispatch_workgroups_indirect` directly on the
+    /// device without reading the count back to Host memory.
+    pub fn indirect_rows_spec(&self) -> Option<(String, u32, i32, i32, u32)> {
+        fn const_int(expr: &DomainExpr) -> Option<i32> {
+            match expr {
+                DomainExpr::Int(v) => i32::try_from(*v).ok(),
+                DomainExpr::Neg(inner) => const_int(inner)?.checked_neg(),
+                DomainExpr::Binary(op, a, b) => {
+                    let (a, b) = (const_int(a)?, const_int(b)?);
+                    match op {
+                        DomainOp::Add => a.checked_add(b),
+                        DomainOp::Sub => a.checked_sub(b),
+                        DomainOp::Mul => a.checked_mul(b),
+                        DomainOp::Div => (b != 0).then(|| a.checked_div(b)).flatten(),
+                        DomainOp::Shl => u32::try_from(b).ok().and_then(|s| a.checked_shl(s)),
+                    }
+                }
+                _ => None,
+            }
+        }
+        fn parse(expr: &DomainExpr) -> Option<(String, u32, i32, i32, u32)> {
+            match expr {
+                DomainExpr::Value(port, index) => Some((port.clone(), *index, 1, 0, 0)),
+                DomainExpr::Call(name, args) if name == "max" && args.len() == 2 => {
+                    let (inner, bound) = if let Some(c) = const_int(&args[1]) {
+                        (parse(&args[0])?, c)
+                    } else if let Some(c) = const_int(&args[0]) {
+                        (parse(&args[1])?, c)
+                    } else {
+                        return None;
+                    };
+                    let min_v = u32::try_from(bound).ok()?;
+                    Some((inner.0, inner.1, inner.2, inner.3, inner.4.max(min_v)))
+                }
+                DomainExpr::Binary(DomainOp::Mul, a, b) => {
+                    let (inner, k) = if let Some(c) = const_int(b) {
+                        (parse(a)?, c)
+                    } else if let Some(c) = const_int(a) {
+                        (parse(b)?, c)
+                    } else {
+                        return None;
+                    };
+                    if k <= 0 {
+                        return None;
+                    }
+                    let scale = inner.2.checked_mul(k)?;
+                    let offset = inner.3.checked_mul(k)?;
+                    let min_v = inner.4.checked_mul(k as u32)?;
+                    Some((inner.0, inner.1, scale, offset, min_v))
+                }
+                DomainExpr::Binary(DomainOp::Add, a, b) => {
+                    let (inner, add) = if let Some(c) = const_int(b) {
+                        (parse(a)?, c)
+                    } else if let Some(c) = const_int(a) {
+                        (parse(b)?, c)
+                    } else {
+                        return None;
+                    };
+                    let offset = inner.3.checked_add(add)?;
+                    let min_v = if inner.4 > 0 {
+                        let shifted = i64::from(inner.4) + i64::from(add);
+                        if shifted <= 0 {
+                            return None;
+                        }
+                        u32::try_from(shifted).ok()?
+                    } else {
+                        0
+                    };
+                    Some((inner.0, inner.1, inner.2, offset, min_v))
+                }
+                DomainExpr::Binary(DomainOp::Sub, a, b) => {
+                    let sub = const_int(b)?;
+                    let inner = parse(a)?;
+                    let offset = inner.3.checked_sub(sub)?;
+                    let min_v = if inner.4 > 0 {
+                        let shifted = i64::from(inner.4) - i64::from(sub);
+                        if shifted <= 0 {
+                            return None;
+                        }
+                        u32::try_from(shifted).ok()?
+                    } else {
+                        0
+                    };
+                    Some((inner.0, inner.1, inner.2, offset, min_v))
+                }
+                _ => None,
+            }
+        }
+        parse(self)
+    }
+
     /// The ports it measures, each once: `count(port)` and `size(port)`,
     /// with the word that measures it.
     pub fn ports_measured(&self) -> Vec<(&'static str, String)> {

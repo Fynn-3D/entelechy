@@ -27,8 +27,8 @@ pub use entelechy_abi::{
 pub use entelechy_abi::{DEFAULT_WORK, MAX_WORK, TYPED, encoding};
 pub use entelechy_ir::{KernelId, Manifest, Validated};
 pub use entelechy_rules::{
-    Backend, Check, ClockedFrame, Downloading, ExecutionError, Extent, NativeOp, Prepared,
-    check_domain_shape, check_input_types, extent, input_type_fault,
+    Backend, Check, ClockedFrame, Downloading, ExecutionError, Extent, IndirectCount, NativeOp,
+    Prepared, check_domain_shape, check_input_types, extent, input_type_fault,
 };
 
 /// The operations a run may take, by its elements times its Kernel's
@@ -1765,12 +1765,18 @@ impl Runtime {
                 .map_or(0, |domain| domain.count() as u64),
             _ => 0,
         };
-        // What it reads that the device made in this evaluation, in bytes:
-        // the ordered backend waits for it and brings it down.
+        // What it reads that lives only on the device without an already-queued
+        // async readback (`self.coming`): running on the ordered backend would
+        // flush the open GPU batch and stall waiting to download it.
         let fresh: u64 = invocation
             .inputs
             .iter()
-            .filter(|input| self.fresh.contains(*input))
+            .filter(|input| {
+                self.fresh.contains(*input)
+                    || (!self.coming.contains_key(*input)
+                        && self.host.data(**input).is_err()
+                        && self.host.resident(**input).ok().flatten().is_some())
+            })
             .map(
                 |input| match (self.host.schema(*input), self.host.domain(*input)) {
                     (Ok(schema), Ok(domain)) => schema.storage_words(domain.count()) as u64 * 4,
@@ -2074,6 +2080,76 @@ impl Runtime {
             }
         }
         Ok(held.expect("a run of at least one"))
+    }
+
+    /// Whether `version` can execute on the main backend as a GPU-driven
+    /// indirect scatter driven by a device-resident count (zero GPU->CPU readback).
+    pub fn supports_indirect_scatter(&self, version: &KernelVersion) -> bool {
+        let Body::Kernel { run, prepared, .. } = &version.body else {
+            return false;
+        };
+        version.routed().is_none()
+            && self.building(version, prepared.as_ref()).is_none()
+            && self
+                .backend
+                .supports_indirect_scatter(prepared.as_ref(), run)
+    }
+
+    /// Executes a `Mode::Scatter` whose 1D execution count stays on the device
+    /// (`indirect`), avoiding a GPU->CPU readback stall. Returns `None` if the
+    /// backend declines indirect dispatch for this call.
+    pub fn execute_indirect_scatter(
+        &mut self,
+        version: &KernelVersion,
+        invocation: &Invocation,
+        indirect: IndirectCount,
+    ) -> Option<Result<Vec<Handle>, ExecutionError>> {
+        let Body::Kernel {
+            run,
+            prepared,
+            ran_main,
+            ..
+        } = &version.body
+        else {
+            return None;
+        };
+        if version.routed().is_some() || self.building(version, prepared.as_ref()).is_some() {
+            return None;
+        }
+        let granted = self.scope_grants(version);
+        self.telemetry.last_measured = None;
+        let backend = Arc::clone(&self.backend);
+        let before = backend.uploaded();
+        let answered = {
+            let mut scope = Scope::new(&mut self.host, granted);
+            backend.execute_indirect_scatter(
+                prepared.as_ref(),
+                run,
+                invocation,
+                &mut scope,
+                indirect,
+            )
+        }?;
+        self.telemetry.carried(backend.as_ref(), before);
+        self.telemetry.measured(backend.as_ref());
+        let outputs = answered.map(|(outputs, check)| {
+            self.telemetry.checks.extend(check);
+            outputs
+        });
+        if outputs.is_ok() {
+            ran_main.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.last_placement = Some(Placement {
+            backend: backend.name(),
+            routed: None,
+        });
+        let key = run_key(version, invocation, &mut self.param_scratch);
+        let result = held_to(version.manifest(), &mut self.host, outputs);
+        if let Ok(ref handles) = result {
+            self.fresh.extend(handles.iter().copied());
+            self.made_by(key, handles);
+        }
+        Some(result)
     }
 
     /// Executes a pinned version, with the Host scoped to exactly the

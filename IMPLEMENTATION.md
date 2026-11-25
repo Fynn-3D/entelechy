@@ -36,7 +36,7 @@ directions: a test needing a higher crate lives in that crate's tests.
 | Shared rules | [rules](crates/core/rules/src/lib.rs), [`Backend`](crates/core/rules/src/backend.rs), [reduce tree](crates/core/rules/src/reduce.rs), [rasterizer](crates/core/rules/src/raster.rs), [ray tracer](crates/core/rules/src/trace.rs) | every backend's parity test |
 | Reference backend | [cpu](crates/backends/cpu/src/lib.rs), [word code](crates/backends/cpu/src/eval/) | [execution](crates/backends/cpu/tests/execute.rs), [optimizer](crates/backends/cpu/tests/optimizer.rs) |
 | JIT backend | [jit](crates/backends/jit/src/lib.rs), [Cranelift emission](crates/backends/jit/src/codegen.rs), [WebAssembly emission](crates/backends/jit/src/wasm) | [parity](crates/backends/jit/tests/parity.rs), [matrix](crates/backends/jit/tests/matrix.rs), [as WebAssembly in node](crates/interface/entelechy/tests/wasm.rs) |
-| GPU backend | [gpu](crates/backends/gpu/src/lib.rs), [WGSL](crates/backends/gpu/src/wgsl/mod.rs), [GLSL ES 3.00](crates/backends/gpu/src/glsl/mod.rs), [WebGL2](crates/backends/gpu/src/webgl.rs), [rasterizer](crates/backends/gpu/src/raster.rs), [ray tracer](crates/backends/gpu/src/trace.rs), [presenter](crates/backends/gpu/src/present.rs), [wait](crates/backends/gpu/src/wait.rs) | [parity](crates/backends/gpu/tests/parity.rs), [matrix](crates/backends/gpu/tests/matrix.rs) (skip without an adapter), [shader names](crates/backends/gpu/tests/names.rs), [WebGL2 in Chrome](bridges/web/test.html) |
+| GPU backend | [gpu](crates/backends/gpu/src/lib.rs), [WGSL](crates/backends/gpu/src/wgsl/mod.rs), [GLSL ES 3.00](crates/backends/gpu/src/glsl/mod.rs), [WebGL2](crates/backends/gpu/src/webgl.rs), [indirect](crates/backends/gpu/src/indirect.rs), [rasterizer](crates/backends/gpu/src/raster.rs), [ray tracer](crates/backends/gpu/src/trace.rs), [presenter](crates/backends/gpu/src/present.rs), [wait](crates/backends/gpu/src/wait.rs) | [parity](crates/backends/gpu/tests/parity.rs), [matrix](crates/backends/gpu/tests/matrix.rs) (skip without an adapter), [shader names](crates/backends/gpu/tests/names.rs), [WebGL2 in Chrome](bridges/web/test.html) |
 | Conformance matrix | [matrix](crates/backends/conformance/src/lib.rs) | bit for bit [on the JIT](crates/backends/jit/tests/matrix.rs), ints exact and floats to rounding [on the GPU](crates/backends/gpu/tests/matrix.rs) |
 | Kernel Runtime | [runtime](crates/core/kernel/src/lib.rs), [off-frame runs](crates/core/kernel/src/later.rs), [clock](crates/core/kernel/src/clock.rs) | [hot swap](crates/core/kernel/tests/swap.rs), [async](crates/interface/session/tests/later.rs), [mixed backends](crates/interface/session/tests/mixed.rs) |
 | Scene documents | [scene](crates/frontend/scene/src/lib.rs), [domain](crates/frontend/scene/src/domain.rs) | lowering tests in place, [every form lowered](crates/frontend/scene/tests/surface.rs) |
@@ -87,12 +87,19 @@ Packages built from existing modes, with no engine feature of their own.
   by `Number::as_kind` ([abi](crates/core/abi/src/lib.rs)). Held by
   [values against Rust's](crates/backends/cpu/tests/wide.rs), the matrix,
   and the [precision part](examples/data/README.md).
-- Narrow storage (`as unorm8`): one rule in the Host
+- Narrow storage (`as unorm8`, `as f16`): one rule in the Host
   ([encoding](crates/core/host/src/encoding.rs)), called by the interpreter,
   emitted by the JIT and the GPU; only a map or scan writes one, and a
   narrow link is not fused ([validator](crates/core/ir/src/validate.rs),
   [planner](crates/core/graph/src/evaluate/plan.rs)); `values()` are a
-  Kernel's words, `storage()` the Field's bytes. Held by the matrix's
+  Kernel's words, `storage()` the Field's bytes. On GPU adapters offering
+  `SHADER_F16`, pure-`f16` unpacked/untextured storage buffers emit
+  `enable f16;` with native `array<f16>` / `array<vec2<f16>>` /
+  `array<vec4<f16>>` bindings, eliminating `clear_buffer` and `atomicOr`
+  on `Float as f16` and `Vec3 as f16` outputs; non-`SHADER_F16` adapters
+  use core WGSL `pack2x16float` / `unpack2x16float`
+  ([storage](crates/backends/gpu/src/wgsl/storage.rs),
+  [GPU parity](crates/backends/gpu/tests/parity.rs)). Held by the matrix's
   `narrow` rows and the [packed part](examples/data/README.md).
 - Hardware block-compressed textures (`BC1`, `BC4`, `BC5`, `BC7`) and mipmap
   chains: pure-Rust Khronos §17 codec with multi-mip generation and BC5
@@ -141,7 +148,7 @@ the [conformance matrix](crates/backends/conformance/src/lib.rs).
 | map | per element; the one mode with several outputs | [lowering](crates/frontend/compiler/src/lower/mod.rs), [WGSL](crates/backends/gpu/src/wgsl/map.rs), [GLSL ES 3.00](crates/backends/gpu/src/glsl/emitter.rs) |
 | reduce (`merge`) | a fixed pairwise tree whatever the thread count; 256-lane subgroup/workgroup 8-level fold on GPU with giant-struct fallback | [reduce](crates/core/rules/src/reduce.rs), [WGSL](crates/backends/gpu/src/wgsl/reduce.rs), [JIT parity](crates/backends/jit/tests/parity.rs) |
 | scan (`scan over … with`) | element order; memory copied, committed only on success | [rules](crates/core/rules/src/lib.rs) |
-| scatter (`scatter over … into … with`) | as if applied in source order; outside addresses drop | [WGSL](crates/backends/gpu/src/wgsl/scatter.rs), [parity](crates/backends/gpu/tests/parity.rs) |
+| scatter (`scatter over … into … with`) | as if applied in source order; outside addresses drop; on GPU, emitting scatters whose 1D `domain` derives from a device-resident `Int` Field (`value(port)`, `max`, linear scaling) dispatch via `dispatch_workgroups_indirect` with zero mid-frame Host readback and deferred zero-row validation | [WGSL](crates/backends/gpu/src/wgsl/scatter.rs), [indirect](crates/backends/gpu/src/indirect.rs), [domain](crates/core/graph/src/domain.rs), [parity](crates/backends/gpu/tests/parity.rs) |
 | prefix (`prefix over … with`) | integer `sum`, `min`, `max` only; coalesced 256-lane hierarchical subgroup/workgroup scan on GPU | [block](crates/core/rules/src/lib.rs), [WGSL](crates/backends/gpu/src/wgsl/prefix.rs), [JIT](crates/backends/jit/src/lib.rs) |
 | group (`group N`) | lanes meet at `exchange`, reached alike; single-wave register-only `subgroupShuffle` on GPU when `N <= min_subgroup_size`, workgroup shared memory otherwise; off the device, each stretch run lane by lane ([lanes](crates/core/ir/src/lanes.rs)) | [check](crates/core/ir/src/group.rs), [interpreter](crates/backends/cpu/src/lib.rs), [JIT parity](crates/backends/jit/tests/parity.rs), [GPU parity](crates/backends/gpu/tests/parity.rs) |
 
@@ -210,11 +217,15 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   ([gpu trace](crates/backends/gpu/src/trace.rs),
   [gpu LBVH](crates/backends/gpu/src/trace_lbvh.rs)) executes batched,
   GPU-timed hardware ray queries (`EXPERIMENTAL_RAY_QUERY`, with automatic
-  double-buffered `DynamicHwBlas` promotion for deforming meshes) or a
-  zero-readback full-GPU LBVH builder (30-bit Morton + 8-pass GPU radix
-  sort + Karras binary radix tree + race-free 2-tier in-place dynamic
-  AABB refit) with GPU-driven active-ray stream compaction and
-  `dispatch_workgroups_indirect`
+  double-buffered `DynamicHwBlas` and `DynamicHwTlas` promotion for
+  deforming meshes and animating instances) or a zero-readback full-GPU
+  LBVH builder (30-bit Morton + 8-pass GPU radix sort + Karras binary
+  radix tree + race-free 2-tier in-place dynamic AABB refit, multi-mesh
+  BLAS slicing via `encode_slice_into`, and full-GPU dynamic TLAS LBVH
+  `GpuLbvhTlas`) with GPU-driven active-ray stream compaction and
+  `dispatch_workgroups_indirect` (including 11-storage-binding compaction
+  for `native.trace@2` when `max_storage_buffers_per_shader_stage >= 11`,
+  keeping the 10-binding baseline for WebGPU)
   ([trace replay](packages/geometry.entpkg/tests/trace.replay),
   [GPU parity](crates/backends/gpu/tests/parity.rs)).
 
@@ -248,6 +259,20 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   round-trip.
 - `value(port)` reads a row of scalars, bounded by `VALUE_MAX_ELEMENTS`
   ([`domain_values`](crates/core/graph/src/evaluate/bind.rs)).
+  On device backends, [`Graph::schedule_for_device`](crates/core/graph/src/lib.rs)
+  hoists `value(port)` count producers ahead of independent work and defers
+  `value(port)` consumers so async readbacks overlap GPU execution while
+  CPU/JIT sessions keep canonical [`Graph::order`](crates/core/graph/src/lib.rs)
+  ([composition](crates/core/graph/tests/composition.rs)); emitting
+  `Mode::Scatter` nodes whose 1D count derives from a GPU-resident `Int`
+  Field bypass Host readback completely via `dispatch_workgroups_indirect`
+  ([indirect](crates/backends/gpu/src/indirect.rs)).
+- All five GPU modes (`map`, `group`, `reduce`, `prefix`, `scatter`) batch
+  into a single command encoder with pooled `COPY_DST | MAP_READ` staging
+  buffers ([modes](crates/backends/gpu/src/modes.rs),
+  [later](crates/backends/gpu/src/later.rs)), and [`Runtime::sized_off`](crates/core/kernel/src/lib.rs)
+  guards un-prefetched GPU-resident inputs from pulling small runs back to
+  CPU JIT mid-batch.
 - Window size and scale are part of a node's cache key.
 
 ### The language
@@ -354,8 +379,12 @@ only after running that test on the device.
   than `x != x`, and `pow` goes through `ent_pow` where WGSL leaves negative
   bases undefined ([prelude](crates/backends/gpu/src/wgsl/prelude.rs),
   [parity](crates/backends/gpu/tests/parity.rs)).
-- Narrow outputs sharing a word are `atomic<u32>` stored by `atomicOr`,
-  with integer encodings rather than `pack2x16float`
+- Narrow `unorm8` outputs and non-`SHADER_F16` `f16` outputs sharing a
+  32-bit word are `atomic<u32>` stored by `atomicOr`, with core WGSL
+  `pack2x16float` / `unpack2x16float` for fallback `f16` and integer
+  bit-packing for `unorm8`; when `SHADER_F16` is available, pure-`f16`
+  unpacked/untextured outputs bind native `array<f16>` / `array<vec2<f16>>`
+  / `array<vec4<f16>>` directly without `atomic<u32>` or `clear_buffer`
   ([wgsl](crates/backends/gpu/src/wgsl/storage.rs) `narrow_store_body`).
 - wgpu's error scopes are thread-local only with its `std` feature, which
   the GPU backend enables.

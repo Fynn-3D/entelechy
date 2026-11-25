@@ -38,6 +38,175 @@ pub fn output_shares_words(module: &Module, k: usize) -> bool {
     !schema.is_wide() && !schema.element_bytes().is_multiple_of(4)
 }
 
+/// Whether output `k` requires atomic-or word sharing when `shader_f16`
+/// availability is taken into account: native `array<f16>` bindings write
+/// 16-bit elements directly without buffer clears or word atomics.
+pub fn output_shares_words_for(module: &Module, k: usize, shader_f16: bool) -> bool {
+    if native_f16_output(module, k, shader_f16).is_some() {
+        return false;
+    }
+    output_shares_words(module, k)
+}
+
+/// Native `SHADER_F16` storage array element type for a pure-`f16` port.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeF16Binding {
+    /// `array<f16>` (exact 2-byte scalar stride: `Float`, `Vec3`, matrices, structs, or `Op::Part`).
+    Scalar,
+    /// `array<vec2<f16>>` (4-byte vectorized load/store for whole `Vec2` elements).
+    Vec2,
+    /// `array<vec4<f16>>` (8-byte vectorized load/store for whole `Vec4` elements).
+    Vec4,
+}
+
+impl NativeF16Binding {
+    pub(crate) const fn wgsl_elem(self) -> &'static str {
+        match self {
+            Self::Scalar => "f16",
+            Self::Vec2 => "vec2<f16>",
+            Self::Vec4 => "vec4<f16>",
+        }
+    }
+}
+
+/// Indices of input ports read via `Op::Part` anywhere in `module`.
+pub(crate) fn part_inputs(module: &Module) -> std::collections::BTreeSet<usize> {
+    fn walk(body: &[Instruction], out: &mut std::collections::BTreeSet<usize>) {
+        for instr in body {
+            if let Op::Part { input, .. } = &instr.op {
+                out.insert(*input as usize);
+            }
+            for block in instr.op.blocks() {
+                walk(&block.body, out);
+            }
+        }
+    }
+    let mut out = std::collections::BTreeSet::new();
+    for func in module
+        .functions
+        .iter()
+        .chain([&module.entry])
+        .chain(module.merge.iter())
+        .chain(module.init.iter())
+    {
+        walk(&func.body, &mut out);
+    }
+    out
+}
+
+/// Native `f16` storage binding for input `index`, when `shader_f16` is
+/// enabled and the port is an unpacked, untextured `Encoding::F16` buffer.
+pub(crate) fn native_f16_input(
+    module: &Module,
+    index: usize,
+    packs: &[Vec<usize>],
+    textured: &[usize],
+    shader_f16: bool,
+    parts: &std::collections::BTreeSet<usize>,
+) -> Option<NativeF16Binding> {
+    if !shader_f16
+        || input_encoding(module, index) != Encoding::F16
+        || textured.contains(&index)
+        || packs.iter().any(|group| group.contains(&index))
+    {
+        return None;
+    }
+    let element = module.manifest.inputs[index].element();
+    if !parts.contains(&index) {
+        if element == Type::Vec4 {
+            return Some(NativeF16Binding::Vec4);
+        }
+        if element == Type::Vec2 {
+            return Some(NativeF16Binding::Vec2);
+        }
+    }
+    Some(NativeF16Binding::Scalar)
+}
+
+/// Native `f16` storage binding for written output `k`, when `shader_f16` is
+/// enabled and the output is a non-scatter `Encoding::F16` buffer.
+pub(crate) fn native_f16_output(
+    module: &Module,
+    k: usize,
+    shader_f16: bool,
+) -> Option<NativeF16Binding> {
+    if !shader_f16
+        || matches!(module.manifest.mode, Mode::Scatter { .. })
+        || output_encoding(module, k) != Encoding::F16
+    {
+        return None;
+    }
+    match module.manifest.outputs[k].element() {
+        Type::Vec4 => Some(NativeF16Binding::Vec4),
+        Type::Vec2 => Some(NativeF16Binding::Vec2),
+        _ => Some(NativeF16Binding::Scalar),
+    }
+}
+
+/// Whether the emitted WGSL shader references `f16` types and therefore
+/// requires a leading `enable f16;` directive.
+pub(crate) fn shader_uses_f16(
+    module: &Module,
+    with_output: bool,
+    packs: &[Vec<usize>],
+    textured: &[usize],
+    shader_f16: bool,
+) -> bool {
+    if !shader_f16 {
+        return false;
+    }
+    let parts = part_inputs(module);
+    let any_in = (0..module.manifest.inputs.len())
+        .any(|i| native_f16_input(module, i, packs, textured, shader_f16, &parts).is_some());
+    let any_out = with_output
+        && (0..written_outputs(module)).any(|k| native_f16_output(module, k, shader_f16).is_some());
+    any_in || any_out
+}
+
+/// Generates a native `array<f16>` / `array<vec2<f16>>` / `array<vec4<f16>>`
+/// store body for `v: ty` into `buf` (`out{k}` or memory `in{index}`).
+pub(crate) fn native_f16_store_body(
+    module: &Module,
+    buf: &str,
+    ty: Type,
+    binding: NativeF16Binding,
+) -> String {
+    match binding {
+        NativeF16Binding::Vec4 => format!("    {buf}[index] = vec4<f16>(v);"),
+        NativeF16Binding::Vec2 => format!("    {buf}[index] = vec2<f16>(v);"),
+        NativeF16Binding::Scalar => {
+            let mut scalars = Vec::new();
+            scalar_paths(module, ty, "v", &mut scalars);
+            let stride = scalars.len();
+            let mut lines = Vec::with_capacity(stride + 1);
+            lines.push(format!("    let b = index * {stride}u;"));
+            for (s, (path, _)) in scalars.iter().enumerate() {
+                lines.push(format!("    {buf}[b + {s}u] = f16({path});"));
+            }
+            lines.join("\n")
+        }
+    }
+}
+
+/// Generates a native `array<f16>` / `array<vec2<f16>>` / `array<vec4<f16>>`
+/// load body for `load_in{index}(index: u32)`.
+pub(crate) fn native_f16_load_body(
+    module: &Module,
+    buf: &str,
+    ty: Type,
+    binding: NativeF16Binding,
+) -> String {
+    match binding {
+        NativeF16Binding::Vec4 => format!("    return vec4<f32>({buf}[index]);"),
+        NativeF16Binding::Vec2 => format!("    return vec2<f32>({buf}[index]);"),
+        NativeF16Binding::Scalar => {
+            let stride = type_words(module, ty);
+            let (expr, _) = compose(module, ty, 0, &|_, k| format!("f32({buf}[b + {k}u])"));
+            format!("    let b = index * {stride}u;\n    return {expr};")
+        }
+    }
+}
+
 /// A `f32` constant written as its bits, exactly the Host's value.
 pub(crate) fn f32_bits(value: f32) -> String {
     format!("bitcast<f32>({:#010x}u)", value.to_bits())
@@ -87,6 +256,10 @@ fn f32_to_half(x: u32) -> u32 {{
     let up = dropped > half || (dropped == half && (value & 1u) == 1u);
     return sign | (value + select(0u, 1u, up));
 }}
+fn load_f16_half(word: u32, hi: bool) -> f32 {{
+    let u = unpack2x16float(word);
+    return select(u.x, u.y, hi);
+}}
 fn encode_unit(x: f32, low: f32, scale: f32) -> u32 {{
     let nan = (bitcast<u32>(x) & 0x7FFFFFFFu) > 0x7F800000u;
     let c = select(clamp(x, low, 1.0), 0.0, nan);
@@ -116,6 +289,9 @@ pub(crate) fn scalar_load(
     }
     let size = encoding.bytes();
     let at = format!("({base} + {}u)", k * size);
+    if encoding == Encoding::F16 {
+        return format!("load_f16_half({buffer}[{at} >> 2u], ({at} & 2u) != 0u)");
+    }
     let mask = if size == 1 { "0xFFu" } else { "0xFFFFu" };
     let raw = format!("(({buffer}[{at} >> 2u] >> (({at} & 3u) * 8u)) & {mask})");
     if kind == Scalar::Bool {
@@ -131,8 +307,7 @@ pub(crate) fn scalar_load(
             "max(f32(bitcast<i32>({raw} << 24u) >> 24u) * {}, -1.0)",
             f32_bits(encoding::SNORM8)
         ),
-        Encoding::F16 => format!("bitcast<f32>(half_to_f32({raw}))"),
-        Encoding::Word => unreachable!("answered above"),
+        Encoding::F16 | Encoding::Word => unreachable!("answered above"),
     }
 }
 
@@ -214,14 +389,35 @@ pub(crate) fn narrow_store_body(module: &Module, k: usize, ty: Type) -> String {
         .collect();
     let mut lines = Vec::new();
     if bytes.is_multiple_of(4) {
-        lines.push(format!("    let w = index * {}u;", bytes / 4));
-        for word in 0..bytes / 4 {
-            let parts: Vec<String> = bits
-                .iter()
-                .filter(|(offset, _)| offset / 4 == word)
-                .map(|(offset, raw)| format!("({raw} << {}u)", (offset % 4) * 8))
-                .collect();
-            lines.push(format!("    out{k}[w + {word}u] = {};", parts.join(" | ")));
+        if encoding == Encoding::F16 {
+            lines.push(format!("    let w = index * {}u;", bytes / 4));
+            for word in 0..bytes / 4 {
+                let lo = scalars
+                    .iter()
+                    .enumerate()
+                    .find(|(s, _)| schema.offsets()[*s] == word * 4)
+                    .map(|(_, (path, _))| path.as_str())
+                    .unwrap_or("0.0");
+                let hi = scalars
+                    .iter()
+                    .enumerate()
+                    .find(|(s, _)| schema.offsets()[*s] == word * 4 + 2)
+                    .map(|(_, (path, _))| path.as_str())
+                    .unwrap_or("0.0");
+                lines.push(format!(
+                    "    out{k}[w + {word}u] = pack2x16float(vec2<f32>({lo}, {hi}));"
+                ));
+            }
+        } else {
+            lines.push(format!("    let w = index * {}u;", bytes / 4));
+            for word in 0..bytes / 4 {
+                let parts: Vec<String> = bits
+                    .iter()
+                    .filter(|(offset, _)| offset / 4 == word)
+                    .map(|(offset, raw)| format!("({raw} << {}u)", (offset % 4) * 8))
+                    .collect();
+                lines.push(format!("    out{k}[w + {word}u] = {};", parts.join(" | ")));
+            }
         }
     } else {
         lines.push(format!("    let b = index * {bytes}u;"));

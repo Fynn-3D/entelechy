@@ -11,7 +11,7 @@ pub mod raster;
 pub mod reduce;
 pub mod trace;
 
-pub use backend::{Backend, Check, ClockedFrame, Downloading, NativeOp, Prepared};
+pub use backend::{Backend, Check, ClockedFrame, Downloading, IndirectCount, NativeOp, Prepared};
 
 use std::fmt;
 

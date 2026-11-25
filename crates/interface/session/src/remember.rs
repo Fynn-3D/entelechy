@@ -127,6 +127,20 @@ impl Backend for Remembered {
         self.inner
             .execute_checked(made(prepared), module, invocation, scope)
     }
+    fn supports_indirect_scatter(&self, prepared: &dyn Prepared, module: &Validated) -> bool {
+        self.inner.supports_indirect_scatter(made(prepared), module)
+    }
+    fn execute_indirect_scatter(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+        indirect: entelechy_rules::IndirectCount,
+    ) -> Option<Result<Checked, ExecutionError>> {
+        self.inner
+            .execute_indirect_scatter(made(prepared), module, invocation, scope, indirect)
+    }
     fn execute_native(
         &self,
         op: NativeOp,

@@ -116,6 +116,19 @@ pub fn emit_reduce_with_strategy(
     strategy: ReduceStrategy,
     subgroups: SubgroupCaps,
 ) -> String {
+    emit_reduce_with_caps(module, packs, longs, strategy, subgroups, false)
+}
+
+/// Emits the reduce fold pass reading packed inputs from `packs` with full
+/// hardware capabilities (`subgroups` and `shader_f16`).
+pub fn emit_reduce_with_caps(
+    module: &Module,
+    packs: &[Vec<usize>],
+    longs: Longs,
+    strategy: ReduceStrategy,
+    subgroups: SubgroupCaps,
+    shader_f16: bool,
+) -> String {
     debug_assert_eq!(module.manifest.mode, Mode::Reduce);
     let Some(merge) = &module.merge else {
         return String::new();
@@ -124,11 +137,23 @@ pub fn emit_reduce_with_strategy(
     let stride = module.manifest.outputs[0].ty.schema.value_words();
     let (count_binding, in_binding, out_binding) = reduce_bindings(module);
     let mut out = String::new();
+    if shader_uses_f16(module, false, packs, &[], shader_f16) {
+        out.push_str("enable f16;\n");
+    }
     if strategy == ReduceStrategy::Subgroup256 {
         out.push_str(subgroups.directive());
     }
     // The map shader's context, params and inputs, which `merge` may read.
-    emit_preamble(&mut out, module, false, packs, &[], longs, false);
+    emit_preamble(
+        &mut out,
+        module,
+        false,
+        packs,
+        &[],
+        longs,
+        false,
+        shader_f16,
+    );
     if strategy == ReduceStrategy::Subgroup256 && longs == Longs::Native && module.holds(Type::Long)
     {
         out.push_str(SUBGROUP_I64_HELPERS);
@@ -176,6 +201,7 @@ pub fn emit_reduce_with_strategy(
             &[],
             longs,
             false,
+            shader_f16,
         );
         out.push('\n');
     }
@@ -189,6 +215,7 @@ pub fn emit_reduce_with_strategy(
         &[],
         longs,
         false,
+        shader_f16,
     );
     let element = wgsl_type(element_ty);
     match strategy {

@@ -427,6 +427,7 @@ fn long_of(low: u32, high: u32) -> i64 {
 /// `with_output`, inputs, structs, input readers and addresses, helpers,
 /// mixers, linear/filtered readers and memory writers. With `longs` in pairs, a
 /// Long is a pair of words (`i64` an alias of `vec2<u32>`).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_preamble(
     out: &mut String,
     module: &Module,
@@ -435,9 +436,11 @@ pub(crate) fn emit_preamble(
     textured: &[usize],
     longs: Longs,
     float32_filterable: bool,
+    shader_f16: bool,
 ) {
     let manifest = &module.manifest;
     let uses = filtered_uses(module);
+    let parts = part_inputs(module);
     let samplers = samplers_for(module, textured, float32_filterable);
     if longs == Longs::Pairs && module.holds(Type::Long) {
         out.push_str(LONG_PAIR_WORDS.trim_start());
@@ -456,8 +459,10 @@ pub(crate) fn emit_preamble(
     );
     if with_output {
         for k in 0..written_outputs(module) {
-            // Elements that share words are stored by atomic or.
-            let element = if output_shares_words(module, k) {
+            let element = if let Some(native) = native_f16_output(module, k, shader_f16) {
+                native.wgsl_elem()
+            } else if output_shares_words_for(module, k, shader_f16) {
+                // Elements that share words are stored by atomic or.
                 "atomic<u32>"
             } else {
                 "u32"
@@ -501,9 +506,11 @@ pub(crate) fn emit_preamble(
         } else {
             "read"
         };
+        let elem = native_f16_input(module, index, packs, textured, shader_f16, &parts)
+            .map_or("u32", NativeF16Binding::wgsl_elem);
         let _ = writeln!(
             out,
-            "@group(0) @binding({}) var<storage, {access}> in{index}: array<u32>;",
+            "@group(0) @binding({}) var<storage, {access}> in{index}: array<{elem}>;",
             INPUT_BINDING + index as u32,
         );
     }
@@ -909,30 +916,53 @@ fn index_in{index}(c: vec3<f32>) -> u32 {{
             }
             continue;
         }
-        // Words per element, or bytes for a narrow input.
-        let encoding = input_encoding(module, index);
-        let stride = if encoding == Encoding::Word {
-            port.ty.schema.value_words()
+        // Native hardware `f16` storage array load (`array<f16>` / `array<vec2<f16>>` / `array<vec4<f16>>`).
+        if let Some(native) = native_f16_input(module, index, packs, textured, shader_f16, &parts) {
+            let body = native_f16_load_body(module, &format!("in{index}"), element, native);
+            let _ = writeln!(
+                out,
+                "fn load_in{index}(index: u32) -> {} {{\n{body}\n}}",
+                wgsl_type(element)
+            );
         } else {
-            port.ty.schema.element_bytes()
-        };
-        let (buffer, offset) = input_source(module, packs, index, encoding);
-        let (expr, _) = load_expr(
-            module,
-            element,
-            &buffer,
-            &format!("({offset}b)"),
-            0,
-            encoding,
-        );
-        let _ = writeln!(
-            out,
-            "fn load_in{index}(index: u32) -> {} {{
-    let b = index * {stride}u;
-    return {expr};
-}}",
-            wgsl_type(element)
-        );
+            // Words per element, or bytes for a narrow input.
+            let encoding = input_encoding(module, index);
+            let (buffer, offset) = input_source(module, packs, index, encoding);
+            let body = if encoding == Encoding::F16
+                && matches!(element, Type::Vec2 | Type::Vec4)
+                && offset.is_empty()
+            {
+                // Word-aligned `Vec2 as f16` / `Vec4 as f16` fallback via single-instruction
+                // core WGSL `unpack2x16float` on adapters without `SHADER_F16`.
+                if element == Type::Vec2 {
+                    format!("    return unpack2x16float({buffer}[index]);")
+                } else {
+                    format!(
+                        "    let w = index * 2u;\n    return vec4<f32>(unpack2x16float({buffer}[w]), unpack2x16float({buffer}[w + 1u]));"
+                    )
+                }
+            } else {
+                let stride = if encoding == Encoding::Word {
+                    port.ty.schema.value_words()
+                } else {
+                    port.ty.schema.element_bytes()
+                };
+                let (expr, _) = load_expr(
+                    module,
+                    element,
+                    &buffer,
+                    &format!("({offset}b)"),
+                    0,
+                    encoding,
+                );
+                format!("    let b = index * {stride}u;\n    return {expr};")
+            };
+            let _ = writeln!(
+                out,
+                "fn load_in{index}(index: u32) -> {} {{\n{body}\n}}",
+                wgsl_type(element)
+            );
+        }
         // The linear index of an address, each axis floored (NaN counts as
         // zero) and clamped into the input's extent as an integer: `u32()`
         // saturates, and `min` keeps the last element.
@@ -1055,7 +1085,8 @@ fn urem_u32(a: u32, b: u32) -> u32 {{
             );
         }
         if manifest.memories.contains(&port.name) {
-            emit_memory_writer(out, module, index, port);
+            let native_mem = native_f16_input(module, index, packs, textured, shader_f16, &parts);
+            emit_memory_writer(out, module, index, port, native_mem);
         }
     }
     out.push('\n');
@@ -1129,11 +1160,14 @@ pub(crate) fn emit_memory_writer(
     module: &Module,
     index: usize,
     port: &entelechy_ir::Port,
+    native_f16: Option<NativeF16Binding>,
 ) {
     let element = port.element();
     let slot = CONTEXT_HEAD + index;
     let encoding = input_encoding(module, index);
-    let body = if encoding == Encoding::Word {
+    let body = if let Some(binding) = native_f16 {
+        native_f16_store_body(module, &format!("in{index}"), element, binding)
+    } else if encoding == Encoding::Word {
         let stride = port.ty.schema.value_words();
         let mut stores = Vec::new();
         store_lines(module, element, "v", 0, &mut stores);

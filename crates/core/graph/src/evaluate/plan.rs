@@ -69,11 +69,13 @@ impl Evaluator {
         // plan stands while all of it is the same, checked in place before
         // anything is copied.
         self.ensure_state_ports(graph);
+        let has_device = runtime.has_device();
         if let Some((last, executing)) = &self.planned_from
             && last.kernels == runtime.revision()
             && last.window == context.window
             && last.scale == context.scale
             && last.fusion == self.fusion
+            && last.has_device == has_device
             && last.pinned == self.pinned
             && last.overrides == *overrides
             && last.externals == *externals
@@ -96,6 +98,7 @@ impl Evaluator {
                     states,
                     pinned: self.pinned.clone(),
                     fusion: self.fusion,
+                    has_device,
                 },
                 Arc::clone(&made),
             )
@@ -164,6 +167,13 @@ impl Evaluator {
         overrides: &BTreeMap<String, Value>,
         context: &Context,
     ) -> Result<Arc<Vec<Group>>, EvaluateError> {
+        let has_device = runtime.has_device();
+        let scheduled = if has_device {
+            std::borrow::Cow::Owned(graph.schedule_for_device(order))
+        } else {
+            std::borrow::Cow::Borrowed(order)
+        };
+        let order: &[usize] = &scheduled;
         let mut versions = Vec::with_capacity(order.len());
         for index in order {
             let node = &graph.nodes[*index];
@@ -217,6 +227,7 @@ impl Evaluator {
             .collect();
         if let Some((last, executing)) = &self.last_plan
             && last.fusion == self.fusion
+            && last.has_device == has_device
             && last.parts == parts
             && last.pinned == self.pinned
         {
@@ -226,6 +237,7 @@ impl Evaluator {
             parts,
             pinned: self.pinned.clone(),
             fusion: self.fusion,
+            has_device,
         };
         let mut groups: Vec<Group> = order
             .iter()
@@ -1260,6 +1272,7 @@ pub(super) struct PlanInputs {
     states: Vec<Option<Domain>>,
     pinned: BTreeSet<NodeId>,
     fusion: bool,
+    has_device: bool,
 }
 
 /// What a plan was made from besides the graph: each node's law and
@@ -1268,6 +1281,7 @@ pub(super) struct PlanKey {
     parts: Vec<(Generation, Planned)>,
     pinned: BTreeSet<NodeId>,
     fusion: bool,
+    has_device: bool,
 }
 
 /// What the plan knows of a group before execution.

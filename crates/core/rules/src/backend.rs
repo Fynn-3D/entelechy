@@ -10,6 +10,23 @@ use entelechy_ir::{Capabilities, Capability, KernelId, Manifest, Port, PortType,
 
 use crate::ExecutionError;
 
+/// GPU-resident integer count driving `dispatch_workgroups_indirect` for a
+/// `Mode::Scatter` whose output domain (`base`) is already fixed on the Host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IndirectCount {
+    /// Manifest input slot holding the `Int` count buffer on the device.
+    pub slot: usize,
+    /// Scalar element index inside that input buffer.
+    pub index: u32,
+    /// Multiplicative factor applied to the read integer value.
+    pub scale: i32,
+    /// Additive offset applied after `scale`.
+    pub offset: i32,
+    /// Lower clamp bound (`>= 1` statically guarantees a non-empty rows domain;
+    /// `0` means no clamp and non-positive results fail domain validation).
+    pub min_val: u32,
+}
+
 /// An operation a backend performs natively: device access, not a Kernel.
 /// The runtime publishes these under generation zero; they are fixed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -652,6 +669,28 @@ pub trait Backend: Send + Sync {
     /// where memory is. None by default.
     fn memory(&self) -> Vec<(&'static str, u64)> {
         Vec::new()
+    }
+
+    /// Whether this backend can execute `module` as an indirect scatter driven
+    /// by a GPU-resident count without reading the count back to Host memory.
+    fn supports_indirect_scatter(&self, prepared: &dyn Prepared, module: &Validated) -> bool {
+        let _ = (prepared, module);
+        false
+    }
+
+    /// Executes a `Mode::Scatter` whose 1D execution count comes from a
+    /// device-resident `Int` Field (`indirect`) via `dispatch_workgroups_indirect`,
+    /// avoiding any GPU->CPU readback. Returns `None` to fall back to Host domain resolution.
+    fn execute_indirect_scatter(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+        indirect: IndirectCount,
+    ) -> Option<Result<Checked, ExecutionError>> {
+        let _ = (prepared, module, invocation, scope, indirect);
+        None
     }
 
     /// Runs a map `repeat` times, feeding input `chain.0` from output

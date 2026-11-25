@@ -13,6 +13,7 @@
 mod batch;
 mod failure;
 pub mod glsl;
+mod indirect;
 mod later;
 mod modes;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
@@ -105,6 +106,8 @@ pub(crate) struct WgpuBackend {
     decompress_bc: OnceLock<Result<texture::DecompressBcPipelines, String>>,
     /// The passes that generate 2D/2D-array/3D mipmap chains on the GPU.
     mip_gen: OnceLock<Result<texture::MipGenPipelines, String>>,
+    /// The 1-thread compute pipeline preparing GPU-driven indirect scatter args.
+    indirect_scatter: OnceLock<Result<indirect::IndirectScatterPipeline, String>>,
     /// Persistent hardware filtering samplers (clamp/repeat x trilinear/16x aniso).
     sampler_clamp: wgpu::Sampler,
     sampler_repeat: wgpu::Sampler,
@@ -149,6 +152,8 @@ pub(crate) struct WgpuBackend {
     float32_filterable: bool,
     /// Hardware subgroup (wave / SIMD-group) capabilities (`SUBGROUP`).
     subgroups: wgsl::SubgroupCaps,
+    /// Whether hardware half-precision floats (`SHADER_F16`) are enabled on this device.
+    shader_f16: bool,
     /// Whether hardware ray tracing (`EXPERIMENTAL_RAY_QUERY`) is enabled on this device.
     ray_query: bool,
     /// Failure words and their readback buffers, for reuse: a checked node
@@ -353,12 +358,11 @@ impl WgpuBackend {
             return Ok(Vec::new());
         }
         let size = byte_len as u64;
-        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("staging"),
-            size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let staging = self.spare.take(
+            &self.device,
+            size.max(16).div_ceil(16) * 16,
+            wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        );
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -369,19 +373,19 @@ impl WgpuBackend {
         self.spent
             .time(|| {
                 self.wait
-                    .map_read(&self.device, &self.queue, staging.slice(..))
+                    .map_read(&self.device, &self.queue, staging.slice(..size))
             })
             .map_err(|error| ExecutionError::Device(told(&self.heard, error)))?;
         self.page_queue.clear();
         let words = {
             let view = staging
-                .slice(..)
+                .slice(..size)
                 .get_mapped_range()
                 .map_err(|error| ExecutionError::Device(error.to_string()))?;
             words_of(&view[..byte_len])
         };
         staging.unmap();
-        crate::wait::discard(staging);
+        self.spare.keep(staging, None);
         Ok(words)
     }
 
@@ -395,6 +399,20 @@ impl WgpuBackend {
     /// GPU Compute BVH fallback on hardware that supports `EXPERIMENTAL_RAY_QUERY`.
     pub fn without_ray_query(mut self) -> Self {
         self.ray_query = false;
+        self
+    }
+
+    /// Whether hardware 16-bit floating-point storage (`SHADER_F16`) is enabled
+    /// on this device.
+    pub fn shader_f16(&self) -> bool {
+        self.shader_f16
+    }
+
+    /// Disables native `SHADER_F16` codegen on this backend, exercising the
+    /// portable `pack2x16float`/`unpack2x16float` fallback on hardware that
+    /// supports `SHADER_F16`.
+    pub fn without_shader_f16(mut self) -> Self {
+        self.shader_f16 = false;
         self
     }
 
@@ -489,6 +507,10 @@ impl WgpuBackend {
         let has_subgroups = adapter.features().contains(wgpu::Features::SUBGROUP);
         if has_subgroups {
             features |= wgpu::Features::SUBGROUP;
+        }
+        let shader_f16 = adapter.features().contains(wgpu::Features::SHADER_F16);
+        if shader_f16 {
+            features |= wgpu::Features::SHADER_F16;
         }
         let adapter_info = adapter.get_info();
         let subgroups = if has_subgroups {
@@ -637,6 +659,7 @@ impl WgpuBackend {
             row_pad: OnceLock::new(),
             decompress_bc: OnceLock::new(),
             mip_gen: OnceLock::new(),
+            indirect_scatter: OnceLock::new(),
             sampler_clamp,
             sampler_repeat,
             sampler_aniso_clamp,
@@ -653,6 +676,7 @@ impl WgpuBackend {
             texture_compression_bc,
             float32_filterable,
             subgroups,
+            shader_f16,
             ray_query,
             uploaded: std::sync::atomic::AtomicU64::new(0),
             failures: Arc::new(Mutex::new(Vec::new())),
@@ -1180,7 +1204,14 @@ impl Backend for WgpuBackend {
         // made first so the opening timestamp is the encoder's first command.
         let timing_set = self.timing_set(2);
         let allow_batch = self.batch.can_batch(self.measured(), &self.frames)
-            && matches!(mode, Mode::Map | Mode::Group { .. })
+            && matches!(
+                mode,
+                Mode::Map
+                    | Mode::Group { .. }
+                    | Mode::Reduce
+                    | Mode::Prefix { .. }
+                    | Mode::Scatter { .. }
+            )
             && !(self.wait.parks_with_host() && pipeline.fails);
         let staged = self.stage(
             pipeline,
@@ -1198,13 +1229,12 @@ impl Backend for WgpuBackend {
             bind_group,
             further_slices,
             context_buffer,
-            params_buffer,
-            context_slice: _,
-            params_slice: _,
+            context_slice,
+            params_slice,
             input_buffers,
             bound_inputs,
             bound_textures: _,
-            temp_buffers,
+            mut temp_buffers,
             memory_outputs,
             output_buffer,
             further_outputs,
@@ -1213,6 +1243,7 @@ impl Backend for WgpuBackend {
             failure,
             target,
             highs,
+            indirect_bad_check: _,
         } = staged;
         // The map pass's output is the result, unless a reduction folds it or a
         // scatter combines it into its target.
@@ -1222,14 +1253,15 @@ impl Backend for WgpuBackend {
                 module,
                 reduce,
                 pipeline.reduce_fold,
-                &context_buffer,
-                &params_buffer,
+                &context_slice,
+                &params_slice,
                 &bound_inputs,
                 output_buffer,
                 element_count,
                 output_words,
                 timing_set.as_ref(),
                 failure.as_ref().map(|(word, _)| word),
+                &mut temp_buffers,
             ),
             (Mode::Prefix { .. }, _, _) => {
                 let prefix = pipeline
@@ -1244,6 +1276,7 @@ impl Backend for WgpuBackend {
                     output_words,
                     timing_set.as_ref(),
                     failure.as_ref().map(|(word, _)| word),
+                    &mut temp_buffers,
                 )
             }
             (Mode::Scatter { base, .. }, _, Some(scatter)) => self.combine(
@@ -1254,12 +1287,13 @@ impl Backend for WgpuBackend {
                 input_buffers[base as usize]
                     .as_ref()
                     .expect("scatter base holds a storage buffer"),
-                &context_buffer,
+                &context_slice,
                 output_buffer,
                 output_domain.count(),
                 element_count,
                 output_words,
                 timing_set.as_ref(),
+                &mut temp_buffers,
             ),
             _ => output_buffer,
         };
@@ -1497,6 +1531,21 @@ impl Backend for WgpuBackend {
         }
     }
 
+    fn supports_indirect_scatter(&self, _prepared: &dyn Prepared, module: &Validated) -> bool {
+        self.supports_indirect_scatter_impl(module)
+    }
+
+    fn execute_indirect_scatter(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+        indirect: entelechy_rules::IndirectCount,
+    ) -> Option<Result<entelechy_rules::backend::Checked, ExecutionError>> {
+        self.execute_indirect_scatter_impl(prepared, module, invocation, scope, indirect)
+    }
+
     fn download(
         &self,
         device: &(dyn Any + Send + Sync),
@@ -1524,12 +1573,11 @@ impl Backend for WgpuBackend {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let src_buffer = self.buffer_of(image).map_err(|error| error.to_string())?;
         self.batch.flush().map_err(|error| error.to_string())?;
-        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("staging"),
-            size: byte_len as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let staging = self.spare.take(
+            &self.device,
+            (byte_len as u64).max(16).div_ceil(16) * 16,
+            wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        );
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1537,7 +1585,10 @@ impl Backend for WgpuBackend {
             });
         encoder.copy_buffer_to_buffer(&src_buffer, 0, &staging, 0, byte_len as u64);
         let after = self.submit(encoder.finish());
-        let asked = Some(self.wait.ask_map_now(&self.queue, staging.slice(..)));
+        let asked = Some(
+            self.wait
+                .ask_map_now(&self.queue, staging.slice(..byte_len as u64)),
+        );
         Ok(Box::new(Coming {
             asked,
             wait: self.wait,
@@ -1548,6 +1599,7 @@ impl Backend for WgpuBackend {
             after,
             heard: Arc::clone(&self.heard),
             page_queue: self.page_queue.clone(),
+            spare: self.spare.clone(),
         }))
     }
 
@@ -1684,6 +1736,27 @@ impl GpuBackend {
     pub fn without_ray_query(self) -> Self {
         match self.0 {
             Driver::Wgpu(b) => Self(Driver::Wgpu(Box::new((*b).without_ray_query()))),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(b) => Self(Driver::WebGl(b)),
+        }
+    }
+
+    /// Whether hardware 16-bit floating-point storage (`SHADER_F16`) is enabled
+    /// on this backend. Always false on WebGL2.
+    pub fn shader_f16(&self) -> bool {
+        match &self.0 {
+            Driver::Wgpu(b) => b.shader_f16(),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(_) => false,
+        }
+    }
+
+    /// This backend with native `SHADER_F16` codegen disabled, exercising the
+    /// portable `pack2x16float`/`unpack2x16float` fallback on hardware that
+    /// supports `SHADER_F16`.
+    pub fn without_shader_f16(self) -> Self {
+        match self.0 {
+            Driver::Wgpu(b) => Self(Driver::Wgpu(Box::new((*b).without_shader_f16()))),
             #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
             Driver::WebGl(b) => Self(Driver::WebGl(b)),
         }
@@ -1937,6 +2010,22 @@ impl Backend for GpuBackend {
     ) -> Option<Result<Vec<Handle>, ExecutionError>> {
         self.inner()
             .execute_repeated(prepared, module, invocation, scope, repeat, chain)
+    }
+
+    fn supports_indirect_scatter(&self, prepared: &dyn Prepared, module: &Validated) -> bool {
+        self.inner().supports_indirect_scatter(prepared, module)
+    }
+
+    fn execute_indirect_scatter(
+        &self,
+        prepared: &dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &mut Scope<'_>,
+        indirect: entelechy_rules::IndirectCount,
+    ) -> Option<Result<entelechy_rules::backend::Checked, ExecutionError>> {
+        self.inner()
+            .execute_indirect_scatter(prepared, module, invocation, scope, indirect)
     }
 
     fn settle_device(&self) {

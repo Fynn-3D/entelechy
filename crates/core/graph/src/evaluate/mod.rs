@@ -600,6 +600,7 @@ impl Layout {
         groups: &[Group],
         pinned: &BTreeSet<NodeId>,
         needed: Option<&BTreeSet<NodeId>>,
+        runtime: &Runtime,
     ) -> Self {
         let mut last_read: BTreeMap<NodeId, usize> = BTreeMap::new();
         let mut readers: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
@@ -744,7 +745,28 @@ impl Layout {
         }
         for group in groups {
             if let Some(DomainSpec::Expr(expr)) = &group.node.domain {
+                let indirect_port =
+                    matches!(group.manifest().mode, entelechy_ir::Mode::Scatter { .. })
+                        .then(|| {
+                            if group.node.is_async
+                                || !runtime.supports_indirect_scatter(&group.version)
+                            {
+                                return None;
+                            }
+                            let (port_name, ..) = expr.indirect_rows_spec()?;
+                            let slot = group
+                                .manifest()
+                                .inputs
+                                .iter()
+                                .position(|i| i.name == port_name)?;
+                            (group.manifest().inputs[slot].element() == Type::Int)
+                                .then_some(port_name)
+                        })
+                        .flatten();
                 for (in_port, _) in expr.values_read() {
+                    if indirect_port.as_deref() == Some(in_port.as_str()) {
+                        continue;
+                    }
                     if let Some(binding) = group.node.inputs.get(&in_port) {
                         let source = match binding {
                             Binding::Now(source) | Binding::Previous { source, .. } => source,
@@ -873,6 +895,7 @@ impl Evaluator {
         graph: &Graph,
         groups: &Arc<Vec<Group>>,
         needed: Option<&Arc<BTreeSet<NodeId>>>,
+        runtime: &Runtime,
     ) -> Arc<Layout> {
         if let Some(known) = &self.layout
             && Arc::ptr_eq(&known.groups, groups)
@@ -889,6 +912,7 @@ impl Evaluator {
             groups,
             &self.pinned,
             needed.map(|needed| needed.as_ref()),
+            runtime,
         ));
         self.layout = Some(LayoutFor {
             groups: Arc::clone(groups),
@@ -1889,7 +1913,7 @@ impl Evaluator {
         // From here to the commit, a failure leaves state as it was: a
         // migration's replaced state is put back.
         let evaluated = (|| -> Result<Evaluated, EvaluateError> {
-            let layout = self.layout_of(graph, &groups, needed.as_ref());
+            let layout = self.layout_of(graph, &groups, needed.as_ref(), runtime);
             // Absorbed nodes release their cached outputs.
             let stale: Vec<NodeId> = layout
                 .absorbed
@@ -2044,8 +2068,12 @@ impl Evaluator {
                     None => cold_epoch,
                 };
                 // What it reads let go cold is made again before it runs.
-                let (invocation, key) = match bound {
-                    GroupBind::Ready { handles, key } => (
+                let (invocation, key, indirect) = match bound {
+                    GroupBind::Ready {
+                        handles,
+                        key,
+                        indirect,
+                    } => (
                         Invocation {
                             inputs: handles,
                             params: key.params.clone(),
@@ -2053,6 +2081,7 @@ impl Evaluator {
                             context: *context,
                         },
                         key,
+                        indirect,
                     ),
                     _ => {
                         lean = false;
@@ -2090,6 +2119,7 @@ impl Evaluator {
                     at,
                     invocation,
                     key,
+                    indirect,
                     rerun,
                     &[],
                     &scene,
@@ -2294,13 +2324,24 @@ impl Evaluator {
         scene: &Scene<'_>,
         frame: &mut Frame,
         runtime: &mut Runtime,
-    ) -> Result<(Invocation, CacheKey), EvaluateError> {
+    ) -> Result<
+        (
+            Invocation,
+            CacheKey,
+            Option<entelechy_kernel::IndirectCount>,
+        ),
+        EvaluateError,
+    > {
         let group = &scene.groups[at];
         // Each round makes at least one producer again; a producer let go
         // again at once, for want of room, ends it.
         for _ in 0..=group.node.inputs.len() {
             match self.bind_group(at, &frame.layout, scene, runtime)? {
-                GroupBind::Ready { handles, key } => {
+                GroupBind::Ready {
+                    handles,
+                    key,
+                    indirect,
+                } => {
                     return Ok((
                         Invocation {
                             inputs: handles,
@@ -2309,6 +2350,7 @@ impl Evaluator {
                             context: *scene.context,
                         },
                         key,
+                        indirect,
                     ));
                 }
                 GroupBind::Keyed(_, cold) | GroupBind::Unkeyed(cold) => {
@@ -2343,7 +2385,7 @@ impl Evaluator {
         };
         let cold = self.ledger.cold(id).cloned().ok_or_else(missing)?;
         let at = *frame.layout.runs_at.get(id).ok_or_else(missing)?;
-        let (invocation, key) = self.ready(at, turn, scene, frame, runtime)?;
+        let (invocation, key, indirect) = self.ready(at, turn, scene, frame, runtime)?;
         let rerun = (cold.key == key).then_some(cold.epoch);
         // What it reads stays while it runs.
         let reads: Vec<NodeId> = scene.groups[at]
@@ -2356,7 +2398,7 @@ impl Evaluator {
             })
             .collect();
         self.execute_group(
-            at, turn, invocation, key, rerun, &reads, scene, frame, runtime,
+            at, turn, invocation, key, indirect, rerun, &reads, scene, frame, runtime,
         )
     }
 
@@ -2373,6 +2415,7 @@ impl Evaluator {
         turn: usize,
         invocation: Invocation,
         key: CacheKey,
+        indirect: Option<entelechy_kernel::IndirectCount>,
         rerun: Option<u64>,
         keep: &[NodeId],
         scene: &Scene<'_>,
@@ -2389,11 +2432,44 @@ impl Evaluator {
         runtime.take_moved();
         let started = entelechy_kernel::clock::now();
         let first_run = runtime.clock_mark();
-        let run = |runtime: &mut Runtime| match group.chain {
-            Some(chain) => {
+        let run = |runtime: &mut Runtime| match (group.chain, indirect) {
+            (Some(chain), _) => {
                 runtime.execute_repeated(&group.version, &invocation, group.repeat, chain)
             }
-            None => runtime.execute(&group.version, &invocation),
+            (None, Some(ic)) => {
+                if let Some(res) = runtime.execute_indirect_scatter(&group.version, &invocation, ic)
+                {
+                    res
+                } else {
+                    // Backend declined indirect dispatch at runtime: fall back
+                    // by materializing the count once on the Host.
+                    let mut fallback = invocation.clone();
+                    let h = fallback.inputs[ic.slot];
+                    runtime.materialize(h)?;
+                    let raw = runtime
+                        .host()
+                        .element(h, ic.index)
+                        .map_err(|e| ExecutionError::Device(e.to_string()))?[0]
+                        as i32;
+                    let val = i64::from(raw) * i64::from(ic.scale) + i64::from(ic.offset);
+                    let clamped = if ic.min_val > 0 {
+                        val.max(i64::from(ic.min_val))
+                    } else {
+                        val
+                    };
+                    let n = u32::try_from(clamped)
+                        .ok()
+                        .filter(|&n| n > 0)
+                        .ok_or_else(|| {
+                            ExecutionError::Device(
+                                "indirect domain resolved to a non-positive row count".into(),
+                            )
+                        })?;
+                    fallback.domain = Domain::Rows(n);
+                    runtime.execute(&group.version, &fallback)
+                }
+            }
+            (None, None) => runtime.execute(&group.version, &invocation),
         };
         // A run the Host has no room for runs again once remembered runs
         // and the outputs this frame has done with are let go; they are

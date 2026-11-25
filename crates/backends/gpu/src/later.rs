@@ -18,6 +18,7 @@ pub(crate) struct Coming {
     /// What the device said by itself ([`crate::told`]).
     pub(crate) heard: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     pub(crate) page_queue: crate::PageQueue,
+    pub(crate) spare: crate::pool::Spare,
 }
 
 impl Drop for Coming {
@@ -32,7 +33,7 @@ impl entelechy_rules::Downloading for Coming {
     fn take(mut self: Box<Self>) -> Result<Vec<u32>, String> {
         let asked = self.asked.take().expect("asked on submission");
         let staging = self.staging.take().expect("staging buffer held");
-        let slice = staging.slice(..);
+        let slice = staging.slice(..self.byte_len as u64);
         self.spent
             .time(|| {
                 self.wait
@@ -47,7 +48,7 @@ impl entelechy_rules::Downloading for Coming {
                 .map_err(|error| error.to_string())?[..self.byte_len],
         );
         staging.unmap();
-        crate::wait::discard(staging);
+        self.spare.keep(staging, None);
         Ok(words)
     }
 }

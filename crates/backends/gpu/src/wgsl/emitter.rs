@@ -13,6 +13,7 @@ pub(crate) fn emit_function(
     textured: &[usize],
     longs: Longs,
     subgroup_group: bool,
+    shader_f16: bool,
 ) {
     let args = if entry && module.manifest.mode == Mode::Scan {
         format!(
@@ -54,6 +55,7 @@ pub(crate) fn emit_function(
         pairs: longs == Longs::Pairs,
         group_look: false,
         subgroup_group,
+        shader_f16,
     };
     emitter.instructions(&function.body, 1);
     if stores {
@@ -142,6 +144,8 @@ pub(crate) struct Emitter<'a> {
     /// Whether this `group N` entry exchanges values register-to-register via
     /// `subgroupShuffle` instead of workgroup shared memory.
     subgroup_group: bool,
+    /// Whether native `SHADER_F16` `array<f16>` storage bindings are active.
+    shader_f16: bool,
 }
 
 /// Whether `body` holds an exchange, in nested blocks too.
@@ -819,33 +823,53 @@ impl Emitter<'_> {
                     },
                 };
                 let base = format!("b{}", id.0);
-                // In words, or in bytes for a narrow input.
+                // In words, native `f16` scalars, or bytes for other narrow inputs.
                 let encoding = input_encoding(self.module, *input as usize);
-                let (element_size, scalar_size) = if encoding == Encoding::Word {
-                    (stride, 1)
+                let is_native_f16 = self.shader_f16
+                    && encoding == Encoding::F16
+                    && !self.textured.contains(&(*input as usize))
+                    && !self
+                        .packed
+                        .iter()
+                        .any(|group| group.contains(&(*input as usize)));
+                if is_native_f16 {
+                    self.line(
+                        depth,
+                        &format!(
+                            "let {base} = index_in{input}({element}) * {stride}u + u32(clamp({offset}, 0i, {last}i));"
+                        ),
+                    );
+                    let (expression, _) = compose(self.module, *ty, 0, &|_, k| {
+                        format!("f32(in{input}[{base} + {k}u])")
+                    });
+                    expression
                 } else {
-                    (
-                        manifest.inputs[*input as usize].ty.schema.element_bytes(),
-                        encoding.bytes(),
-                    )
-                };
-                self.line(
-                    depth,
-                    &format!(
-                        "let {base} = index_in{input}({element}) * {element_size}u + u32(clamp({offset}, 0i, {last}i)) * {scalar_size}u;"
-                    ),
-                );
-                let (buffer, offset) =
-                    input_source(self.module, self.packed, *input as usize, encoding);
-                let (expression, _) = load_expr(
-                    self.module,
-                    *ty,
-                    &buffer,
-                    &format!("({offset}{base})"),
-                    0,
-                    encoding,
-                );
-                expression
+                    let (element_size, scalar_size) = if encoding == Encoding::Word {
+                        (stride, 1)
+                    } else {
+                        (
+                            manifest.inputs[*input as usize].ty.schema.element_bytes(),
+                            encoding.bytes(),
+                        )
+                    };
+                    self.line(
+                        depth,
+                        &format!(
+                            "let {base} = index_in{input}({element}) * {element_size}u + u32(clamp({offset}, 0i, {last}i)) * {scalar_size}u;"
+                        ),
+                    );
+                    let (buffer, offset) =
+                        input_source(self.module, self.packed, *input as usize, encoding);
+                    let (expression, _) = load_expr(
+                        self.module,
+                        *ty,
+                        &buffer,
+                        &format!("({offset}{base})"),
+                        0,
+                        encoding,
+                    );
+                    expression
+                }
             }
             Op::AtLinear(input, index) => format!("linear_in{input}({})", v(index)),
             Op::AtFiltered {

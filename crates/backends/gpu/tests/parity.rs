@@ -6692,3 +6692,870 @@ fn gpu_hiz_occlusion_culling_matches_cpu_including_coplanar_and_odd_sizes() {
         "Hi-Z cover with pre-filled depth mismatched CPU on {cov_mismatch} pixels: first={cov_samples:?}"
     );
 }
+
+#[test]
+fn gpu_driven_indirect_scatter_zero_readback_matches_cpu() {
+    use entelechy_graph::{
+        Binding, DomainExpr, DomainSpec, Evaluator, Graph, Node, NodeId, Source,
+    };
+    use entelechy_kernel::Runtime;
+    use std::collections::BTreeMap;
+
+    let Some(gpu_backend) = gpu() else {
+        return;
+    };
+
+    let counter_src = "kernel test.ind_counter@1 {
+        requires { field.write; }
+        param n: Int = 1;
+        output result: Rows<Int>;
+        compute { return n; }
+    }";
+    let items_src = "kernel test.ind_items@1 {
+        requires { field.write; }
+        output result: Rows<Int>;
+        compute {
+            let i = element();
+            return (i * 17 + 5) % 97 - 30;
+        }
+    }";
+    let base_src = "kernel test.ind_base@1 {
+        requires { field.write; }
+        output result: Rows<Int>;
+        compute { return 1000 + element() * 3; }
+    }";
+    let scatter_sum_src = "kernel test.ind_scatter_sum@1 {
+        requires { field.read; field.write; }
+        input base: Rows<Int>;
+        input items: Rows<Int>;
+        input n: Rows<Int>;
+        output result: Rows<Int>;
+        struct Pair { at: Int; value: Int; }
+        scatter over items into base with sum {
+            let i = element();
+            let v = at(items, i % count(items));
+            emit(Pair { at: i % count(base), value: v });
+            return Pair { at: (i * 7 + 1) % count(base), value: (i & 3) + 1 };
+        }
+    }";
+    let scatter_min_src = "kernel test.ind_scatter_min@1 {
+        requires { field.read; field.write; }
+        input base: Rows<Int>;
+        input items: Rows<Int>;
+        input n: Rows<Int>;
+        output result: Rows<Int>;
+        struct Pair { at: Int; value: Int; }
+        scatter over items into base with min {
+            let i = element();
+            let v = at(items, i % count(items));
+            emit(Pair { at: i % count(base), value: v });
+            return Pair { at: (i * 5 + 3) % count(base), value: v - 10 };
+        }
+    }";
+
+    let make_runtime = |backend: Box<dyn Backend>| {
+        let mut rt = Runtime::with_backends(1 << 24, backend, None);
+        rt.set_small(0);
+        for src in [
+            counter_src,
+            items_src,
+            base_src,
+            scatter_sum_src,
+            scatter_min_src,
+        ] {
+            rt.load(compile(src).unwrap(), src).unwrap();
+        }
+        rt
+    };
+
+    let mut gpu_rt = make_runtime(Box::new(gpu_backend));
+    let mut cpu_rt = make_runtime(Box::new(CpuBackend));
+
+    let make_graph = || {
+        let id = |s: &str| NodeId(s.into());
+        let src_node = |n: &str| {
+            Binding::Now(Source::Node {
+                node: id(n),
+                port: "result".into(),
+            })
+        };
+        Graph {
+            name: "indirect_scatter_test".into(),
+            externals: vec![],
+            texts: vec![],
+            params: vec![entelechy_graph::GraphParam {
+                name: "count_param".into(),
+                ty: "Int".into(),
+                default: Value::Int(1),
+            }],
+            requirements: vec![],
+            times_params: vec![],
+            times_rows: vec![],
+            nodes: vec![
+                Node {
+                    id: id("counter"),
+                    kernel: "test.ind_counter@1".parse().unwrap(),
+                    inputs: BTreeMap::new(),
+                    params: BTreeMap::from([(
+                        "n".into(),
+                        entelechy_graph::ParamValue::Graph("count_param".into()),
+                    )]),
+                    domain: Some(DomainSpec::Literal(Domain::Rows(1))),
+                    is_async: false,
+                    awake: vec![],
+                    at: None,
+                },
+                Node {
+                    id: id("items"),
+                    kernel: "test.ind_items@1".parse().unwrap(),
+                    inputs: BTreeMap::new(),
+                    params: BTreeMap::new(),
+                    domain: Some(DomainSpec::Literal(Domain::Rows(2048))),
+                    is_async: false,
+                    awake: vec![],
+                    at: None,
+                },
+                Node {
+                    id: id("base"),
+                    kernel: "test.ind_base@1".parse().unwrap(),
+                    inputs: BTreeMap::new(),
+                    params: BTreeMap::new(),
+                    domain: Some(DomainSpec::Literal(Domain::Rows(32))),
+                    is_async: false,
+                    awake: vec![],
+                    at: None,
+                },
+                Node {
+                    id: id("scatter_sum"),
+                    kernel: "test.ind_scatter_sum@1".parse().unwrap(),
+                    inputs: BTreeMap::from([
+                        ("base".into(), src_node("base")),
+                        ("items".into(), src_node("items")),
+                        ("n".into(), src_node("counter")),
+                    ]),
+                    params: BTreeMap::new(),
+                    domain: Some(DomainSpec::Expr(DomainExpr::Binary(
+                        entelechy_graph::DomainOp::Mul,
+                        Box::new(DomainExpr::Call(
+                            "max".into(),
+                            vec![DomainExpr::Value("n".into(), 0), DomainExpr::Int(1)],
+                        )),
+                        Box::new(DomainExpr::Int(2)),
+                    ))),
+                    is_async: false,
+                    awake: vec![],
+                    at: None,
+                },
+                Node {
+                    id: id("scatter_min"),
+                    kernel: "test.ind_scatter_min@1".parse().unwrap(),
+                    inputs: BTreeMap::from([
+                        ("base".into(), src_node("scatter_sum")),
+                        ("items".into(), src_node("items")),
+                        ("n".into(), src_node("counter")),
+                    ]),
+                    params: BTreeMap::new(),
+                    domain: Some(DomainSpec::Expr(DomainExpr::Value("n".into(), 0))),
+                    is_async: false,
+                    awake: vec![],
+                    at: None,
+                },
+            ],
+            outputs: vec![
+                (
+                    "sum_out".into(),
+                    Source::Node {
+                        node: id("scatter_sum"),
+                        port: "result".into(),
+                    },
+                ),
+                (
+                    "min_out".into(),
+                    Source::Node {
+                        node: id("scatter_min"),
+                        port: "result".into(),
+                    },
+                ),
+            ],
+            fallbacks: vec![],
+            placed: vec![],
+            repeated: vec![],
+        }
+    };
+
+    let graph = make_graph();
+    let mut gpu_eval = Evaluator::new();
+    let mut cpu_eval = Evaluator::new();
+    let ext = BTreeMap::new();
+    let ctx = Context::default();
+
+    for count in [1i32, 7, 137, 1024] {
+        let params = BTreeMap::from([("count_param".into(), Value::Int(count))]);
+        let g_rep = gpu_eval
+            .evaluate(&graph, &mut gpu_rt, &ext, &ctx, &params)
+            .unwrap();
+        let c_rep = cpu_eval
+            .evaluate(&graph, &mut cpu_rt, &ext, &ctx, &params)
+            .unwrap();
+
+        // Zero GPU->CPU readback during evaluation: `counter` stays purely GPU-resident!
+        let counter_h = gpu_eval
+            .cached(&NodeId("counter".into()), "result")
+            .unwrap();
+        assert!(
+            gpu_rt.host().data(counter_h).is_err(),
+            "counter must stay strictly GPU-resident without Host readback at count={count}"
+        );
+        for pl in &g_rep.placements {
+            assert_eq!(
+                pl.downloaded, 0,
+                "indirect scatter frame must download 0 bytes for node {:?} at count={count}",
+                pl.node
+            );
+        }
+
+        for (out_name, g_h) in &g_rep.outputs {
+            let c_h = c_rep.outputs.iter().find(|(n, _)| n == out_name).unwrap().1;
+            gpu_rt.materialize(*g_h).unwrap();
+            let g_words = gpu_rt.host().data(*g_h).unwrap().storage().to_vec();
+            let c_words = cpu_rt.host().data(c_h).unwrap().storage().to_vec();
+            assert_eq!(
+                g_words, c_words,
+                "indirect scatter mismatch on `{out_name}` for count={count}"
+            );
+        }
+    }
+
+    // Unclamped `value(n)` resolving to 0 must fail via deferred IndirectDomainCheck,
+    // matching CPU domain-error semantics.
+    let zero_params = BTreeMap::from([("count_param".into(), Value::Int(0))]);
+    assert!(
+        cpu_eval
+            .evaluate(&graph, &mut cpu_rt, &ext, &ctx, &zero_params)
+            .is_err(),
+        "CPU must reject zero row count"
+    );
+    assert!(
+        gpu_eval
+            .evaluate(&graph, &mut gpu_rt, &ext, &ctx, &zero_params)
+            .is_err(),
+        "GPU indirect scatter must reject zero row count via deferred domain check"
+    );
+}
+
+#[test]
+fn gpu_instanced_tlas_lbvh_dynamic_zero_readback_parity() {
+    use entelechy_graph::{Binding, DomainSpec, Evaluator, Graph, Node, NodeId, Source};
+    use entelechy_kernel::Runtime;
+    use std::collections::BTreeMap;
+
+    let Some(hw_gpu) = gpu() else {
+        return;
+    };
+    let lbvh_gpu = GpuBackend::new().unwrap().without_ray_query();
+
+    // Multi-mesh scene built 100% on GPU:
+    // mesh 0: 2 triangles (quad at z = 0)
+    // mesh 1: 4 triangles (pyramid at z = 0)
+    // mesh 2: 0 triangles (empty mesh slice — must be safely skipped)
+    let verts_src = "kernel test.tlas_verts@1 {
+        requires { field.write; }
+        output result: Rows<Vec3>;
+        compute {
+            let i = element();
+            if i == 0 { return vec3(-0.6, -0.6, 0.0); }
+            if i == 1 { return vec3( 0.6, -0.6, 0.0); }
+            if i == 2 { return vec3( 0.6,  0.6, 0.0); }
+            if i == 3 { return vec3(-0.6,  0.6, 0.0); }
+            if i == 4 { return vec3(-0.5, -0.5, 0.0); }
+            if i == 5 { return vec3( 0.5, -0.5, 0.0); }
+            if i == 6 { return vec3( 0.5,  0.5, 0.0); }
+            if i == 7 { return vec3(-0.5,  0.5, 0.0); }
+            return vec3(0.0, 0.0, 0.8);
+        }
+    }";
+    let tris_src = "kernel test.tlas_tris@1 {
+        requires { field.write; }
+        output result: Rows<IVec3>;
+        compute {
+            let i = element();
+            if i == 0 { return ivec3(0, 1, 2); }
+            if i == 1 { return ivec3(0, 2, 3); }
+            if i == 2 { return ivec3(0, 1, 4); }
+            if i == 3 { return ivec3(1, 2, 4); }
+            if i == 4 { return ivec3(2, 3, 4); }
+            return ivec3(3, 0, 4);
+        }
+    }";
+    let meshes_src = "kernel test.tlas_meshes@1 {
+        requires { field.write; }
+        struct TraceMesh {
+            vertex_offset: Int;
+            vertex_count: Int;
+            triangle_offset: Int;
+            triangle_count: Int;
+        }
+        output result: Rows<TraceMesh>;
+        compute {
+            let i = element();
+            if i == 0 { return TraceMesh { vertex_offset: 0, vertex_count: 4, triangle_offset: 0, triangle_count: 2 }; }
+            if i == 1 { return TraceMesh { vertex_offset: 4, vertex_count: 5, triangle_offset: 2, triangle_count: 4 }; }
+            return TraceMesh { vertex_offset: 0, vertex_count: 0, triangle_offset: 0, triangle_count: 0 };
+        }
+    }";
+    // Animated instances generated 100% on GPU each frame:
+    // mixes moving positive-det, negative-det mirrored, masked, hidden, empty-mesh,
+    // out-of-range mesh, and singular (zero-scale) rows!
+    let insts_src = "kernel test.tlas_insts@1 {
+        requires { field.write; }
+        param frame: Float = 0.0;
+        struct TraceInstance {
+            row0: Vec4;
+            row1: Vec4;
+            row2: Vec4;
+            mesh: Int;
+            custom: Int;
+            mask: Int;
+        }
+        output result: Rows<TraceInstance>;
+        compute {
+            let i = element();
+            let ang = frame * 0.45 + float(i) * 0.35;
+            let c = cos(ang);
+            let s = sin(ang);
+            let tx = (float(i % 4) - 1.5) * 1.4 + sin(frame + float(i)) * 0.3;
+            let ty = (float(i / 4) - 1.0) * 1.3 + cos(frame * 0.7 + float(i)) * 0.25;
+            let tz = 2.0 + float(i % 3) * 0.6;
+            if i == 8 {
+                // Hidden instance (mask == 0)
+                return TraceInstance {
+                    row0: vec4(1.0, 0.0, 0.0, 0.0),
+                    row1: vec4(0.0, 1.0, 0.0, 0.0),
+                    row2: vec4(0.0, 0.0, 1.0, 1.2),
+                    mesh: 0, custom: 88, mask: 0
+                };
+            }
+            if i == 9 {
+                // Singular matrix (zero scale)
+                return TraceInstance {
+                    row0: vec4(0.0, 0.0, 0.0, 0.0),
+                    row1: vec4(0.0, 0.0, 0.0, 0.0),
+                    row2: vec4(0.0, 0.0, 0.0, 1.5),
+                    mesh: 0, custom: 99, mask: 255
+                };
+            }
+            if i == 10 {
+                // Out-of-range mesh index
+                return TraceInstance {
+                    row0: vec4(1.0, 0.0, 0.0, 0.0),
+                    row1: vec4(0.0, 1.0, 0.0, 0.0),
+                    row2: vec4(0.0, 0.0, 1.0, 1.5),
+                    mesh: 7, custom: 100, mask: 255
+                };
+            }
+            if i == 11 {
+                // Empty mesh index (mesh 2 has 0 triangles)
+                return TraceInstance {
+                    row0: vec4(1.0, 0.0, 0.0, 0.0),
+                    row1: vec4(0.0, 1.0, 0.0, 0.0),
+                    row2: vec4(0.0, 0.0, 1.0, 1.5),
+                    mesh: 2, custom: 111, mask: 255
+                };
+            }
+            // Flip x-scale on odd instances to test negative-determinant winding flips!
+            let sx = if (i & 1) == 1 { -0.9 } else { 0.9 };
+            let m = if (i % 3) == 0 { 1 } else { 0 };
+            let mask_v = if i == 5 { 2 } else { 1 };
+            return TraceInstance {
+                row0: vec4(sx * c, -s * 0.9, 0.0, tx),
+                row1: vec4(sx * s,  c * 0.9, 0.0, ty),
+                row2: vec4(0.0, 0.0, 0.9, tz),
+                mesh: m,
+                custom: 1000 + i * 11,
+                mask: mask_v,
+            };
+        }
+    }";
+    // 600 rays (> COMPACT_RAY_THRESHOLD = 256), including dead rays (tmax <= tmin) to
+    // exercise 11-binding instanced active-ray stream compaction!
+    let rays_src = "kernel test.tlas_rays@1 {
+        requires { field.write; }
+        struct TraceRay {
+            origin: Vec3;
+            tmin: Float;
+            dir: Vec3;
+            tmax: Float;
+        }
+        output result: Rows<TraceRay>;
+        compute {
+            let i = element();
+            let ix = i % 30;
+            let iy = i / 30;
+            let u = (float(ix) + 0.5) / 30.0 * 6.0 - 3.0;
+            let v = (float(iy) + 0.5) / 20.0 * 4.5 - 2.25;
+            let dead = (i % 7) == 0;
+            return TraceRay {
+                origin: vec3(u, v, -1.0),
+                tmin: 0.01,
+                dir: vec3(0.0, 0.0, 1.0),
+                tmax: if dead { 0.0 } else { 20.0 },
+            };
+        }
+    }";
+
+    let make_runtime = |backend: Box<dyn Backend>| {
+        let mut rt = Runtime::with_backends(1 << 24, backend, None);
+        rt.set_small(0);
+        for src in [verts_src, tris_src, meshes_src, insts_src, rays_src] {
+            rt.load(compile(src).unwrap(), src).unwrap();
+        }
+        rt
+    };
+    let mut cpu_rt = make_runtime(Box::new(CpuBackend));
+    let mut hw_rt = make_runtime(Box::new(hw_gpu));
+    let mut lbvh_rt = make_runtime(Box::new(lbvh_gpu));
+
+    let id = |s: &str| NodeId(s.into());
+    let src_node = |n: &str| {
+        Binding::Now(Source::Node {
+            node: id(n),
+            port: "result".into(),
+        })
+    };
+    let graph = Graph {
+        name: "instanced_tlas_lbvh_test".into(),
+        externals: vec![],
+        texts: vec![],
+        params: vec![entelechy_graph::GraphParam {
+            name: "frame".into(),
+            ty: "Float".into(),
+            default: Value::Float(0.0),
+        }],
+        requirements: vec![],
+        times_params: vec![],
+        times_rows: vec![],
+        nodes: vec![
+            Node {
+                id: id("verts"),
+                kernel: "test.tlas_verts@1".parse().unwrap(),
+                inputs: BTreeMap::new(),
+                params: BTreeMap::new(),
+                domain: Some(DomainSpec::Literal(Domain::Rows(9))),
+                is_async: false,
+                awake: vec![],
+                at: None,
+            },
+            Node {
+                id: id("tris"),
+                kernel: "test.tlas_tris@1".parse().unwrap(),
+                inputs: BTreeMap::new(),
+                params: BTreeMap::new(),
+                domain: Some(DomainSpec::Literal(Domain::Rows(6))),
+                is_async: false,
+                awake: vec![],
+                at: None,
+            },
+            Node {
+                id: id("meshes"),
+                kernel: "test.tlas_meshes@1".parse().unwrap(),
+                inputs: BTreeMap::new(),
+                params: BTreeMap::new(),
+                domain: Some(DomainSpec::Literal(Domain::Rows(3))),
+                is_async: false,
+                awake: vec![],
+                at: None,
+            },
+            Node {
+                id: id("insts"),
+                kernel: "test.tlas_insts@1".parse().unwrap(),
+                inputs: BTreeMap::new(),
+                params: BTreeMap::from([(
+                    "frame".into(),
+                    entelechy_graph::ParamValue::Graph("frame".into()),
+                )]),
+                domain: Some(DomainSpec::Literal(Domain::Rows(12))),
+                is_async: false,
+                awake: vec![],
+                at: None,
+            },
+            Node {
+                id: id("rays"),
+                kernel: "test.tlas_rays@1".parse().unwrap(),
+                inputs: BTreeMap::new(),
+                params: BTreeMap::new(),
+                domain: Some(DomainSpec::Literal(Domain::Rows(600))),
+                is_async: false,
+                awake: vec![],
+                at: None,
+            },
+            Node {
+                id: id("hits"),
+                kernel: "native.trace@2".parse().unwrap(),
+                inputs: BTreeMap::from([
+                    ("rays".into(), src_node("rays")),
+                    ("vertices".into(), src_node("verts")),
+                    ("triangles".into(), src_node("tris")),
+                    ("meshes".into(), src_node("meshes")),
+                    ("instances".into(), src_node("insts")),
+                ]),
+                params: BTreeMap::from([
+                    (
+                        "flags".into(),
+                        entelechy_graph::ParamValue::Literal(Value::Int(0)),
+                    ),
+                    (
+                        "mask".into(),
+                        entelechy_graph::ParamValue::Literal(Value::Int(1)),
+                    ),
+                ]),
+                domain: Some(DomainSpec::Literal(Domain::Rows(600))),
+                is_async: false,
+                awake: vec![],
+                at: None,
+            },
+        ],
+        outputs: vec![(
+            "hits".into(),
+            Source::Node {
+                node: id("hits"),
+                port: "hits".into(),
+            },
+        )],
+        fallbacks: vec![],
+        placed: vec![],
+        repeated: vec![],
+    };
+
+    let mut cpu_eval = Evaluator::new();
+    let mut hw_eval = Evaluator::new();
+    let mut lbvh_eval = Evaluator::new();
+    let ext = BTreeMap::new();
+    let ctx = Context::default();
+
+    let mut total_hits_seen = 0usize;
+    let mut neg_det_hits_seen = 0usize;
+    for f in 0..5 {
+        let params = BTreeMap::from([("frame".into(), Value::Float(f as f32))]);
+        let c_rep = cpu_eval
+            .evaluate(&graph, &mut cpu_rt, &ext, &ctx, &params)
+            .unwrap();
+        let h_rep = hw_eval
+            .evaluate(&graph, &mut hw_rt, &ext, &ctx, &params)
+            .unwrap();
+        let l_rep = lbvh_eval
+            .evaluate(&graph, &mut lbvh_rt, &ext, &ctx, &params)
+            .unwrap();
+
+        // Full-GPU LBVH TLAS must keep verts, tris, AND animated instances 100% GPU-resident!
+        for name in ["verts", "tris", "insts"] {
+            let h = lbvh_eval.cached(&id(name), "result").unwrap();
+            assert!(
+                lbvh_rt.host().data(h).is_err(),
+                "GPU TLAS LBVH must never read `{name}` back to Host on frame {f}"
+            );
+        }
+
+        let c_words = cpu_rt.host().data(c_rep.output).unwrap().storage().to_vec();
+        hw_rt.materialize(h_rep.output).unwrap();
+        let h_words = hw_rt.host().data(h_rep.output).unwrap().storage().to_vec();
+        lbvh_rt.materialize(l_rep.output).unwrap();
+        let l_words = lbvh_rt
+            .host()
+            .data(l_rep.output)
+            .unwrap()
+            .storage()
+            .to_vec();
+
+        let hw = entelechy_rules::trace::HIT_WORDS;
+        for r in 0..600usize {
+            let c_tri = c_words[r * hw + 3] as i32;
+            let c_inst = c_words[r * hw + 4] as i32;
+            let c_cust = c_words[r * hw + 5];
+            let c_front = c_words[r * hw + 6];
+            let c_t = f32::from_bits(c_words[r * hw]);
+            if c_tri >= 0 {
+                total_hits_seen += 1;
+                if (c_inst & 1) == 1 {
+                    neg_det_hits_seen += 1;
+                }
+            }
+            for (tag, words) in [("hw_rt", &h_words), ("gpu_tlas_lbvh", &l_words)] {
+                let g_tri = words[r * hw + 3] as i32;
+                let g_inst = words[r * hw + 4] as i32;
+                let g_cust = words[r * hw + 5];
+                let g_front = words[r * hw + 6];
+                let g_t = f32::from_bits(words[r * hw]);
+                assert_eq!(
+                    (g_tri, g_inst, g_cust, g_front),
+                    (c_tri, c_inst, c_cust, c_front),
+                    "{tag} mismatch on frame={f} ray={r}: gpu=({g_tri},{g_inst},{g_cust},{g_front}) cpu=({c_tri},{c_inst},{c_cust},{c_front})"
+                );
+                if c_tri >= 0 {
+                    assert!(
+                        (g_t - c_t).abs() <= 1e-4,
+                        "{tag} t mismatch on frame={f} ray={r}: gpu={g_t} cpu={c_t}"
+                    );
+                }
+            }
+        }
+    }
+    assert!(
+        total_hits_seen > 200,
+        "expected meaningful ray hits across 5 animated frames, got {total_hits_seen}"
+    );
+    assert!(
+        neg_det_hits_seen > 50,
+        "expected negative-determinant mirrored instance hits, got {neg_det_hits_seen}"
+    );
+}
+
+#[test]
+fn hardware_shader_f16_and_packed_f16_storage_matches_cpu() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let fallback = GpuBackend::new().unwrap().without_shader_f16();
+
+    let map_src = "kernel test.f16_storage@1 {
+        requires { field.read; field.write; }
+        struct HalfPack { a: Float; b: Vec3; }
+        input f1: Rows<Float as f16>;
+        input f2: Rows<Vec2 as f16>;
+        input f3: Rows<Vec3 as f16>;
+        input f4: Rows<Vec4 as f16>;
+        input st: Rows<HalfPack as f16>;
+        output out1: Rows<Float as f16>;
+        output out2: Rows<Vec2 as f16>;
+        output out3: Rows<Vec3 as f16>;
+        output out4: Rows<Vec4 as f16>;
+        output out_st: Rows<HalfPack as f16>;
+        compute {
+            let i = element();
+            let a = sample(f1);
+            let b = sample(f2);
+            let c = sample(f3);
+            let d = sample(f4);
+            let s = sample(st);
+            let sb_y = sample(st).b.y;
+            return {
+                out1: a + sb_y * 0.25,
+                out2: vec2(b.y, a),
+                out3: vec3(c.z, c.x + 0.5, s.a),
+                out4: vec4(d.w, d.x, d.y, d.z),
+                out_st: HalfPack { a: b.x, b: vec3(s.b.z, s.b.x, c.y) },
+            };
+        }
+    }";
+    let module = compile(map_src).unwrap();
+
+    // Check emitted WGSL structure for both native SHADER_F16 and fallback pack2x16float.
+    let half = entelechy_gpu::wgsl::first_half(&module, entelechy_gpu::wgsl::Longs::Native);
+    let wgsl_native = entelechy_gpu::wgsl::emit_full_with_caps(
+        &module,
+        &[],
+        &[],
+        entelechy_gpu::wgsl::Longs::Native,
+        half,
+        true,
+        gpu.subgroups(),
+        true,
+    );
+    assert!(
+        wgsl_native.starts_with("enable f16;\n"),
+        "native f16 shader must start with enable f16:\n{wgsl_native}"
+    );
+    assert!(wgsl_native.contains("array<f16>"), "{wgsl_native}");
+    assert!(wgsl_native.contains("array<vec2<f16>>"), "{wgsl_native}");
+    assert!(wgsl_native.contains("array<vec4<f16>>"), "{wgsl_native}");
+    assert!(
+        !wgsl_native.contains("atomic<u32>"),
+        "native f16 Float/Vec3 outputs must not use atomic<u32>:\n{wgsl_native}"
+    );
+    assert!(!entelechy_gpu::wgsl::output_shares_words_for(
+        &module, 0, true
+    ));
+    assert!(!entelechy_gpu::wgsl::output_shares_words_for(
+        &module, 2, true
+    ));
+    assert!(entelechy_gpu::wgsl::output_shares_words_for(
+        &module, 0, false
+    ));
+    assert!(entelechy_gpu::wgsl::output_shares_words_for(
+        &module, 2, false
+    ));
+
+    let wgsl_fb = entelechy_gpu::wgsl::emit_full_with_caps(
+        &module,
+        &[],
+        &[],
+        entelechy_gpu::wgsl::Longs::Native,
+        half,
+        true,
+        fallback.subgroups(),
+        false,
+    );
+    assert!(!wgsl_fb.contains("enable f16;"), "{wgsl_fb}");
+    assert!(wgsl_fb.contains("unpack2x16float("), "{wgsl_fb}");
+    assert!(wgsl_fb.contains("pack2x16float("), "{wgsl_fb}");
+
+    // Edge-case float values: 0, -0, subnormal 2^-20, round-ties-to-even 1 + 2^-11,
+    // max finite 65504, negative values, +/-inf.
+    let vals: [f32; 17] = [
+        0.0,
+        -0.0,
+        1.0,
+        -1.0,
+        0.5,
+        -0.25,
+        2f32.powi(-20),
+        1.0 + 2f32.powi(-11),
+        65504.0,
+        -65504.0,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        0.1,
+        1.0 / 3.0,
+        123.5,
+        -42.75,
+        1e-9,
+    ];
+    let n = 17usize; // odd row count exercises unaligned tail halfwords on Float & Vec3!
+    let make_field = |scalars: usize, shift: usize| {
+        let schema = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float; scalars])
+            .with_encoding(entelechy_abi::Encoding::F16)
+            .unwrap();
+        let words: Vec<u32> = (0..(n * scalars))
+            .map(|k| vals[(k + shift) % vals.len()].to_bits())
+            .collect();
+        entelechy_abi::FieldData::from_values(schema, Domain::Rows(n as u32), &words).unwrap()
+    };
+
+    let run_backend = |backend: &dyn Backend| {
+        let mut host = Host::new(1 << 22);
+        let inputs = vec![
+            host.adopt(make_field(1, 0)).unwrap(),
+            host.adopt(make_field(2, 3)).unwrap(),
+            host.adopt(make_field(3, 5)).unwrap(),
+            host.adopt(make_field(4, 7)).unwrap(),
+            host.adopt(make_field(4, 11)).unwrap(),
+        ];
+        let inv = Invocation {
+            inputs,
+            params: vec![],
+            domain: Domain::Rows(n as u32),
+            context: Context::default(),
+        };
+        let prep = backend.prepare(&module).unwrap();
+        let outs = backend
+            .execute(
+                prep.as_ref(),
+                &module,
+                &inv,
+                &mut Scope::new(&mut host, all()),
+            )
+            .unwrap();
+        outs.into_iter()
+            .map(|h| {
+                let schema = host.schema(h).unwrap().clone();
+                let bytes = schema.storage_words(n) * 4;
+                if let Some(dev) = host.resident(h).unwrap() {
+                    let raw = backend.download(dev, bytes).unwrap();
+                    entelechy_abi::FieldData::from_storage(schema, Domain::Rows(n as u32), raw)
+                        .unwrap()
+                        .values()
+                        .into_owned()
+                } else {
+                    host.data(h).unwrap().values().into_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let cpu_outs = run_backend(&CpuBackend);
+    let gpu_outs = run_backend(&gpu);
+    let fb_outs = run_backend(&fallback);
+    for (k, ((c, g), f)) in cpu_outs.iter().zip(&gpu_outs).zip(&fb_outs).enumerate() {
+        assert_eq!(g, c, "native SHADER_F16 output {k} mismatched CPU");
+        assert_eq!(f, c, "fallback pack2x16float output {k} mismatched CPU");
+    }
+
+    // Also test scan memory read/write on `Rows<Vec3 as f16>` (6-byte stride).
+    let scan_src = "kernel test.f16_vec3_scan@1 {
+        requires { field.read; field.write; }
+        input ticks: Rows<Int>;
+        memory ram: Rows<Vec3 as f16>;
+        output result: Rows<Vec3 as f16>;
+        scan over ticks with acc = vec3(0.0, 0.0, 0.0) {
+            let i = index();
+            let prev = at(ram, (i + 3) % 11);
+            let next = vec3(prev.y + 0.5, prev.z - 0.25, prev.x * 0.5 + acc.x * 0.125);
+            put(ram, i % 11, next);
+            return at(ram, i % 11);
+        }
+    }";
+    let scan_mod = compile(scan_src).unwrap();
+    let run_scan = |backend: &dyn Backend| {
+        let mut host = Host::new(1 << 22);
+        let ticks = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]),
+                    Domain::Rows(23),
+                    vec![0u32; 23],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let ram_schema = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float; 3])
+            .with_encoding(entelechy_abi::Encoding::F16)
+            .unwrap();
+        let ram_init: Vec<u32> = (0..33)
+            .map(|k| ((k as f32 - 16.0) * 0.25).to_bits())
+            .collect();
+        let ram = host
+            .adopt(
+                entelechy_abi::FieldData::from_values(ram_schema, Domain::Rows(11), &ram_init)
+                    .unwrap(),
+            )
+            .unwrap();
+        let inv = Invocation {
+            inputs: vec![ticks, ram],
+            params: vec![],
+            domain: Domain::Rows(23),
+            context: Context::default(),
+        };
+        let prep = backend.prepare(&scan_mod).unwrap();
+        let outs = backend
+            .execute(
+                prep.as_ref(),
+                &scan_mod,
+                &inv,
+                &mut Scope::new(&mut host, all()),
+            )
+            .unwrap();
+        outs.into_iter()
+            .map(|h| {
+                let schema = host.schema(h).unwrap().clone();
+                let count = host.domain(h).unwrap().count();
+                let bytes = schema.storage_words(count) * 4;
+                if let Some(dev) = host.resident(h).unwrap() {
+                    let raw = backend.download(dev, bytes).unwrap();
+                    entelechy_abi::FieldData::from_storage(schema, Domain::Rows(count as u32), raw)
+                        .unwrap()
+                        .values()
+                        .into_owned()
+                } else {
+                    host.data(h).unwrap().values().into_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let cpu_scan = run_scan(&CpuBackend);
+    let gpu_scan = run_scan(&gpu);
+    let fb_scan = run_scan(&fallback);
+    assert_eq!(
+        gpu_scan, cpu_scan,
+        "native SHADER_F16 Vec3 scan mismatched CPU"
+    );
+    assert_eq!(fb_scan, cpu_scan, "fallback Vec3 scan mismatched CPU");
+}

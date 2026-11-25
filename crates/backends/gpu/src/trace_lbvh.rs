@@ -49,9 +49,9 @@ struct LbvhSetup {
     num_blocks: u32,
     blocks_x: u32,
     shift: u32,
-    pad0: u32,
-    pad1: u32,
-    pad2: u32,
+    v_offset: u32,
+    t_offset: u32,
+    mesh_count: u32,
 };
 
 fn is_finite_bits(w: u32) -> bool {
@@ -121,10 +121,10 @@ fn prim_bounds(
         return;
     }
     let max_v = i32(setup.v_count) - 1i;
-    let tb = t * 3u;
-    let ia = u32(clamp(bitcast<i32>(triangles[tb]), 0i, max_v));
-    let ib = u32(clamp(bitcast<i32>(triangles[tb + 1u]), 0i, max_v));
-    let ic = u32(clamp(bitcast<i32>(triangles[tb + 2u]), 0i, max_v));
+    let tb = (setup.t_offset + t) * 3u;
+    let ia = setup.v_offset + u32(clamp(bitcast<i32>(triangles[tb]), 0i, max_v));
+    let ib = setup.v_offset + u32(clamp(bitcast<i32>(triangles[tb + 1u]), 0i, max_v));
+    let ic = setup.v_offset + u32(clamp(bitcast<i32>(triangles[tb + 2u]), 0i, max_v));
     var ok = finite_vert(ia) && finite_vert(ib) && finite_vert(ic);
     var c = vec3<f32>(0.0, 0.0, 0.0);
     if ok {
@@ -377,9 +377,9 @@ fn hierarchy(
     let idx = gid.x + gid.y * (nwg.x * 64u);
     let n_u = setup.t_count;
     if idx == 0u {
-        mesh_desc[0u] = 0u;
+        mesh_desc[0u] = setup.v_offset;
         mesh_desc[1u] = setup.v_count;
-        mesh_desc[2u] = 0u;
+        mesh_desc[2u] = setup.t_offset;
         mesh_desc[3u] = 0u;
         mesh_desc[4u] = 0u;
         mesh_desc[5u] = select(2u * n_u - 1u, n_u, n_u <= 1u);
@@ -527,12 +527,12 @@ fn refit_leaves(
     }
     let t = ordered[leaf_i];
     let max_v = i32(setup.v_count) - 1i;
-    let tb = t * 3u;
-    let ia = u32(clamp(bitcast<i32>(triangles[tb]), 0i, max_v));
-    let ib = u32(clamp(bitcast<i32>(triangles[tb + 1u]), 0i, max_v));
-    let ic = u32(clamp(bitcast<i32>(triangles[tb + 2u]), 0i, max_v));
-    var bmin = vec3<f32>(1e30, 1e30, 1e30);
-    var bmax = vec3<f32>(-1e30, -1e30, -1e30);
+    let tb = (setup.t_offset + t) * 3u;
+    let ia = setup.v_offset + u32(clamp(bitcast<i32>(triangles[tb]), 0i, max_v));
+    let ib = setup.v_offset + u32(clamp(bitcast<i32>(triangles[tb + 1u]), 0i, max_v));
+    let ic = setup.v_offset + u32(clamp(bitcast<i32>(triangles[tb + 2u]), 0i, max_v));
+    var bmin = vec3<f32>(3.4e38, 3.4e38, 3.4e38);
+    var bmax = vec3<f32>(-3.4e38, -3.4e38, -3.4e38);
     if finite_vert(ia) && finite_vert(ib) && finite_vert(ic) {
         let v0 = load_vert(ia);
         let v1 = load_vert(ib);
@@ -691,6 +691,260 @@ fn refit_upper(@builtin(local_invocation_index) local: u32) {
 }
 ";
 
+const LBVH_TLAS_PREP_WGSL: &str = "
+@group(0) @binding(0) var<uniform> setup: LbvhSetup;
+@group(0) @binding(1) var<storage, read> instances: array<u32>;
+@group(0) @binding(2) var<storage, read> mesh_descs: array<u32>;
+@group(0) @binding(3) var<storage, read> blas_nodes: array<u32>;
+@group(0) @binding(4) var<storage, read_write> inst_descs: array<u32>;
+@group(0) @binding(5) var<storage, read_write> centroids: array<u32>;
+@group(0) @binding(6) var<storage, read_write> lbvh_meta: array<atomic<u32>>;
+
+@compute @workgroup_size(1, 1, 1)
+fn tlas_clear_meta() {
+    let inf_pos = float_to_sortable_u32(3.4e38);
+    let inf_neg = float_to_sortable_u32(-3.4e38);
+    atomicStore(&lbvh_meta[0u], inf_pos);
+    atomicStore(&lbvh_meta[1u], inf_pos);
+    atomicStore(&lbvh_meta[2u], inf_pos);
+    atomicStore(&lbvh_meta[3u], inf_neg);
+    atomicStore(&lbvh_meta[4u], inf_neg);
+    atomicStore(&lbvh_meta[5u], inf_neg);
+    atomicStore(&lbvh_meta[6u], 0u);
+    atomicStore(&lbvh_meta[7u], 0u);
+    atomicStore(&lbvh_meta[8u], 0u);
+}
+
+@compute @workgroup_size(64, 1, 1)
+fn tlas_prep(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+) {
+    let i = gid.x + gid.y * (nwg.x * 64u);
+    if i >= setup.t_count {
+        return;
+    }
+    let sb = i * 15u;
+    let db = i * 24u;
+    let cb = i * 4u;
+
+    let mesh_i = bitcast<i32>(instances[sb + 12u]);
+    let custom = instances[sb + 13u];
+    let imask = bitcast<i32>(instances[sb + 14u]) & 255i;
+
+    var ok = imask != 0i && mesh_i >= 0i && u32(mesh_i) < setup.mesh_count;
+    var finite_m = ok;
+    if ok {
+        for (var k = 0u; k < 12u; k += 1u) {
+            if !is_finite_bits(instances[sb + k]) {
+                finite_m = false;
+            }
+        }
+    }
+    ok = ok && finite_m;
+
+    var lmin = vec3<f32>(3.4e38, 3.4e38, 3.4e38);
+    var lmax = vec3<f32>(-3.4e38, -3.4e38, -3.4e38);
+    if ok {
+        let mb = u32(mesh_i) * 8u;
+        let node_base = mesh_descs[mb + 3u];
+        let node_cnt = mesh_descs[mb + 5u];
+        if node_cnt == 0u {
+            ok = false;
+        } else {
+            let rb = node_base * 8u;
+            lmin = vec3<f32>(
+                bitcast<f32>(blas_nodes[rb]),
+                bitcast<f32>(blas_nodes[rb + 1u]),
+                bitcast<f32>(blas_nodes[rb + 2u]),
+            );
+            lmax = vec3<f32>(
+                bitcast<f32>(blas_nodes[rb + 4u]),
+                bitcast<f32>(blas_nodes[rb + 5u]),
+                bitcast<f32>(blas_nodes[rb + 6u]),
+            );
+            if lmin.x > lmax.x {
+                ok = false;
+            }
+        }
+    }
+
+    if ok {
+        let m00 = bitcast<f32>(instances[sb]);
+        let m01 = bitcast<f32>(instances[sb + 1u]);
+        let m02 = bitcast<f32>(instances[sb + 2u]);
+        let m03 = bitcast<f32>(instances[sb + 3u]);
+        let m10 = bitcast<f32>(instances[sb + 4u]);
+        let m11 = bitcast<f32>(instances[sb + 5u]);
+        let m12 = bitcast<f32>(instances[sb + 6u]);
+        let m13 = bitcast<f32>(instances[sb + 7u]);
+        let m20 = bitcast<f32>(instances[sb + 8u]);
+        let m21 = bitcast<f32>(instances[sb + 9u]);
+        let m22 = bitcast<f32>(instances[sb + 10u]);
+        let m23 = bitcast<f32>(instances[sb + 11u]);
+
+        let c00 = m11 * m22 - m12 * m21;
+        let c01 = m02 * m21 - m01 * m22;
+        let c02 = m01 * m12 - m02 * m11;
+        let det = m00 * c00 + m10 * c01 + m20 * c02;
+        if is_finite_bits(bitcast<u32>(det)) && abs(det) >= 1e-20 {
+            let inv_det = 1.0 / det;
+            let i00 = c00 * inv_det;
+            let i01 = c01 * inv_det;
+            let i02 = c02 * inv_det;
+            let i10 = (m12 * m20 - m10 * m22) * inv_det;
+            let i11 = (m00 * m22 - m02 * m20) * inv_det;
+            let i12 = (m02 * m10 - m00 * m12) * inv_det;
+            let i20 = (m10 * m21 - m11 * m20) * inv_det;
+            let i21 = (m01 * m20 - m00 * m21) * inv_det;
+            let i22 = (m00 * m11 - m01 * m10) * inv_det;
+            let i03 = -(i00 * m03 + i01 * m13 + i02 * m23);
+            let i13 = -(i10 * m03 + i11 * m13 + i12 * m23);
+            let i23 = -(i20 * m03 + i21 * m13 + i22 * m23);
+
+            let inv_ok = is_finite_bits(bitcast<u32>(i00))
+                && is_finite_bits(bitcast<u32>(i01))
+                && is_finite_bits(bitcast<u32>(i02))
+                && is_finite_bits(bitcast<u32>(i03))
+                && is_finite_bits(bitcast<u32>(i10))
+                && is_finite_bits(bitcast<u32>(i11))
+                && is_finite_bits(bitcast<u32>(i12))
+                && is_finite_bits(bitcast<u32>(i13))
+                && is_finite_bits(bitcast<u32>(i20))
+                && is_finite_bits(bitcast<u32>(i21))
+                && is_finite_bits(bitcast<u32>(i22))
+                && is_finite_bits(bitcast<u32>(i23));
+
+            let x00 = m00 * lmin.x; let x01 = m00 * lmax.x;
+            let y00 = m01 * lmin.y; let y01 = m01 * lmax.y;
+            let z00 = m02 * lmin.z; let z01 = m02 * lmax.z;
+            let x10 = m10 * lmin.x; let x11 = m10 * lmax.x;
+            let y10 = m11 * lmin.y; let y11 = m11 * lmax.y;
+            let z10 = m12 * lmin.z; let z11 = m12 * lmax.z;
+            let x20 = m20 * lmin.x; let x21 = m20 * lmax.x;
+            let y20 = m21 * lmin.y; let y21 = m21 * lmax.y;
+            let z20 = m22 * lmin.z; let z21 = m22 * lmax.z;
+            let wmin = vec3<f32>(
+                m03 + min(x00, x01) + min(y00, y01) + min(z00, z01),
+                m13 + min(x10, x11) + min(y10, y11) + min(z10, z11),
+                m23 + min(x20, x21) + min(y20, y21) + min(z20, z21),
+            );
+            let wmax = vec3<f32>(
+                m03 + max(x00, x01) + max(y00, y01) + max(z00, z01),
+                m13 + max(x10, x11) + max(y10, y11) + max(z10, z11),
+                m23 + max(x20, x21) + max(y20, y21) + max(z20, z21),
+            );
+            let c = (wmin + wmax) * 0.5;
+            let bounds_ok = inv_ok
+                && is_finite_bits(bitcast<u32>(wmin.x))
+                && is_finite_bits(bitcast<u32>(wmin.y))
+                && is_finite_bits(bitcast<u32>(wmin.z))
+                && is_finite_bits(bitcast<u32>(wmax.x))
+                && is_finite_bits(bitcast<u32>(wmax.y))
+                && is_finite_bits(bitcast<u32>(wmax.z))
+                && is_finite_bits(bitcast<u32>(c.x))
+                && is_finite_bits(bitcast<u32>(c.y))
+                && is_finite_bits(bitcast<u32>(c.z));
+
+            if bounds_ok {
+                inst_descs[db] = bitcast<u32>(i00);
+                inst_descs[db + 1u] = bitcast<u32>(i01);
+                inst_descs[db + 2u] = bitcast<u32>(i02);
+                inst_descs[db + 3u] = bitcast<u32>(i03);
+                inst_descs[db + 4u] = bitcast<u32>(i10);
+                inst_descs[db + 5u] = bitcast<u32>(i11);
+                inst_descs[db + 6u] = bitcast<u32>(i12);
+                inst_descs[db + 7u] = bitcast<u32>(i13);
+                inst_descs[db + 8u] = bitcast<u32>(i20);
+                inst_descs[db + 9u] = bitcast<u32>(i21);
+                inst_descs[db + 10u] = bitcast<u32>(i22);
+                inst_descs[db + 11u] = bitcast<u32>(i23);
+                inst_descs[db + 12u] = bitcast<u32>(wmin.x);
+                inst_descs[db + 13u] = bitcast<u32>(wmin.y);
+                inst_descs[db + 14u] = bitcast<u32>(wmin.z);
+                inst_descs[db + 15u] = i;
+                inst_descs[db + 16u] = bitcast<u32>(wmax.x);
+                inst_descs[db + 17u] = bitcast<u32>(wmax.y);
+                inst_descs[db + 18u] = bitcast<u32>(wmax.z);
+                inst_descs[db + 19u] = u32(mesh_i);
+                inst_descs[db + 20u] = custom;
+                inst_descs[db + 21u] = u32(imask);
+                inst_descs[db + 22u] = select(0u, 1u, det < 0.0);
+                inst_descs[db + 23u] = 0u;
+
+                centroids[cb] = bitcast<u32>(c.x);
+                centroids[cb + 1u] = bitcast<u32>(c.y);
+                centroids[cb + 2u] = bitcast<u32>(c.z);
+                centroids[cb + 3u] = 1u;
+
+                let sx = float_to_sortable_u32(c.x);
+                let sy = float_to_sortable_u32(c.y);
+                let sz = float_to_sortable_u32(c.z);
+                atomicMin(&lbvh_meta[0u], sx);
+                atomicMin(&lbvh_meta[1u], sy);
+                atomicMin(&lbvh_meta[2u], sz);
+                atomicMax(&lbvh_meta[3u], sx);
+                atomicMax(&lbvh_meta[4u], sy);
+                atomicMax(&lbvh_meta[5u], sz);
+                atomicAdd(&lbvh_meta[6u], 1u);
+                return;
+            }
+        }
+    }
+
+    // Invalid, hidden, out-of-range, empty-mesh, or singular instance:
+    // store empty inverted AABB and mask = 0 so slab_hit and mask checks skip it.
+    let inf_pos = bitcast<u32>(3.4e38);
+    let inf_neg = bitcast<u32>(-3.4e38);
+    inst_descs[db + 12u] = inf_pos;
+    inst_descs[db + 13u] = inf_pos;
+    inst_descs[db + 14u] = inf_pos;
+    inst_descs[db + 15u] = i;
+    inst_descs[db + 16u] = inf_neg;
+    inst_descs[db + 17u] = inf_neg;
+    inst_descs[db + 18u] = inf_neg;
+    inst_descs[db + 19u] = 0u;
+    inst_descs[db + 20u] = 0u;
+    inst_descs[db + 21u] = 0u;
+    inst_descs[db + 22u] = 0u;
+    inst_descs[db + 23u] = 0u;
+    centroids[cb] = 0u;
+    centroids[cb + 1u] = 0u;
+    centroids[cb + 2u] = 0u;
+    centroids[cb + 3u] = 0u;
+}
+";
+
+const LBVH_TLAS_LEAVES_WGSL: &str = "
+@group(0) @binding(0) var<uniform> setup: LbvhSetup;
+@group(0) @binding(1) var<storage, read> inst_descs: array<u32>;
+@group(0) @binding(2) var<storage, read> ordered: array<u32>;
+@group(0) @binding(3) var<storage, read_write> tlas_nodes: array<u32>;
+
+@compute @workgroup_size(64, 1, 1)
+fn tlas_refit_leaves(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+) {
+    let leaf_i = gid.x + gid.y * (nwg.x * 64u);
+    if leaf_i >= setup.t_count {
+        return;
+    }
+    let inst_idx = ordered[leaf_i];
+    let ib = inst_idx * 24u;
+    let num_internal = select(0u, setup.t_count - 1u, setup.t_count >= 2u);
+    let nb = (num_internal + leaf_i) * 8u;
+    tlas_nodes[nb] = inst_descs[ib + 12u];
+    tlas_nodes[nb + 1u] = inst_descs[ib + 13u];
+    tlas_nodes[nb + 2u] = inst_descs[ib + 14u];
+    tlas_nodes[nb + 3u] = leaf_i;
+    tlas_nodes[nb + 4u] = inst_descs[ib + 16u];
+    tlas_nodes[nb + 5u] = inst_descs[ib + 17u];
+    tlas_nodes[nb + 6u] = inst_descs[ib + 18u];
+    tlas_nodes[nb + 7u] = 1u;
+}
+";
+
 fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -739,6 +993,11 @@ pub(crate) struct LbvhPipelines {
     refit_tree_layout: wgpu::BindGroupLayout,
     refit_tier1: wgpu::ComputePipeline,
     refit_upper: wgpu::ComputePipeline,
+    tlas_prep_layout: wgpu::BindGroupLayout,
+    tlas_clear_meta: wgpu::ComputePipeline,
+    tlas_prep: wgpu::ComputePipeline,
+    tlas_leaves_layout: wgpu::BindGroupLayout,
+    tlas_refit_leaves: wgpu::ComputePipeline,
 }
 
 impl LbvhPipelines {
@@ -893,6 +1152,36 @@ impl LbvhPipelines {
         let refit_upper = rt_p.pop().expect("refit_upper");
         let refit_tier1 = rt_p.pop().expect("refit_tier1");
 
+        let (tlas_prep_layout, mut tp_p) = make(
+            "entelechy lbvh tlas prep",
+            LBVH_TLAS_PREP_WGSL,
+            &[
+                uniform_entry(0),
+                storage_entry(1, true),
+                storage_entry(2, true),
+                storage_entry(3, true),
+                storage_entry(4, false),
+                storage_entry(5, false),
+                storage_entry(6, false),
+            ],
+            &["tlas_clear_meta", "tlas_prep"],
+        );
+        let tlas_prep = tp_p.pop().expect("tlas_prep");
+        let tlas_clear_meta = tp_p.pop().expect("tlas_clear_meta");
+
+        let (tlas_leaves_layout, mut tl_p) = make(
+            "entelechy lbvh tlas leaves",
+            LBVH_TLAS_LEAVES_WGSL,
+            &[
+                uniform_entry(0),
+                storage_entry(1, true),
+                storage_entry(2, true),
+                storage_entry(3, false),
+            ],
+            &["tlas_refit_leaves"],
+        );
+        let tlas_refit_leaves = tl_p.pop().expect("tlas_refit_leaves");
+
         Self {
             bounds_layout,
             clear_meta,
@@ -914,6 +1203,11 @@ impl LbvhPipelines {
             refit_tree_layout,
             refit_tier1,
             refit_upper,
+            tlas_prep_layout,
+            tlas_clear_meta,
+            tlas_prep,
+            tlas_leaves_layout,
+            tlas_refit_leaves,
         }
     }
 }
@@ -954,14 +1248,20 @@ fn alloc_storage(
     })
 }
 
-pub(crate) fn encode_setup(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn encode_setup_slice(
+    v_offset: u32,
     v_count: u32,
+    t_offset: u32,
     t_count: u32,
+    mesh_count: u32,
     num_blocks: u32,
     blocks_x: u32,
     shift: u32,
 ) -> [u8; 32] {
-    let words = [v_count, t_count, num_blocks, blocks_x, shift, 0, 0, 0];
+    let words = [
+        v_count, t_count, num_blocks, blocks_x, shift, v_offset, t_offset, mesh_count,
+    ];
     let mut bytes = [0u8; 32];
     for (slot, w) in bytes.chunks_exact_mut(4).zip(words) {
         slot.copy_from_slice(&w.to_le_bytes());
@@ -970,17 +1270,56 @@ pub(crate) fn encode_setup(
 }
 
 /// Returns the 8 uniform payloads (`shift = 0, 4, ..., 28`) required by
-/// [`GpuLbvhMesh::encode_full_build`] so callers can allocate them atomically
-/// from the batch uniform arena before opening the command encoder.
+/// [`GpuLbvhMesh::encode_full_build`] for a single whole mesh.
 pub(crate) fn full_build_uniform_payloads(v_count: u32, t_count: u32) -> [[u8; 32]; 8] {
+    full_build_uniform_payloads_slice(0, v_count, 0, t_count)
+}
+
+/// Returns the 8 uniform payloads required to build an LBVH for a sub-slice of
+/// shared `vertices`/`triangles` buffers (zero CPU geometry readback).
+pub(crate) fn full_build_uniform_payloads_slice(
+    v_offset: u32,
+    v_count: u32,
+    t_offset: u32,
+    t_count: u32,
+) -> [[u8; 32]; 8] {
     let num_blocks = t_count.div_ceil(RADIX_BLOCK).max(1);
     let blocks_x = num_blocks.clamp(1, MOST_GROUPS);
-    std::array::from_fn(|p| encode_setup(v_count, t_count, num_blocks, blocks_x, (p as u32) * 4))
+    std::array::from_fn(|p| {
+        encode_setup_slice(
+            v_offset,
+            v_count,
+            t_offset,
+            t_count,
+            0,
+            num_blocks,
+            blocks_x,
+            (p as u32) * 4,
+        )
+    })
+}
+
+/// Returns the 8 uniform payloads required by [`GpuLbvhTlas::encode_build`].
+pub(crate) fn full_build_uniform_payloads_tlas(mesh_count: u32, inst_count: u32) -> [[u8; 32]; 8] {
+    let num_blocks = inst_count.div_ceil(RADIX_BLOCK).max(1);
+    let blocks_x = num_blocks.clamp(1, MOST_GROUPS);
+    std::array::from_fn(|p| {
+        encode_setup_slice(
+            0,
+            0,
+            0,
+            inst_count,
+            mesh_count,
+            num_blocks,
+            blocks_x,
+            (p as u32) * 4,
+        )
+    })
 }
 
 /// Returns the single uniform payload required by [`GpuLbvhMesh::encode_refit`].
 pub(crate) fn refit_uniform_payload(v_count: u32, t_count: u32) -> [u8; 32] {
-    encode_setup(v_count, t_count, 1, 1, 0)
+    encode_setup_slice(0, v_count, 0, t_count, 0, 1, 1, 0)
 }
 
 impl GpuLbvhMesh {
@@ -1476,5 +1815,571 @@ impl GpuLbvhMesh {
         }
         self.built_verts_id = verts_id;
         self.last_eval = eval_now;
+    }
+
+    /// Builds a single mesh sub-slice (`v_offset..v_offset+v_count`,
+    /// `t_offset..t_offset+t_count`) entirely on GPU from pooled scratch
+    /// buffers and copies its flat nodes and ordered triangle indices directly
+    /// into packed multi-mesh `(dst_nodes, dst_ordered)` buffers inside
+    /// `encoder` (zero CPU vertex or triangle readback).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn encode_slice_into(
+        device: &wgpu::Device,
+        spare: &crate::pool::Spare,
+        pipelines: &LbvhPipelines,
+        encoder: &mut wgpu::CommandEncoder,
+        verts_buf: &wgpu::Buffer,
+        tris_buf: &wgpu::Buffer,
+        t_count: u32,
+        node_base: u32,
+        ord_base: u32,
+        dst_nodes: &wgpu::Buffer,
+        dst_ordered: &wgpu::Buffer,
+        shift_uniforms: &[crate::batch::UniformSlice],
+        keep_buffers: &mut Vec<wgpu::Buffer>,
+        timing_set: Option<&crate::timing::Timing>,
+        opened_ts: &mut bool,
+    ) {
+        let t = u64::from(t_count.max(1));
+        let node_cap = if t_count <= 1 { 1 } else { 2 * t - 1 };
+        let take = |words: u64, extra: wgpu::BufferUsages| {
+            spare.take(
+                device,
+                (words.max(4) * 4).div_ceil(16) * 16,
+                wgpu::BufferUsages::STORAGE | extra,
+            )
+        };
+        let mut scratch_mesh = Self {
+            nodes: take(node_cap * 8, wgpu::BufferUsages::COPY_SRC),
+            ordered: take(t, wgpu::BufferUsages::COPY_SRC),
+            mesh_desc: take(8, wgpu::BufferUsages::empty()),
+            t_count,
+            sub_sizes: take(t, wgpu::BufferUsages::empty()),
+            tier1_roots: take(t, wgpu::BufferUsages::empty()),
+            upper_nodes: take(t, wgpu::BufferUsages::empty()),
+            ready: take(t, wgpu::BufferUsages::empty()),
+            pending: take(t, wgpu::BufferUsages::empty()),
+            meta: take(16, wgpu::BufferUsages::empty()),
+            indirect_args: take(8, wgpu::BufferUsages::INDIRECT),
+            built_verts_id: 0,
+            refits_since_build: 0,
+            last_eval: 0,
+        };
+        scratch_mesh.encode_full_build(
+            device,
+            spare,
+            pipelines,
+            encoder,
+            verts_buf,
+            tris_buf,
+            shift_uniforms,
+            0,
+            0,
+            keep_buffers,
+            timing_set,
+            opened_ts,
+        );
+        encoder.copy_buffer_to_buffer(
+            &scratch_mesh.nodes,
+            0,
+            dst_nodes,
+            u64::from(node_base) * 32,
+            node_cap * 32,
+        );
+        encoder.copy_buffer_to_buffer(
+            &scratch_mesh.ordered,
+            0,
+            dst_ordered,
+            u64::from(ord_base) * 4,
+            u64::from(t_count) * 4,
+        );
+        keep_buffers.extend([
+            scratch_mesh.nodes,
+            scratch_mesh.ordered,
+            scratch_mesh.mesh_desc,
+            scratch_mesh.sub_sizes,
+            scratch_mesh.tier1_roots,
+            scratch_mesh.upper_nodes,
+            scratch_mesh.ready,
+            scratch_mesh.pending,
+            scratch_mesh.meta,
+            scratch_mesh.indirect_args,
+        ]);
+    }
+}
+
+/// Persistent GPU-resident Top-Level Acceleration Structure (TLAS) LBVH for
+/// `native.trace@2`, built 100% on GPU from device-resident `instances`,
+/// `mesh_descs`, and `blas_nodes` with zero CPU readback.
+#[derive(Clone)]
+pub(crate) struct GpuLbvhTlas {
+    pub(crate) nodes: wgpu::Buffer,
+    pub(crate) ordered: wgpu::Buffer,
+    pub(crate) inst_descs: wgpu::Buffer,
+    pub(crate) inst_count: u32,
+    dummy_desc: wgpu::Buffer,
+    sub_sizes: wgpu::Buffer,
+    tier1_roots: wgpu::Buffer,
+    upper_nodes: wgpu::Buffer,
+    ready: wgpu::Buffer,
+    pending: wgpu::Buffer,
+    meta: wgpu::Buffer,
+    indirect_args: wgpu::Buffer,
+    pub(crate) built_insts_id: u64,
+    pub(crate) last_eval: u64,
+}
+
+impl GpuLbvhTlas {
+    /// Allocates persistent GPU TLAS LBVH buffers sized for `inst_count` instances.
+    pub(crate) fn allocate(device: &wgpu::Device, inst_count: u32, eval_now: u64) -> Self {
+        let n = u64::from(inst_count.max(1));
+        let node_cap = if inst_count <= 1 { 1 } else { 2 * n - 1 };
+        Self {
+            nodes: alloc_storage(
+                device,
+                "entelechy lbvh tlas nodes",
+                node_cap * 8,
+                wgpu::BufferUsages::empty(),
+            ),
+            ordered: alloc_storage(
+                device,
+                "entelechy lbvh tlas ordered",
+                n,
+                wgpu::BufferUsages::empty(),
+            ),
+            inst_descs: alloc_storage(
+                device,
+                "entelechy lbvh tlas inst_descs",
+                n * 24,
+                wgpu::BufferUsages::empty(),
+            ),
+            inst_count,
+            dummy_desc: alloc_storage(
+                device,
+                "entelechy lbvh tlas dummy_desc",
+                8,
+                wgpu::BufferUsages::empty(),
+            ),
+            sub_sizes: alloc_storage(
+                device,
+                "entelechy lbvh tlas sub_sizes",
+                n,
+                wgpu::BufferUsages::empty(),
+            ),
+            tier1_roots: alloc_storage(
+                device,
+                "entelechy lbvh tlas tier1",
+                n,
+                wgpu::BufferUsages::empty(),
+            ),
+            upper_nodes: alloc_storage(
+                device,
+                "entelechy lbvh tlas upper",
+                n,
+                wgpu::BufferUsages::empty(),
+            ),
+            ready: alloc_storage(
+                device,
+                "entelechy lbvh tlas ready",
+                n,
+                wgpu::BufferUsages::empty(),
+            ),
+            pending: alloc_storage(
+                device,
+                "entelechy lbvh tlas pending",
+                n,
+                wgpu::BufferUsages::empty(),
+            ),
+            meta: alloc_storage(
+                device,
+                "entelechy lbvh tlas meta",
+                16,
+                wgpu::BufferUsages::empty(),
+            ),
+            indirect_args: alloc_storage(
+                device,
+                "entelechy lbvh tlas indirect",
+                8,
+                wgpu::BufferUsages::INDIRECT,
+            ),
+            built_insts_id: 0,
+            last_eval: eval_now,
+        }
+    }
+
+    /// Encodes a complete zero-readback GPU TLAS build (`tlas_prep -> morton ->
+    /// 8-pass radix -> Karras hierarchy -> tier classification -> 2-tier AABB
+    /// refit`) directly into `encoder`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn encode_build(
+        &mut self,
+        device: &wgpu::Device,
+        spare: &crate::pool::Spare,
+        pipelines: &LbvhPipelines,
+        encoder: &mut wgpu::CommandEncoder,
+        instances_buf: &wgpu::Buffer,
+        mesh_descs_buf: &wgpu::Buffer,
+        blas_nodes_buf: &wgpu::Buffer,
+        shift_uniforms: &[crate::batch::UniformSlice],
+        insts_id: u64,
+        eval_now: u64,
+        keep_buffers: &mut Vec<wgpu::Buffer>,
+        timing_set: Option<&crate::timing::Timing>,
+        opened_ts: &mut bool,
+    ) {
+        let i_count = self.inst_count;
+        let num_blocks = i_count.div_ceil(RADIX_BLOCK).max(1);
+        let blocks_x = num_blocks.clamp(1, MOST_GROUPS);
+        let blocks_y = num_blocks.div_ceil(blocks_x).max(1);
+
+        let scratch = |words: u64| {
+            spare.take(
+                device,
+                (words.max(4) * 4).div_ceil(16) * 16,
+                wgpu::BufferUsages::STORAGE,
+            )
+        };
+        let n = u64::from(i_count.max(1));
+        let centroids = scratch(n * 4);
+        let keys_a = scratch(n);
+        let keys_b = scratch(n);
+        let vals_b = scratch(n);
+        let block_hist = scratch(u64::from(num_blocks) * 16);
+        let bucket_buf = scratch(32);
+        let parents = scratch(2 * n);
+
+        let base_u = &shift_uniforms[0];
+
+        let prep_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("entelechy lbvh tlas prep"),
+            layout: &pipelines.tlas_prep_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: base_u.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: instances_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: mesh_descs_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: blas_nodes_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.inst_descs.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: centroids.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: self.meta.as_entire_binding(),
+                },
+            ],
+        });
+        let morton_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("entelechy lbvh tlas morton"),
+            layout: &pipelines.morton_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: base_u.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: centroids.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.meta.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: keys_a.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.ordered.as_entire_binding(),
+                },
+            ],
+        });
+        let mut radix_bgs = Vec::with_capacity(RADIX_PASSES as usize);
+        if i_count > 1 {
+            for (p, su) in shift_uniforms.iter().enumerate() {
+                let even = p % 2 == 0;
+                let (kin, vin, kout, vout) = if even {
+                    (&keys_a, &self.ordered, &keys_b, &vals_b)
+                } else {
+                    (&keys_b, &vals_b, &keys_a, &self.ordered)
+                };
+                radix_bgs.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("entelechy lbvh tlas radix"),
+                    layout: &pipelines.radix_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: su.binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: kin.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: vin.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: kout.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: vout.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: block_hist.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 6,
+                            resource: bucket_buf.as_entire_binding(),
+                        },
+                    ],
+                }));
+            }
+        }
+        let hier_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("entelechy lbvh tlas hierarchy"),
+            layout: &pipelines.hierarchy_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: base_u.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: keys_a.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.nodes.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: parents.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.sub_sizes.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: self.dummy_desc.as_entire_binding(),
+                },
+            ],
+        });
+        let tiers_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("entelechy lbvh tlas tiers"),
+            layout: &pipelines.tiers_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: base_u.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: parents.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.sub_sizes.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.tier1_roots.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.upper_nodes.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: self.meta.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: self.indirect_args.as_entire_binding(),
+                },
+            ],
+        });
+        let leaves_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("entelechy lbvh tlas leaves"),
+            layout: &pipelines.tlas_leaves_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: base_u.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.inst_descs.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.ordered.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.nodes.as_entire_binding(),
+                },
+            ],
+        });
+        let tier1_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("entelechy lbvh tlas tier1"),
+            layout: &pipelines.refit_tree_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: base_u.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.tier1_roots.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.sub_sizes.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.nodes.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.ready.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: self.pending.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: self.meta.as_entire_binding(),
+                },
+            ],
+        });
+        let upper_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("entelechy lbvh tlas upper"),
+            layout: &pipelines.refit_tree_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: base_u.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.upper_nodes.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.sub_sizes.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.nodes.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.ready.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: self.pending.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: self.meta.as_entire_binding(),
+                },
+            ],
+        });
+
+        let (ix, iy) = wgsl::folded(i_count.div_ceil(WORKGROUP_64).max(1));
+        {
+            let open_here = !*opened_ts;
+            if open_here && timing_set.is_some() {
+                *opened_ts = true;
+            }
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("entelechy lbvh tlas build"),
+                timestamp_writes: open_here
+                    .then_some(())
+                    .and(timing_set)
+                    .map(|t| t.compute(Some(0), None)),
+            });
+            pass.set_bind_group(0, &prep_bg, &[]);
+            pass.set_pipeline(&pipelines.tlas_clear_meta);
+            pass.dispatch_workgroups(1, 1, 1);
+            pass.set_pipeline(&pipelines.tlas_prep);
+            pass.dispatch_workgroups(ix, iy, 1);
+
+            pass.set_bind_group(0, &morton_bg, &[]);
+            pass.set_pipeline(&pipelines.morton);
+            pass.dispatch_workgroups(ix, iy, 1);
+
+            if i_count > 1 {
+                for bg in &radix_bgs {
+                    pass.set_bind_group(0, bg, &[]);
+                    pass.set_pipeline(&pipelines.radix_hist);
+                    pass.dispatch_workgroups(blocks_x, blocks_y, 1);
+                    pass.set_pipeline(&pipelines.radix_scan_blocks);
+                    pass.dispatch_workgroups(16, 1, 1);
+                    pass.set_pipeline(&pipelines.radix_scan_buckets);
+                    pass.dispatch_workgroups(1, 1, 1);
+                    pass.set_pipeline(&pipelines.radix_scatter);
+                    pass.dispatch_workgroups(blocks_x, blocks_y, 1);
+                }
+                pass.set_bind_group(0, &hier_bg, &[]);
+                pass.set_pipeline(&pipelines.hierarchy);
+                pass.dispatch_workgroups(ix, iy, 1);
+
+                pass.set_bind_group(0, &tiers_bg, &[]);
+                pass.set_pipeline(&pipelines.classify_tiers);
+                pass.dispatch_workgroups(ix, iy, 1);
+                pass.set_pipeline(&pipelines.finalize_tier_args);
+                pass.dispatch_workgroups(1, 1, 1);
+            }
+        }
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("entelechy lbvh tlas refit"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipelines.tlas_refit_leaves);
+            pass.set_bind_group(0, &leaves_bg, &[]);
+            pass.dispatch_workgroups(ix, iy, 1);
+
+            if i_count > 1 {
+                pass.set_pipeline(&pipelines.refit_tier1);
+                pass.set_bind_group(0, &tier1_bg, &[]);
+                pass.dispatch_workgroups_indirect(&self.indirect_args, 0);
+
+                pass.set_pipeline(&pipelines.refit_upper);
+                pass.set_bind_group(0, &upper_bg, &[]);
+                pass.dispatch_workgroups_indirect(&self.indirect_args, 12);
+            }
+        }
+        self.built_insts_id = insts_id;
+        self.last_eval = eval_now;
+
+        keep_buffers.extend([
+            centroids, keys_a, keys_b, vals_b, block_hist, bucket_buf, parents,
+        ]);
     }
 }

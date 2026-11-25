@@ -946,4 +946,120 @@ impl Graph {
         }
         Ok(order)
     }
+
+    /// Execution schedule over the validated graph for device backends:
+    /// validates via [`Graph::order`] and applies [`Graph::schedule_for_device`].
+    pub fn execution_order(&self) -> Result<Vec<usize>, GraphError> {
+        let canonical = self.order()?;
+        Ok(self.schedule_for_device(&canonical))
+    }
+
+    /// Reorders a validated canonical topological `canonical` order for a
+    /// device backend when the graph contains dynamic `domain = value(port)`
+    /// readbacks: count-producing chains run first (priority 2, triggering
+    /// async readback prefetch before heavy work), independent GPU passes run
+    /// in the middle (priority 1, hiding readback latency), and `value(port)`
+    /// consumers run last (priority 0). Graphs without `value(...)` domains
+    /// return `canonical` unchanged.
+    pub fn schedule_for_device(&self, canonical: &[usize]) -> Vec<usize> {
+        let n = self.nodes.len();
+        let index = self.index();
+        let producer = |source: &Source| match source {
+            Source::Node { node, .. } => index.get(node).copied(),
+            Source::External(name) => match self.fallback(name) {
+                Some(Source::Node { node, .. }) => index.get(node).copied(),
+                _ => None,
+            },
+        };
+        let mut is_value_consumer = vec![false; n];
+        let mut feeds_value = vec![false; n];
+        let mut any_value_domain = false;
+        for (u, node) in self.nodes.iter().enumerate() {
+            if let Some(DomainSpec::Expr(expr)) = &node.domain {
+                let reads = expr.values_read();
+                if !reads.is_empty() {
+                    any_value_domain = true;
+                    is_value_consumer[u] = true;
+                    for (port, _) in reads {
+                        if let Some(Binding::Now(source)) = node.inputs.get(&port)
+                            && let Some(src_idx) = producer(source)
+                        {
+                            feeds_value[src_idx] = true;
+                        }
+                    }
+                }
+            }
+        }
+        if !any_value_domain {
+            return canonical.to_vec();
+        }
+        let waits_for: Vec<Vec<usize>> = self
+            .nodes
+            .iter()
+            .map(|node| {
+                node.inputs
+                    .values()
+                    .filter_map(|binding| match binding {
+                        Binding::Now(source)
+                        | Binding::Previous {
+                            initial: source, ..
+                        } => producer(source),
+                    })
+                    .collect()
+            })
+            .collect();
+        // Propagate `feeds_value` backward through all transitive dependencies.
+        let mut rev_stack: Vec<usize> = (0..n).filter(|&u| feeds_value[u]).collect();
+        while let Some(u) = rev_stack.pop() {
+            for &dep in &waits_for[u] {
+                if !feeds_value[dep] {
+                    feeds_value[dep] = true;
+                    rev_stack.push(dep);
+                }
+            }
+        }
+        // Build deduplicated forward adjacency and in-degrees.
+        let mut dfs_rank = vec![0usize; n];
+        for (pos, &node_idx) in canonical.iter().enumerate() {
+            dfs_rank[node_idx] = pos;
+        }
+        let mut consumers: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut in_deg = vec![0usize; n];
+        for (u, deps) in waits_for.iter().enumerate() {
+            let mut seen_deps: Vec<usize> = deps.clone();
+            seen_deps.sort_unstable();
+            seen_deps.dedup();
+            in_deg[u] = seen_deps.len();
+            for dep in seen_deps {
+                consumers[dep].push(u);
+            }
+        }
+        let priority_of = |u: usize| -> u8 {
+            if feeds_value[u] {
+                2
+            } else if !is_value_consumer[u] {
+                1
+            } else {
+                0
+            }
+        };
+        let mut ready = std::collections::BinaryHeap::new();
+        for u in 0..n {
+            if in_deg[u] == 0 {
+                ready.push((priority_of(u), std::cmp::Reverse(dfs_rank[u]), u));
+            }
+        }
+        let mut scheduled = Vec::with_capacity(n);
+        while let Some((_, _, u)) = ready.pop() {
+            scheduled.push(u);
+            for &v in &consumers[u] {
+                in_deg[v] -= 1;
+                if in_deg[v] == 0 {
+                    ready.push((priority_of(v), std::cmp::Reverse(dfs_rank[v]), v));
+                }
+            }
+        }
+        debug_assert_eq!(scheduled.len(), n);
+        scheduled
+    }
 }
