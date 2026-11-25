@@ -30,16 +30,19 @@ const ROW_ALIGN: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 /// Native `wgpu::TextureFormat`, view dimension, and bytes per texel for a
 /// texture-eligible port (`Float`/`Vec2`/`Vec4` with `Word`/`F16`/`Unorm8`/`Snorm8`).
 ///
-/// `Volume<... as unorm8>` uses [`wgpu::TextureViewDimension::D2Array`] so
-/// streamed 2D texture stacks bind hardware block-compressed `Texture2DArray`
-/// layers (`Bc7`/`Bc5`/`Bc4`/`Bc1`) natively without decompression.
+/// `Volume<... as unorm8>` (and any `Volume` sampled with 2D gradients when
+/// `force_2d_array` is true) uses [`wgpu::TextureViewDimension::D2Array`] so
+/// streamed 2D texture stacks and anisotropic 2D arrays bind natively.
 pub(crate) fn format_for(
     port: &Port,
+    force_2d_array: bool,
 ) -> Option<(wgpu::TextureFormat, wgpu::TextureViewDimension, u32)> {
     let encoding = port.ty.schema.uniform_encoding().unwrap_or(Encoding::Word);
     let view_dim = match port.shape() {
         Shape::Grid => wgpu::TextureViewDimension::D2,
-        Shape::Volume if encoding == Encoding::Unorm8 => wgpu::TextureViewDimension::D2Array,
+        Shape::Volume if encoding == Encoding::Unorm8 || force_2d_array => {
+            wgpu::TextureViewDimension::D2Array
+        }
         Shape::Volume => wgpu::TextureViewDimension::D3,
         Shape::Rows => return None,
     };
@@ -61,6 +64,26 @@ pub(crate) fn format_for(
     Some((format, view_dim, texel_bytes))
 }
 
+fn format_meta(format: wgpu::TextureFormat) -> (u32, u32, u32) {
+    // Returns (channels, encoding_code, texel_bytes).
+    // encoding_code: 0 = f32, 1 = f16, 2 = unorm8, 3 = snorm8.
+    match format {
+        wgpu::TextureFormat::R32Float => (1, 0, 4),
+        wgpu::TextureFormat::Rg32Float => (2, 0, 8),
+        wgpu::TextureFormat::Rgba32Float => (4, 0, 16),
+        wgpu::TextureFormat::R16Float => (1, 1, 2),
+        wgpu::TextureFormat::Rg16Float => (2, 1, 4),
+        wgpu::TextureFormat::Rgba16Float => (4, 1, 8),
+        wgpu::TextureFormat::R8Unorm => (1, 2, 1),
+        wgpu::TextureFormat::Rg8Unorm => (2, 2, 2),
+        wgpu::TextureFormat::Rgba8Unorm => (4, 2, 4),
+        wgpu::TextureFormat::R8Snorm => (1, 3, 1),
+        wgpu::TextureFormat::Rg8Snorm => (2, 3, 2),
+        wgpu::TextureFormat::Rgba8Snorm => (4, 3, 4),
+        _ => (4, 0, 16),
+    }
+}
+
 /// Hardware `wgpu::TextureFormat` corresponding to a Host [`BlockFormat`].
 pub(crate) fn wgpu_block_format(format: BlockFormat) -> wgpu::TextureFormat {
     match format {
@@ -80,6 +103,7 @@ pub(crate) struct CompressedTexture {
     pub(crate) view_dim: wgpu::TextureViewDimension,
     pub(crate) format: BlockFormat,
     pub(crate) domain: Domain,
+    pub(crate) mip_count: u32,
     pub(crate) bytes: u64,
     pub(crate) pool: SpareMirrors,
 }
@@ -97,6 +121,8 @@ pub(crate) struct TextureMirror {
     pub(crate) format: wgpu::TextureFormat,
     pub(crate) dims: (u32, u32, u32),
     pub(crate) dimension: wgpu::TextureDimension,
+    pub(crate) view_dim: wgpu::TextureViewDimension,
+    pub(crate) mip_level_count: u32,
     pub(crate) pool: SpareMirrors,
 }
 
@@ -119,7 +145,7 @@ fn mirror_bytes(texture: &wgpu::Texture) -> u64 {
     let w = u64::from(texture.width());
     let h = u64::from(texture.height());
     let d = u64::from(texture.depth_or_array_layers());
-    match texture.format() {
+    let base = match texture.format() {
         wgpu::TextureFormat::Bc1RgbaUnorm | wgpu::TextureFormat::Bc4RUnorm => {
             w.div_ceil(4) * h.div_ceil(4) * d * 8
         }
@@ -137,10 +163,16 @@ fn mirror_bytes(texture: &wgpu::Texture) -> u64 {
         wgpu::TextureFormat::Rgba16Float | wgpu::TextureFormat::Rg32Float => w * h * d * 8,
         wgpu::TextureFormat::Rgba32Float => w * h * d * 16,
         _ => w * h * d * 16,
+    };
+    if texture.mip_level_count() > 1 {
+        base.saturating_mul(4) / 3
+    } else {
+        base
     }
 }
 
 impl SpareMirrors {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn take(
         &self,
         device: &wgpu::Device,
@@ -149,6 +181,7 @@ impl SpareMirrors {
         depth: u32,
         dimension: wgpu::TextureDimension,
         format: wgpu::TextureFormat,
+        mip_level_count: u32,
     ) -> wgpu::Texture {
         let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(index) = held.iter().rposition(|(tex, _)| {
@@ -157,6 +190,7 @@ impl SpareMirrors {
                 && tex.depth_or_array_layers() == depth
                 && tex.dimension() == dimension
                 && tex.format() == format
+                && tex.mip_level_count() == mip_level_count
         }) {
             return held.swap_remove(index).0;
         }
@@ -168,7 +202,7 @@ impl SpareMirrors {
                 height,
                 depth_or_array_layers: depth,
             },
-            mip_level_count: 1,
+            mip_level_count,
             sample_count: 1,
             dimension,
             format,
@@ -292,15 +326,42 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 ";
 
+/// One mip-level downsample step queued after mip 0 is copied.
+pub(crate) struct PendingMipLevel {
+    pub(crate) mip: u32,
+    pub(crate) dst_w: u32,
+    pub(crate) dst_h: u32,
+    pub(crate) dst_d: u32,
+    pub(crate) padded_row_bytes: u32,
+    pub(crate) groups_x: u32,
+    pub(crate) groups_y: u32,
+    pub(crate) params_slice: UniformSlice,
+}
+
+/// Planned parameters for generating one mip level `1..mip_level_count`.
+pub(crate) struct MipLevelPlan {
+    pub(crate) mip: u32,
+    pub(crate) dst_w: u32,
+    pub(crate) dst_h: u32,
+    pub(crate) dst_d: u32,
+    pub(crate) padded_row_bytes: u32,
+    pub(crate) groups_x: u32,
+    pub(crate) groups_y: u32,
+    pub(crate) params: [u8; 48],
+}
+
 /// A buffer-to-texture mirror copy queued to run right before a compute pass.
 pub(crate) struct PendingMirrorCopy {
     pub(crate) src: wgpu::Buffer,
     pub(crate) dst: wgpu::Texture,
+    pub(crate) view_dim: wgpu::TextureViewDimension,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) depth: u32,
     pub(crate) row_bytes: u32,
     pub(crate) padded: Option<(wgpu::Buffer, UniformSlice, u32, u32)>,
+    pub(crate) mip_scratch: Option<wgpu::Buffer>,
+    pub(crate) mip_levels: Vec<PendingMipLevel>,
 }
 
 /// Parameters needed to populate one uncached texture mirror before encoding.
@@ -315,7 +376,187 @@ pub(crate) struct MirrorPlan {
     pub(crate) pad_params: Option<[u8; 16]>,
     pub(crate) padded_row_bytes: u32,
     pub(crate) fold_x: u32,
+    pub(crate) mip_plans: Vec<MipLevelPlan>,
+    pub(crate) mip_scratch_bytes: u64,
 }
+
+/// GPU compute pipelines that generate 2x2 (2D/2D-array) and 2x2x2 (3D)
+/// box-filtered mipmap chains across all 12 hardware texture mirror formats
+/// (`R`/`Rg`/`Rgba` x `Unorm8`/`Snorm8`/`F16`/`F32`).
+pub(crate) struct MipGenPipelines {
+    pipe_2d: wgpu::ComputePipeline,
+    layout_2d: wgpu::BindGroupLayout,
+    pipe_array: wgpu::ComputePipeline,
+    layout_array: wgpu::BindGroupLayout,
+    pipe_3d: wgpu::ComputePipeline,
+    layout_3d: wgpu::BindGroupLayout,
+}
+
+const MIP_GEN_WORKGROUP: u32 = 64;
+
+fn mip_gen_wgsl(view_dim: wgpu::TextureViewDimension) -> &'static str {
+    match view_dim {
+        wgpu::TextureViewDimension::D2 => MIP_GEN_2D_WGSL,
+        wgpu::TextureViewDimension::D2Array => MIP_GEN_ARRAY_WGSL,
+        wgpu::TextureViewDimension::D3 => MIP_GEN_3D_WGSL,
+        _ => unreachable!(),
+    }
+}
+
+const MIP_GEN_BODY_WGSL: &str = "
+fn pack_unorm8(x: f32) -> u32 {
+    let nan = (bitcast<u32>(x) & 0x7FFFFFFFu) > 0x7F800000u;
+    let c = select(clamp(x, 0.0, 1.0), 0.0, nan);
+    return u32(round(c * 255.0));
+}
+fn pack_snorm8(x: f32) -> u32 {
+    let nan = (bitcast<u32>(x) & 0x7FFFFFFFu) > 0x7F800000u;
+    let c = select(clamp(x, -1.0, 1.0), 0.0, nan);
+    return bitcast<u32>(i32(round(c * 127.0))) & 0xFFu;
+}
+fn pack_byte(x: f32, enc: u32) -> u32 {
+    if (enc == 2u) { return pack_unorm8(x); }
+    return pack_snorm8(x);
+}
+@compute @workgroup_size(64, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let elem_bytes = p.channels * select(select(1u, 2u, p.encoding == 1u), 4u, p.encoding == 0u);
+    let row_words = (p.dst_w * elem_bytes + 3u) >> 2u;
+    let total_words = row_words * p.dst_h * p.dst_d;
+    let idx = gid.x + gid.y * p.fold_x * 64u;
+    if (idx >= total_words) { return; }
+    let row = idx / row_words;
+    let col_word = idx - row * row_words;
+    let z = row / p.dst_h;
+    let y = row - z * p.dst_h;
+    var word = 0u;
+    if (elem_bytes == 1u) {
+        let base_x = col_word * 4u;
+        for (var b = 0u; b < 4u; b = b + 1u) {
+            let x = base_x + b;
+            if (x < p.dst_w) {
+                let v = sample_box(x, y, z);
+                word = word | (pack_byte(v.x, p.encoding) << (b * 8u));
+            }
+        }
+    } else if (elem_bytes == 2u) {
+        let x0 = col_word * 2u;
+        let x1 = x0 + 1u;
+        let v0 = sample_box(x0, y, z);
+        if (p.encoding == 1u) {
+            var s1 = 0.0;
+            if (x1 < p.dst_w) { s1 = sample_box(x1, y, z).x; }
+            word = pack2x16float(vec2<f32>(v0.x, s1));
+        } else {
+            word = pack_byte(v0.x, p.encoding) | (pack_byte(v0.y, p.encoding) << 8u);
+            if (x1 < p.dst_w) {
+                let v1 = sample_box(x1, y, z);
+                word = word | (pack_byte(v1.x, p.encoding) << 16u) | (pack_byte(v1.y, p.encoding) << 24u);
+            }
+        }
+    } else if (elem_bytes == 4u) {
+        let v = sample_box(col_word, y, z);
+        if (p.encoding == 0u) {
+            word = bitcast<u32>(v.x);
+        } else if (p.encoding == 1u) {
+            word = pack2x16float(v.xy);
+        } else {
+            word = pack_byte(v.x, p.encoding)
+                | (pack_byte(v.y, p.encoding) << 8u)
+                | (pack_byte(v.z, p.encoding) << 16u)
+                | (pack_byte(v.w, p.encoding) << 24u);
+        }
+    } else if (elem_bytes == 8u) {
+        let x = col_word >> 1u;
+        let sub = col_word & 1u;
+        let v = sample_box(x, y, z);
+        if (p.encoding == 0u) {
+            word = select(bitcast<u32>(v.y), bitcast<u32>(v.x), sub == 0u);
+        } else {
+            word = select(pack2x16float(v.zw), pack2x16float(v.xy), sub == 0u);
+        }
+    } else {
+        let x = col_word >> 2u;
+        let sub = col_word & 3u;
+        let v = sample_box(x, y, z);
+        let f = select(select(select(v.w, v.z, sub == 2u), v.y, sub == 1u), v.x, sub == 0u);
+        word = bitcast<u32>(f);
+    }
+    dst[row * p.padded_row_words + col_word] = word;
+}
+";
+
+const MIP_GEN_2D_WGSL: &str = "
+struct Params {
+    src_w: u32, src_h: u32, src_d: u32, dst_w: u32,
+    dst_h: u32, dst_d: u32, padded_row_words: u32, channels: u32,
+    encoding: u32, fold_x: u32, _p0: u32, _p1: u32,
+}
+@group(0) @binding(0) var<uniform> p: Params;
+@group(0) @binding(1) var src: texture_2d<f32>;
+@group(0) @binding(2) var<storage, read_write> dst: array<u32>;
+fn sample_box(x: u32, y: u32, z: u32) -> vec4<f32> {
+    let sx0 = i32(min(x * 2u, p.src_w - 1u));
+    let sx1 = i32(min(x * 2u + 1u, p.src_w - 1u));
+    let sy0 = i32(min(y * 2u, p.src_h - 1u));
+    let sy1 = i32(min(y * 2u + 1u, p.src_h - 1u));
+    let _z = z;
+    return (textureLoad(src, vec2<i32>(sx0, sy0), 0)
+        + textureLoad(src, vec2<i32>(sx1, sy0), 0)
+        + textureLoad(src, vec2<i32>(sx0, sy1), 0)
+        + textureLoad(src, vec2<i32>(sx1, sy1), 0)) * 0.25;
+}
+";
+
+const MIP_GEN_ARRAY_WGSL: &str = "
+struct Params {
+    src_w: u32, src_h: u32, src_d: u32, dst_w: u32,
+    dst_h: u32, dst_d: u32, padded_row_words: u32, channels: u32,
+    encoding: u32, fold_x: u32, _p0: u32, _p1: u32,
+}
+@group(0) @binding(0) var<uniform> p: Params;
+@group(0) @binding(1) var src: texture_2d_array<f32>;
+@group(0) @binding(2) var<storage, read_write> dst: array<u32>;
+fn sample_box(x: u32, y: u32, z: u32) -> vec4<f32> {
+    let sx0 = i32(min(x * 2u, p.src_w - 1u));
+    let sx1 = i32(min(x * 2u + 1u, p.src_w - 1u));
+    let sy0 = i32(min(y * 2u, p.src_h - 1u));
+    let sy1 = i32(min(y * 2u + 1u, p.src_h - 1u));
+    let lz = i32(z);
+    return (textureLoad(src, vec2<i32>(sx0, sy0), lz, 0)
+        + textureLoad(src, vec2<i32>(sx1, sy0), lz, 0)
+        + textureLoad(src, vec2<i32>(sx0, sy1), lz, 0)
+        + textureLoad(src, vec2<i32>(sx1, sy1), lz, 0)) * 0.25;
+}
+";
+
+const MIP_GEN_3D_WGSL: &str = "
+struct Params {
+    src_w: u32, src_h: u32, src_d: u32, dst_w: u32,
+    dst_h: u32, dst_d: u32, padded_row_words: u32, channels: u32,
+    encoding: u32, fold_x: u32, _p0: u32, _p1: u32,
+}
+@group(0) @binding(0) var<uniform> p: Params;
+@group(0) @binding(1) var src: texture_3d<f32>;
+@group(0) @binding(2) var<storage, read_write> dst: array<u32>;
+fn sample_box(x: u32, y: u32, z: u32) -> vec4<f32> {
+    let sx0 = i32(min(x * 2u, p.src_w - 1u));
+    let sx1 = i32(min(x * 2u + 1u, p.src_w - 1u));
+    let sy0 = i32(min(y * 2u, p.src_h - 1u));
+    let sy1 = i32(min(y * 2u + 1u, p.src_h - 1u));
+    let sz0 = i32(min(z * 2u, p.src_d - 1u));
+    let sz1 = i32(min(z * 2u + 1u, p.src_d - 1u));
+    let a = textureLoad(src, vec3<i32>(sx0, sy0, sz0), 0)
+        + textureLoad(src, vec3<i32>(sx1, sy0, sz0), 0)
+        + textureLoad(src, vec3<i32>(sx0, sy1, sz0), 0)
+        + textureLoad(src, vec3<i32>(sx1, sy1, sz0), 0);
+    let b = textureLoad(src, vec3<i32>(sx0, sy0, sz1), 0)
+        + textureLoad(src, vec3<i32>(sx1, sy0, sz1), 0)
+        + textureLoad(src, vec3<i32>(sx0, sy1, sz1), 0)
+        + textureLoad(src, vec3<i32>(sx1, sy1, sz1), 0);
+    return (a + b) * 0.125;
+}
+";
 
 /// Compute pipelines that unpack a hardware block-compressed `texture_2d<f32>`
 /// or `texture_2d_array<f32>` directly into tightly packed `unorm8` `u32`
@@ -432,7 +673,7 @@ impl WgpuBackend {
                     };
                     let entries = [
                         uniform_entry(0),
-                        texture_entry(1, dim),
+                        texture_entry(1, dim, false),
                         storage_entry(2, false),
                     ];
                     let layout =
@@ -482,15 +723,75 @@ impl WgpuBackend {
             .map_err(|e| ExecutionError::Device(e.clone()))
     }
 
-    /// Uploads raw hardware-compressed 4x4 BC1/BC4/BC5/BC7 blocks directly
-    /// into a native `wgpu::Texture` (2D or 2D array) without allocating an
-    /// uncompressed storage buffer.
+    pub(crate) fn mip_gen_pipelines(&self) -> Result<&MipGenPipelines, ExecutionError> {
+        let built = self.mip_gen.get_or_init(|| {
+            let make = |dim: wgpu::TextureViewDimension| -> Result<(wgpu::ComputePipeline, wgpu::BindGroupLayout), String> {
+                let scopes = Scopes::push(&self.device);
+                let entries = [
+                    uniform_entry(0),
+                    texture_entry(1, dim, false),
+                    storage_entry(2, false),
+                ];
+                let layout = self
+                    .device
+                    .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                        label: Some("entelechy mip gen"),
+                        entries: &entries,
+                    });
+                let source = format!("{}{}", mip_gen_wgsl(dim), MIP_GEN_BODY_WGSL);
+                let shader = self
+                    .device
+                    .create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some("entelechy mip gen"),
+                        source: wgpu::ShaderSource::Wgsl(source.as_str().into()),
+                    });
+                let pipeline_layout =
+                    self.device
+                        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                            label: Some("entelechy mip gen"),
+                            bind_group_layouts: &[Some(&layout)],
+                            immediate_size: 0,
+                        });
+                let pipeline =
+                    self.device
+                        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                            label: Some("entelechy mip gen"),
+                            layout: Some(&pipeline_layout),
+                            module: &shader,
+                            entry_point: Some("main"),
+                            compilation_options: Default::default(),
+                            cache: None,
+                        });
+                scopes.pop(self.wait, &source).map_err(|e| e.said())?;
+                Ok((pipeline, layout))
+            };
+            let (pipe_2d, layout_2d) = make(wgpu::TextureViewDimension::D2)?;
+            let (pipe_array, layout_array) = make(wgpu::TextureViewDimension::D2Array)?;
+            let (pipe_3d, layout_3d) = make(wgpu::TextureViewDimension::D3)?;
+            Ok(MipGenPipelines {
+                pipe_2d,
+                layout_2d,
+                pipe_array,
+                layout_array,
+                pipe_3d,
+                layout_3d,
+            })
+        });
+        built
+            .as_ref()
+            .map_err(|e| ExecutionError::Device(e.clone()))
+    }
+
+    /// Uploads raw hardware-compressed 4x4 BC1/BC4/BC5/BC7 blocks (all mip
+    /// levels `0..blocks.mip_count()`) directly into a native `wgpu::Texture`
+    /// (2D or 2D array) without allocating an uncompressed storage buffer.
     pub(crate) fn create_compressed_texture(
         &self,
         domain: Domain,
-        format: BlockFormat,
-        bytes: &[u8],
+        blocks: &entelechy_abi::CompressedBlocks,
     ) -> Result<CompressedTexture, ExecutionError> {
+        let format = blocks.format();
+        let mip_count = blocks.mip_count();
         let w = domain.width();
         let h = domain.height();
         let d = domain.depth();
@@ -526,7 +827,7 @@ impl WgpuBackend {
                 height: tex_h,
                 depth_or_array_layers: d,
             },
-            mip_level_count: 1,
+            mip_level_count: mip_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu_format,
@@ -535,29 +836,36 @@ impl WgpuBackend {
                 | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let row_bytes = (tex_w / 4) * format.block_bytes() as u32;
-        let block_rows = tex_h / 4;
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            bytes,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(row_bytes),
-                rows_per_image: (d > 1).then_some(block_rows),
-            },
-            wgpu::Extent3d {
-                width: tex_w,
-                height: tex_h,
-                depth_or_array_layers: d,
-            },
-        );
+        for mip in 0..mip_count {
+            let md = entelechy_abi::block::mip_domain(domain, mip);
+            let mw = md.width().div_ceil(4) * 4;
+            let mh = md.height().div_ceil(4) * 4;
+            let row_bytes = (mw / 4) * format.block_bytes() as u32;
+            let block_rows = mh / 4;
+            let slice = blocks.mip_bytes(domain, mip);
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: mip,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                slice,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row_bytes),
+                    rows_per_image: (d > 1).then_some(block_rows),
+                },
+                wgpu::Extent3d {
+                    width: mw,
+                    height: mh,
+                    depth_or_array_layers: d,
+                },
+            );
+        }
+        let total_bytes = blocks.bytes().len() as u64;
         self.uploaded
-            .fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            .fetch_add(total_bytes, std::sync::atomic::Ordering::Relaxed);
         let view = texture.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(view_dim),
             ..Default::default()
@@ -568,14 +876,16 @@ impl WgpuBackend {
             view_dim,
             format,
             domain,
-            bytes: bytes.len() as u64,
+            mip_count,
+            bytes: total_bytes,
             pool: self.mirrors.clone(),
         })
     }
 
     /// Joins whole layers of hardware block-compressed textures into a single
     /// resident `Texture2DArray` (`Domain::Volume`) via GPU-to-GPU
-    /// `copy_texture_to_texture` with zero decompression.
+    /// `copy_texture_to_texture` across all common mip levels with zero
+    /// decompression.
     ///
     /// Returns `Ok(None)` when any part is uncompressed, mixes different block
     /// formats, or is not aligned to whole 2D layers, allowing [`Backend::join`]
@@ -606,6 +916,7 @@ impl WgpuBackend {
         // Verify all parts are whole-layer slices of the same BlockFormat
         // before uploading or allocating any device texture.
         let mut common_format: Option<BlockFormat> = None;
+        let mut common_mips = u32::MAX;
         let mut sum_layers = 0u32;
         for (handle, range) in parts {
             if range.is_empty()
@@ -621,16 +932,16 @@ impl WgpuBackend {
             {
                 return Ok(None);
             }
-            let part_fmt = if let Some(dev) = scope.resident(*handle)? {
+            let (part_fmt, part_mips) = if let Some(dev) = scope.resident(*handle)? {
                 let Some(ct) = dev
                     .downcast_ref::<DeviceImage>()
                     .and_then(|img| img.compressed.as_ref())
                 else {
                     return Ok(None);
                 };
-                ct.format
+                (ct.format, ct.mip_count)
             } else if let Some(blocks) = scope.blocks(*handle)? {
-                blocks.format()
+                (blocks.format(), blocks.mip_count())
             } else {
                 return Ok(None);
             };
@@ -639,16 +950,17 @@ impl WgpuBackend {
                 None => common_format = Some(part_fmt),
                 _ => {}
             }
+            common_mips = common_mips.min(part_mips);
             let layers = u32::try_from(range.len() / layer_elems).unwrap_or(0);
             sum_layers = sum_layers.saturating_add(layers);
         }
         let Some(format) = common_format else {
             return Ok(None);
         };
-        if sum_layers != total_layers {
+        if sum_layers != total_layers || common_mips == 0 || common_mips == u32::MAX {
             return Ok(None);
         }
-        let Some(total_bytes_usize) = format.byte_len(domain) else {
+        let Some(total_bytes_usize) = format.mip_chain_byte_len(domain, common_mips) else {
             return Ok(None);
         };
         let total_bytes = total_bytes_usize as u64;
@@ -679,7 +991,7 @@ impl WgpuBackend {
                 height: tex_h,
                 depth_or_array_layers: total_layers,
             },
-            mip_level_count: 1,
+            mip_level_count: common_mips,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu_format,
@@ -701,36 +1013,41 @@ impl WgpuBackend {
                     label: Some("entelechy compressed join"),
                 })
         };
-        let mut dst_layer = 0u32;
-        for (src_tex, src_layer, layer_count) in &copies {
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: src_tex,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: 0,
-                        y: 0,
-                        z: *src_layer,
+        for mip in 0..common_mips {
+            let md = entelechy_abi::block::mip_domain(domain, mip);
+            let mw = md.width().div_ceil(4) * 4;
+            let mh = md.height().div_ceil(4) * 4;
+            let mut dst_layer = 0u32;
+            for (src_tex, src_layer, layer_count) in &copies {
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: src_tex,
+                        mip_level: mip,
+                        origin: wgpu::Origin3d {
+                            x: 0,
+                            y: 0,
+                            z: *src_layer,
+                        },
+                        aspect: wgpu::TextureAspect::All,
                     },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &dst,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: 0,
-                        y: 0,
-                        z: dst_layer,
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &dst,
+                        mip_level: mip,
+                        origin: wgpu::Origin3d {
+                            x: 0,
+                            y: 0,
+                            z: dst_layer,
+                        },
+                        aspect: wgpu::TextureAspect::All,
                     },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: tex_w,
-                    height: tex_h,
-                    depth_or_array_layers: *layer_count,
-                },
-            );
-            dst_layer += *layer_count;
+                    wgpu::Extent3d {
+                        width: mw,
+                        height: mh,
+                        depth_or_array_layers: *layer_count,
+                    },
+                );
+                dst_layer += *layer_count;
+            }
         }
         if batched {
             self.frames.note_batched_run();
@@ -750,6 +1067,7 @@ impl WgpuBackend {
             view_dim: wgpu::TextureViewDimension::D2Array,
             format,
             domain,
+            mip_count: common_mips,
             bytes: total_bytes,
             pool: self.mirrors.clone(),
         };
@@ -897,7 +1215,9 @@ impl WgpuBackend {
 
     /// Checks whether a resident [`DeviceImage`] already holds an up-to-date
     /// hardware texture mirror; otherwise allocates a recycled/fresh texture
-    /// and returns a [`MirrorPlan`] to copy its pixels into the texture.
+    /// (with full mipmap chain when `want_mips` is true) and returns a
+    /// [`MirrorPlan`] to copy mip 0 and generate mips `1..mip_level_count`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn plan_texture_mirror(
         &self,
         image: &DeviceImage,
@@ -905,13 +1225,17 @@ impl WgpuBackend {
         port: &Port,
         extent: Domain,
         input_index: usize,
+        want_mips: bool,
+        force_2d_array: bool,
+        blocks_mips: Option<u32>,
     ) -> Result<(wgpu::TextureView, Option<MirrorPlan>), ExecutionError> {
-        let (format, view_dim, texel_bytes) = format_for(port).ok_or_else(|| {
-            ExecutionError::Device(format!(
-                "port `{}` has no hardware texture format",
-                port.name
-            ))
-        })?;
+        let (format, view_dim, texel_bytes) =
+            format_for(port, force_2d_array).ok_or_else(|| {
+                ExecutionError::Device(format!(
+                    "port `{}` has no hardware texture format",
+                    port.name
+                ))
+            })?;
         if let Some(ct) = image.compressed.as_ref()
             && ct.view_dim == view_dim
         {
@@ -957,6 +1281,16 @@ impl WgpuBackend {
             }
             _ => unreachable!(),
         };
+        let mip_level_count = if want_mips {
+            let full = if dimension == wgpu::TextureDimension::D3 {
+                entelechy_abi::block::max_3d_mip_count(extent)
+            } else {
+                entelechy_abi::block::max_mip_count(extent)
+            };
+            blocks_mips.map_or(full, |m| m.clamp(1, full))
+        } else {
+            1
+        };
         if let Some(existing) = image
             .mirror
             .lock()
@@ -965,12 +1299,20 @@ impl WgpuBackend {
             && existing.format == format
             && existing.dims == (width, height, depth)
             && existing.dimension == dimension
+            && existing.view_dim == view_dim
+            && existing.mip_level_count >= mip_level_count
         {
             return Ok((existing.view.clone(), None));
         }
-        let texture = self
-            .mirrors
-            .take(&self.device, width, height, depth, dimension, format);
+        let texture = self.mirrors.take(
+            &self.device,
+            width,
+            height,
+            depth,
+            dimension,
+            format,
+            mip_level_count,
+        );
         let view = texture.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(view_dim),
             ..Default::default()
@@ -995,12 +1337,68 @@ impl WgpuBackend {
             bytes[12..16].copy_from_slice(&gx.to_le_bytes());
             (Some(bytes), padded_row_bytes, gx)
         };
+        let mut mip_plans = Vec::new();
+        let mut mip_scratch_bytes = 0u64;
+        if mip_level_count > 1 {
+            let (channels, encoding_code, elem_bytes) = format_meta(format);
+            let mut src_w = width;
+            let mut src_h = height;
+            let mut src_d = depth;
+            for mip in 1..mip_level_count {
+                let dst_w = (src_w >> 1).max(1);
+                let dst_h = (src_h >> 1).max(1);
+                let dst_d = if dimension == wgpu::TextureDimension::D3 {
+                    (src_d >> 1).max(1)
+                } else {
+                    depth
+                };
+                let dst_row_bytes = dst_w * elem_bytes;
+                let dst_padded_row_bytes = dst_row_bytes.div_ceil(ROW_ALIGN) * ROW_ALIGN;
+                let padded_row_words = dst_padded_row_bytes / 4;
+                let row_words = dst_row_bytes.div_ceil(4);
+                let total_words = row_words.saturating_mul(dst_h).saturating_mul(dst_d);
+                let groups = total_words.div_ceil(MIP_GEN_WORKGROUP).max(1);
+                let (gx, gy) = wgsl::folded(groups);
+                let mut params = [0u8; 48];
+                params[0..4].copy_from_slice(&src_w.to_le_bytes());
+                params[4..8].copy_from_slice(&src_h.to_le_bytes());
+                params[8..12].copy_from_slice(&src_d.to_le_bytes());
+                params[12..16].copy_from_slice(&dst_w.to_le_bytes());
+                params[16..20].copy_from_slice(&dst_h.to_le_bytes());
+                params[20..24].copy_from_slice(&dst_d.to_le_bytes());
+                params[24..28].copy_from_slice(&padded_row_words.to_le_bytes());
+                params[28..32].copy_from_slice(&channels.to_le_bytes());
+                params[32..36].copy_from_slice(&encoding_code.to_le_bytes());
+                params[36..40].copy_from_slice(&gx.to_le_bytes());
+                let level_bytes =
+                    (u64::from(dst_padded_row_bytes) * u64::from(dst_h) * u64::from(dst_d))
+                        .max(16)
+                        .div_ceil(16)
+                        * 16;
+                mip_scratch_bytes = mip_scratch_bytes.max(level_bytes);
+                mip_plans.push(MipLevelPlan {
+                    mip,
+                    dst_w,
+                    dst_h,
+                    dst_d,
+                    padded_row_bytes: dst_padded_row_bytes,
+                    groups_x: gx,
+                    groups_y: gy,
+                    params,
+                });
+                src_w = dst_w;
+                src_h = dst_h;
+                src_d = dst_d;
+            }
+        }
         let mirror = TextureMirror {
             texture,
             view: view.clone(),
             format,
             dims: (width, height, depth),
             dimension,
+            view_dim,
+            mip_level_count,
             pool: self.mirrors.clone(),
         };
         Ok((
@@ -1016,12 +1414,15 @@ impl WgpuBackend {
                 pad_params,
                 padded_row_bytes,
                 fold_x,
+                mip_plans,
+                mip_scratch_bytes,
             }),
         ))
     }
 
-    /// Encodes a queued buffer-to-texture copy into `encoder` before the
-    /// compute pass that samples the texture.
+    /// Encodes a queued buffer-to-texture copy (plus GPU mipmap generation when
+    /// `copy.mip_levels` is non-empty) into `encoder` before the compute pass
+    /// that samples the texture.
     pub(crate) fn encode_mirror_copy(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1101,6 +1502,74 @@ impl WgpuBackend {
                 },
                 extent,
             );
+        }
+        if let Some(scratch) = &copy.mip_scratch
+            && !copy.mip_levels.is_empty()
+        {
+            let pipes = self.mip_gen_pipelines()?;
+            let (pipeline, layout) = match copy.view_dim {
+                wgpu::TextureViewDimension::D2 => (&pipes.pipe_2d, &pipes.layout_2d),
+                wgpu::TextureViewDimension::D2Array => (&pipes.pipe_array, &pipes.layout_array),
+                wgpu::TextureViewDimension::D3 => (&pipes.pipe_3d, &pipes.layout_3d),
+                _ => unreachable!(),
+            };
+            for level in &copy.mip_levels {
+                let src_view = copy.dst.create_view(&wgpu::TextureViewDescriptor {
+                    label: Some("entelechy mip gen src"),
+                    dimension: Some(copy.view_dim),
+                    base_mip_level: level.mip - 1,
+                    mip_level_count: Some(1),
+                    ..Default::default()
+                });
+                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("entelechy mip gen"),
+                    layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: level.params_slice.binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&src_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: scratch.as_entire_binding(),
+                        },
+                    ],
+                });
+                {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("entelechy mip gen"),
+                        timestamp_writes: None,
+                    });
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, &bind_group, &[]);
+                    pass.dispatch_workgroups(level.groups_x, level.groups_y, 1);
+                }
+                encoder.copy_buffer_to_texture(
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: scratch,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(level.padded_row_bytes),
+                            rows_per_image: (level.dst_d > 1).then_some(level.dst_h),
+                        },
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &copy.dst,
+                        mip_level: level.mip,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: level.dst_w,
+                        height: level.dst_h,
+                        depth_or_array_layers: level.dst_d,
+                    },
+                );
+            }
         }
         Ok(())
     }

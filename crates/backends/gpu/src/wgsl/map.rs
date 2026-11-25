@@ -54,9 +54,31 @@ pub fn emit_full(
     longs: Longs,
     half: Half,
 ) -> String {
+    emit_full_filtered(module, packs, textured, longs, half, true)
+}
+
+/// Emits the module's compute shader with packed input groups, hardware
+/// `textured` inputs, `longs` mode, scatter `half`, and `float32_filterable`
+/// capability flag for hardware filtering samplers.
+pub fn emit_full_filtered(
+    module: &Module,
+    packs: &[Vec<usize>],
+    textured: &[usize],
+    longs: Longs,
+    half: Half,
+    float32_filterable: bool,
+) -> String {
     let manifest = &module.manifest;
     let mut out = String::new();
-    emit_preamble(&mut out, module, true, packs, textured, longs);
+    emit_preamble(
+        &mut out,
+        module,
+        true,
+        packs,
+        textured,
+        longs,
+        float32_filterable,
+    );
     // One store per written output; a scatter stores the entry's pairs.
     let scattering = matches!(manifest.mode, Mode::Scatter { .. });
     for (k, port) in manifest

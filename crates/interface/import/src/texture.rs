@@ -15,6 +15,8 @@ pub struct Imported {
     pub height: u32,
     /// Array layer count (`1` for a 2D texture).
     pub layers: u32,
+    /// Number of mip levels written (`1` or full mip chain).
+    pub mips: u32,
     /// Hardware block format written.
     pub format: BlockFormat,
     /// Compressed file size in bytes.
@@ -22,12 +24,16 @@ pub struct Imported {
 }
 
 /// Reads `source` (`.png`, `.ppm`, `.pgm`, `.field`, `.ktx2`, `.dds`) and writes
-/// `<stem>.<container>` (`ktx2` or `dds`) compressed as `format` into `out`.
+/// `<stem>.<container>` (`ktx2` or `dds`) compressed as `format` into `out`,
+/// generating a full hardware mipmap chain when `generate_mips` is true (with
+/// unit-normal renormalization for BC5 when `normal_map` is true).
 pub fn import(
     source: &Path,
     out: &Path,
     format: Option<BlockFormat>,
     container: &str,
+    generate_mips: bool,
+    normal_map: bool,
 ) -> Result<Imported, String> {
     let ext = container.to_ascii_lowercase();
     if ext != "ktx2" && ext != "dds" {
@@ -46,7 +52,13 @@ pub fn import(
             )
         })?,
     };
-    let blocks = entelechy_formats::texture::compress_field(&data, chosen)?;
+    let mip_count = if generate_mips {
+        entelechy_host::block::max_mip_count(domain)
+    } else {
+        1
+    };
+    let blocks =
+        entelechy_formats::texture::compress_field_mips(&data, chosen, mip_count, normal_map)?;
     let encoded = if ext == "ktx2" {
         entelechy_formats::texture::encode_ktx2(domain, &blocks)?
     } else {
@@ -64,6 +76,7 @@ pub fn import(
         width: domain.width(),
         height: domain.height(),
         layers: domain.depth(),
+        mips: blocks.mip_count(),
         format: chosen,
         bytes: encoded.len(),
     })

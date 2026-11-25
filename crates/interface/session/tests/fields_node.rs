@@ -788,3 +788,118 @@ fn background_io_pool_streams_and_cancels_volume_textures_cleanly() {
     assert!((probed[1][2] - 240.0 / 255.0).abs() < 0.03, "{probed:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_volume_fields_node_streams_multimip_ktx2_and_dds_with_trilinear_and_aniso() {
+    let dir = std::env::temp_dir().join(format!(
+        "entelechy-fields-volume-multimip-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("textures")).unwrap();
+    let fmt = entelechy_kernel::BlockFormat::Bc7RgbaUnorm;
+    let w = 32u32;
+    let h = 32u32;
+    let mut stripe_px = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            let b = (y * w as usize + x) * 4;
+            let v = if y % 2 == 0 { 240u8 } else { 16u8 };
+            stripe_px[b..b + 4].copy_from_slice(&[v, v, v, 255]);
+        }
+    }
+    let blocks_ktx = entelechy_kernel::CompressedBlocks::encode_unorm8_mips(
+        fmt,
+        Domain::Grid(w, h),
+        &stripe_px,
+        6,
+        false,
+    )
+    .unwrap();
+    let mips = blocks_ktx.mip_count();
+    assert_eq!(mips, 6);
+    std::fs::write(
+        dir.join("textures/stripes.ktx2"),
+        entelechy_formats::texture::encode_ktx2(Domain::Grid(w, h), &blocks_ktx).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("textures/stripes.dds"),
+        entelechy_formats::texture::encode_dds(Domain::Grid(w, h), &blocks_ktx).unwrap(),
+    )
+    .unwrap();
+
+    let n = 64;
+    let scene_src = format!(
+        "kernel t.paths@1 {{
+            requires {{ field.write; }}
+            output result: Rows<Int>;
+            compute {{ return {}[element()]; }}
+        }}
+        kernel t.probe@1 {{
+            requires {{ field.read; field.write; }}
+            input atlas: Volume<Vec4 as unorm8>;
+            output result: Rows<Vec4>;
+            compute {{
+                let layer = float(element()) + 0.5;
+                let iso = at_repeat(atlas, vec3(0.5, 0.5, layer), 3.0);
+                let aniso_hi = at_repeat(atlas, vec3(0.25, 0.5, layer), vec2(10.0, 0.0), vec2(0.0, 0.25));
+                let aniso_lo = at_repeat(atlas, vec3(0.25, 1.5, layer), vec2(10.0, 0.0), vec2(0.0, 0.25));
+                return vec4(iso.x, aniso_hi.x, aniso_lo.x, 1.0);
+            }}
+        }}
+        node paths: t.paths@1 {{ domain = {n}; }}
+        node atlas: Volume<Vec4 as unorm8> fields \"textures/\" {{ paths <- paths.result; }}
+        node probe: t.probe@1 {{ atlas <- atlas.result; domain = 2; }}
+        output probe <- probe.result;
+        ",
+        spelled(&["stripes.ktx2", "stripes.dds"], n),
+    );
+    std::fs::write(dir.join("scene.esn"), scene_src).unwrap();
+
+    let (mut session, is_hw_bc) = match entelechy_gpu::GpuBackend::new() {
+        Ok(gpu) => {
+            let bc = gpu.supports_texture_compression_bc();
+            let mut runtime = entelechy_kernel::Runtime::with_backend(4 << 20, Box::new(gpu));
+            runtime.set_small(0);
+            (
+                Session::open_with(&dir.join("scene.esn"), None, runtime),
+                bc,
+            )
+        }
+        Err(_) => (open(&dir), false),
+    };
+    let events = session.sync();
+    assert!(session.graph().is_some(), "{events:?}");
+    session.evaluate(&Context::default()).unwrap();
+    session.evaluate(&Context::default()).unwrap();
+
+    if is_hw_bc {
+        let expected_bytes = fmt
+            .mip_chain_byte_len(Domain::Volume(w, h, 2), mips)
+            .unwrap() as u64;
+        let result_mem = session
+            .memory_map()
+            .held
+            .into_iter()
+            .find(|e| e.owner == "atlas.result")
+            .map(|e| (e.bytes.host, e.bytes.device))
+            .expect("atlas.result is held");
+        assert_eq!(
+            result_mem,
+            (0, expected_bytes),
+            "2 streamed multi-mip BC7 layers must occupy full compressed mip chain in VRAM"
+        );
+    }
+
+    let raw = words(&mut session, "probe");
+    for layer in 0..2 {
+        let iso = f32::from_bits(raw[layer * 4]);
+        let aniso_hi = f32::from_bits(raw[layer * 4 + 1]);
+        let aniso_lo = f32::from_bits(raw[layer * 4 + 2]);
+        assert!((iso - 0.5).abs() < 0.08, "layer {layer}: iso={iso}");
+        assert!(aniso_hi > 0.78, "layer {layer}: aniso_hi={aniso_hi}");
+        assert!(aniso_lo < 0.22, "layer {layer}: aniso_lo={aniso_lo}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

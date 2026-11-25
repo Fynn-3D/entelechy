@@ -20,6 +20,8 @@ pub(super) struct InputView<'s> {
     /// The layout when it keeps scalars narrower than a word: reads widen
     /// through it and writes narrow. `None` holds the Kernel's words.
     pub(super) narrow: Option<entelechy_abi::Schema>,
+    /// Borrowed Host FieldData for cached mipmap pyramid sampling.
+    pub(super) field: &'s entelechy_abi::FieldData,
 }
 
 impl InputView<'_> {
@@ -210,12 +212,14 @@ impl<'s> Program<'s> {
     ) -> Result<Self, ExecutionError> {
         let mut inputs = Vec::with_capacity(invocation.inputs.len());
         for handle in &invocation.inputs {
+            let field = scope.field_data(*handle)?;
             let schema = scope.schema(*handle)?;
             inputs.push(InputView {
                 words: scope.storage(*handle)?,
                 domain: scope.size(*handle)?,
                 stride: schema.value_words(),
                 narrow: (!schema.is_wide()).then_some(schema),
+                field,
             });
         }
         let mut params = Vec::new();
@@ -390,6 +394,16 @@ pub(super) fn use_counts(function: &Function, slots: usize) -> Vec<u32> {
                 | Op::Typed(a)
                 | Op::Button(a)
                 | Op::Stick(a) => note(a),
+                Op::AtFiltered { at, lod, grad, .. } => {
+                    note(at);
+                    if let Some(l) = lod {
+                        note(l);
+                    }
+                    if let Some((dx, dy)) = grad {
+                        note(dx);
+                        note(dy);
+                    }
+                }
                 Op::Part { at, path, .. } => {
                     if let Some(at) = at {
                         note(at);
@@ -1052,6 +1066,27 @@ impl FunctionCompiler<'_> {
                     input: *input as usize,
                     position: self.loc(position).at,
                     kind: self.address(position),
+                    n: dst.n,
+                }
+            }
+            Op::AtFiltered {
+                input,
+                at,
+                repeat,
+                lod,
+                grad,
+            } => {
+                let dst = define(self);
+                Instr::AtFiltered {
+                    dst: dst.at,
+                    input: *input as usize,
+                    position: self.loc(at).at,
+                    kind: self.address(at),
+                    repeat: *repeat,
+                    lod: lod.as_ref().map(|l| self.loc(l).at),
+                    grad: grad
+                        .as_ref()
+                        .map(|(dx, dy)| (self.loc(dx).at, self.loc(dy).at)),
                     n: dst.n,
                 }
             }

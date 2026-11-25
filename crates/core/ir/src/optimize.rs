@@ -1901,6 +1901,7 @@ impl Ctx<'_> {
             Op::Sample(input)
             | Op::At(input, _)
             | Op::AtLinear(input, _)
+            | Op::AtFiltered { input, .. }
             | Op::Part { input, .. } => {
                 !self.memories.get(*input as usize).copied().unwrap_or(true)
             }
@@ -2344,6 +2345,17 @@ pub(crate) fn operands(op: &Op) -> Vec<ValueId> {
         | Op::Button(at)
         | Op::Stick(at) => {
             vec![*at]
+        }
+        Op::AtFiltered { at, lod, grad, .. } => {
+            let mut out = vec![*at];
+            if let Some(l) = lod {
+                out.push(*l);
+            }
+            if let Some((dx, dy)) = grad {
+                out.push(*dx);
+                out.push(*dy);
+            }
+            out
         }
         Op::Part { at, path, .. } => at
             .iter()
@@ -2808,6 +2820,16 @@ fn rename(op: &mut Op, map: &dyn Fn(ValueId) -> ValueId) {
         | Op::Typed(at)
         | Op::Button(at)
         | Op::Stick(at) => *at = map(*at),
+        Op::AtFiltered { at, lod, grad, .. } => {
+            *at = map(*at);
+            if let Some(l) = lod {
+                *l = map(*l);
+            }
+            if let Some((dx, dy)) = grad {
+                *dx = map(*dx);
+                *dy = map(*dy);
+            }
+        }
         Op::Part { at, path, .. } => {
             if let Some(at) = at {
                 *at = map(*at);

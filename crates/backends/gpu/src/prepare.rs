@@ -27,6 +27,12 @@ pub(crate) struct Pipeline<P = Pass> {
     /// The read-only `Grid`/`Volume` input indices bound as hardware 2D/3D
     /// sampled textures (`texture_2d<f32>` / `texture_3d<f32>`).
     pub(crate) textured: Vec<usize>,
+    /// Inputs requiring full hardware mipmap chains (`lod` or `grad`).
+    pub(crate) mipmapped: Vec<usize>,
+    /// `Volume` inputs sampled with 2D gradients, bound as `texture_2d_array`.
+    pub(crate) grad_volumes: Vec<usize>,
+    /// Hardware samplers declared and bound by `main`.
+    pub(crate) samplers: wgsl::SamplerSet,
 }
 
 /// A prefix fold's three passes: a block a walk, the blocks' totals
@@ -345,6 +351,9 @@ impl<P> Pipeline<P> {
             emits: self.emits,
             packed: self.packed,
             textured: self.textured,
+            mipmapped: self.mipmapped,
+            grad_volumes: self.grad_volumes,
+            samplers: self.samplers,
         })
     }
 }
@@ -427,6 +436,10 @@ pub(crate) struct Lazy {
     pub(crate) packed: Vec<Vec<usize>>,
     /// Its inputs mirrored into hardware 2D/3D textures, known before it is built.
     pub(crate) textured: Vec<usize>,
+    /// Its inputs requiring full hardware mipmap chains, known before it is built.
+    pub(crate) mipmapped: Vec<usize>,
+    /// Its `Volume` inputs bound as 2D texture arrays for 2D gradient sampling.
+    pub(crate) grad_volumes: Vec<usize>,
     device: wgpu::Device,
     wait: Wait,
     passes: Arc<PassCache>,
@@ -582,10 +595,24 @@ impl WgpuBackend {
             let mut fits = true;
             for &index in &lazy.textured {
                 let extent = scope.size(invocation.inputs[index])?;
-                let ok = match module.manifest.inputs[index].shape() {
+                let port = &module.manifest.inputs[index];
+                let enc = port
+                    .ty
+                    .schema
+                    .uniform_encoding()
+                    .unwrap_or(entelechy_abi::Encoding::Word);
+                let is_2d_array = port.shape() == entelechy_ir::Shape::Volume
+                    && (enc == entelechy_abi::Encoding::Unorm8
+                        || lazy.grad_volumes.contains(&index));
+                let ok = match port.shape() {
                     entelechy_ir::Shape::Grid => {
                         extent.width() <= limits.max_texture_dimension_2d
                             && extent.height() <= limits.max_texture_dimension_2d
+                    }
+                    entelechy_ir::Shape::Volume if is_2d_array => {
+                        extent.width() <= limits.max_texture_dimension_2d
+                            && extent.height() <= limits.max_texture_dimension_2d
+                            && extent.depth() <= limits.max_texture_array_layers
                     }
                     entelechy_ir::Shape::Volume => {
                         extent.width() <= limits.max_texture_dimension_3d
@@ -600,6 +627,12 @@ impl WgpuBackend {
                 }
             }
             if !fits {
+                if !lazy.mipmapped.is_empty() {
+                    return Err(ExecutionError::Device(format!(
+                        "`{}` samples mipmaps on an input exceeding hardware texture limits",
+                        module.manifest.id
+                    )));
+                }
                 return lazy.built_untextured(self);
             }
         }
@@ -656,15 +689,25 @@ pub(crate) fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLay
 pub(crate) fn texture_entry(
     binding: u32,
     view_dimension: wgpu::TextureViewDimension,
+    filterable: bool,
 ) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            sample_type: wgpu::TextureSampleType::Float { filterable },
             view_dimension,
             multisampled: false,
         },
+        count: None,
+    }
+}
+
+pub(crate) fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
         count: None,
     }
 }
@@ -687,6 +730,16 @@ impl WgpuBackend {
         }
         if module.holds(entelechy_abi::Type::Double) {
             return Some("it holds a Double, which the device does not compute".to_owned());
+        }
+        let filtered = wgsl::filtered_uses(module);
+        if !filtered.mipmapped.is_empty() {
+            let textured = self.textured_inputs(module);
+            if filtered.mipmapped.iter().any(|idx| !textured.contains(idx)) {
+                return Some(
+                    "it samples mipmaps on an input that cannot bind as a hardware texture"
+                        .to_owned(),
+                );
+            }
         }
         // A group's exchanges are arrays in its workgroup's memory.
         let memory = wgsl::group_memory(module);
@@ -859,6 +912,8 @@ impl WgpuBackend {
             module: module.clone(),
             packed: shaders.packed.clone(),
             textured: shaders.textured.clone(),
+            mipmapped: shaders.mipmapped.clone(),
+            grad_volumes: shaders.grad_volumes.clone(),
             device: self.device.clone(),
             wait: self.wait,
             passes: Arc::clone(&self.passes),
@@ -932,12 +987,15 @@ impl WgpuBackend {
         let packed = self.packing(module, &textured);
         let is_packed = |index: usize| packed.iter().any(|group| group.contains(&index));
         let longs = self.longs(module);
-        let source = wgsl::emit_full(
+        let filtered = wgsl::filtered_uses(module);
+        let samplers = wgsl::samplers_for(module, &textured, self.float32_filterable);
+        let source = wgsl::emit_full_filtered(
             module,
             &packed,
             &textured,
             longs,
             wgsl::first_half(module, longs),
+            self.float32_filterable,
         );
         let mut entries = vec![
             uniform_entry(wgsl::CONTEXT_BINDING),
@@ -949,13 +1007,31 @@ impl WgpuBackend {
                 continue;
             }
             if textured.contains(&index) {
-                let (_, view_dim, _) = crate::texture::format_for(port)
+                let force_2d_array = filtered.grad_volumes.contains(&index);
+                let (_, view_dim, _) = crate::texture::format_for(port, force_2d_array)
                     .expect("textured input has a hardware texture format");
-                entries.push(texture_entry(wgsl::INPUT_BINDING + index as u32, view_dim));
+                let filterable = wgsl::input_is_filterable(module, index, self.float32_filterable);
+                entries.push(texture_entry(
+                    wgsl::INPUT_BINDING + index as u32,
+                    view_dim,
+                    filterable,
+                ));
                 continue;
             }
             let memory = module.manifest.memories.contains(&port.name);
             entries.push(storage_entry(wgsl::INPUT_BINDING + index as u32, !memory));
+        }
+        if samplers.clamp {
+            entries.push(sampler_entry(wgsl::SAMPLER_CLAMP_BINDING));
+        }
+        if samplers.repeat {
+            entries.push(sampler_entry(wgsl::SAMPLER_REPEAT_BINDING));
+        }
+        if samplers.aniso_clamp {
+            entries.push(sampler_entry(wgsl::SAMPLER_ANISO_CLAMP_BINDING));
+        }
+        if samplers.aniso_repeat {
+            entries.push(sampler_entry(wgsl::SAMPLER_ANISO_REPEAT_BINDING));
         }
         for pack_idx in 0..packed.len() {
             entries.push(storage_entry(wgsl::packed_binding(pack_idx), true));
@@ -1211,6 +1287,9 @@ impl WgpuBackend {
             emits,
             packed,
             textured,
+            mipmapped: filtered.mipmapped,
+            grad_volumes: filtered.grad_volumes,
+            samplers,
         })
     }
 }

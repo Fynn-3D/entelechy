@@ -250,7 +250,7 @@ impl WgpuBackend {
             return Ok(None);
         };
         let domain = scope.size(handle)?;
-        let ct = self.create_compressed_texture(domain, blocks.format(), blocks.bytes())?;
+        let ct = self.create_compressed_texture(domain, blocks)?;
         let view = ct.view.clone();
         let bytes = ct.bytes;
         scope.make_resident_bytes(
@@ -457,6 +457,7 @@ impl WgpuBackend {
             Vec::with_capacity(invocation.inputs.len());
         let mut input_extents: Vec<entelechy_abi::Domain> =
             Vec::with_capacity(invocation.inputs.len());
+        let mut input_block_mips: Vec<Option<u32>> = Vec::with_capacity(invocation.inputs.len());
         // A memory's steps write it, so the bound buffer is a copy of the
         // input's, and that copy is the memory's output afterwards.
         let mut memory_outputs: Vec<(usize, wgpu::Buffer, entelechy_abi::Domain)> = Vec::new();
@@ -464,6 +465,7 @@ impl WgpuBackend {
         for (index, handle) in invocation.inputs.iter().enumerate() {
             let extent = scope.size(*handle)?;
             input_extents.push(extent);
+            input_block_mips.push(scope.blocks(*handle).ok().flatten().map(|b| b.mip_count()));
             let port = &module.manifest.inputs[index];
             let is_memory = module.manifest.memories.contains(&port.name);
             if !is_memory
@@ -508,12 +510,40 @@ impl WgpuBackend {
         let mut bound_textures: Vec<(u32, wgpu::TextureView)> =
             Vec::with_capacity(pipeline.textured.len());
         let mut mirror_plans: Vec<texture::MirrorPlan> = Vec::new();
-        let mut planned_views: std::collections::HashMap<Handle, wgpu::TextureView> =
-            std::collections::HashMap::new();
+        let mut handle_wants_mips: std::collections::HashMap<
+            (Handle, wgpu::TextureViewDimension),
+            bool,
+        > = std::collections::HashMap::new();
+        for &index in &pipeline.textured {
+            let handle = invocation.inputs[index];
+            let force_2d_array = pipeline.grad_volumes.contains(&index);
+            if let Some((_, view_dim, _)) =
+                texture::format_for(&module.manifest.inputs[index], force_2d_array)
+            {
+                let entry = handle_wants_mips.entry((handle, view_dim)).or_insert(false);
+                if pipeline.mipmapped.contains(&index) {
+                    *entry = true;
+                }
+            }
+        }
+        let mut planned_views: std::collections::HashMap<
+            (Handle, wgpu::TextureViewDimension),
+            wgpu::TextureView,
+        > = std::collections::HashMap::new();
         for &index in &pipeline.textured {
             let handle = invocation.inputs[index];
             let binding = wgsl::INPUT_BINDING + index as u32;
-            if let Some(view) = planned_views.get(&handle) {
+            let force_2d_array = pipeline.grad_volumes.contains(&index);
+            let (_, view_dim, _) =
+                texture::format_for(&module.manifest.inputs[index], force_2d_array).ok_or_else(
+                    || {
+                        ExecutionError::Device(format!(
+                            "port `{}` has no hardware texture format",
+                            module.manifest.inputs[index].name
+                        ))
+                    },
+                )?;
+            if let Some(view) = planned_views.get(&(handle, view_dim)) {
                 bound_textures.push((binding, view.clone()));
                 continue;
             }
@@ -523,14 +553,22 @@ impl WgpuBackend {
                 .ok_or_else(|| {
                     ExecutionError::Device("textured input is not resident on the GPU".to_owned())
                 })?;
+            let want_mips = handle_wants_mips
+                .get(&(handle, view_dim))
+                .copied()
+                .unwrap_or(false);
+            let blocks_mips = input_block_mips[index];
             let (view, plan) = self.plan_texture_mirror(
                 image,
                 handle,
                 &module.manifest.inputs[index],
                 input_extents[index],
                 index,
+                want_mips,
+                force_2d_array,
+                blocks_mips,
             )?;
-            planned_views.insert(handle, view.clone());
+            planned_views.insert((handle, view_dim), view.clone());
             bound_textures.push((binding, view));
             if let Some(plan) = plan {
                 mirror_plans.push(plan);
@@ -660,34 +698,42 @@ impl WgpuBackend {
                 params.resize(params.len().div_ceil(16) * 16, 0);
             }
             if batched {
-                let mut all_slices: Vec<&[u8]> = Vec::with_capacity(2 + mirror_plans.len());
+                let mut all_slices: Vec<&[u8]> = Vec::with_capacity(2 + mirror_plans.len() * 2);
                 all_slices.push(context.as_slice());
                 all_slices.push(params.as_slice());
                 for plan in &mirror_plans {
                     if let Some(pad) = &plan.pad_params {
                         all_slices.push(pad.as_slice());
                     }
+                    for mip in &plan.mip_plans {
+                        all_slices.push(mip.params.as_slice());
+                    }
                 }
                 let mut allocated = self.batch.alloc_uniforms(&all_slices)?;
                 let mut iter = allocated.drain(..);
                 let ctx_slice = iter.next().expect("context slice");
                 let par_slice = iter.next().expect("params slice");
-                let pad_slices: Vec<crate::batch::UniformSlice> = iter.collect();
-                (ctx_slice, par_slice, pad_slices)
+                let mirror_slices: Vec<crate::batch::UniformSlice> = iter.collect();
+                (ctx_slice, par_slice, mirror_slices)
             } else {
                 let (c, p) = self.uniform_buffers(context, params);
-                let mut pad_slices = Vec::new();
+                let mut mirror_slices = Vec::new();
                 for plan in &mirror_plans {
                     if let Some(pad) = &plan.pad_params {
                         let buf = self.take_uniform(pad);
                         temp_buffers.push(buf.clone());
-                        pad_slices.push(crate::batch::UniformSlice::entire(buf));
+                        mirror_slices.push(crate::batch::UniformSlice::entire(buf));
+                    }
+                    for mip in &plan.mip_plans {
+                        let buf = self.take_uniform(&mip.params);
+                        temp_buffers.push(buf.clone());
+                        mirror_slices.push(crate::batch::UniformSlice::entire(buf));
                     }
                 }
                 (
                     crate::batch::UniformSlice::entire(c),
                     crate::batch::UniformSlice::entire(p),
-                    pad_slices,
+                    mirror_slices,
                 )
             }
         };
@@ -715,17 +761,45 @@ impl WgpuBackend {
             } else {
                 None
             };
+            let mip_scratch = if !plan.mip_plans.is_empty() {
+                let scratch_buf = self.spare.take(
+                    &self.device,
+                    plan.mip_scratch_bytes.max(16),
+                    wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                );
+                temp_buffers.push(scratch_buf.clone());
+                Some(scratch_buf)
+            } else {
+                None
+            };
+            let mut mip_levels = Vec::with_capacity(plan.mip_plans.len());
+            for mip in plan.mip_plans {
+                let params_slice = pad_iter.next().expect("mip uniform slice");
+                mip_levels.push(texture::PendingMipLevel {
+                    mip: mip.mip,
+                    dst_w: mip.dst_w,
+                    dst_h: mip.dst_h,
+                    dst_d: mip.dst_d,
+                    padded_row_bytes: mip.padded_row_bytes,
+                    groups_x: mip.groups_x,
+                    groups_y: mip.groups_y,
+                    params_slice,
+                });
+            }
             pending_mirrors.push(texture::PendingMirrorCopy {
                 src: input_buffers[plan.input_index]
                     .as_ref()
                     .expect("mirrored input holds a storage buffer")
                     .clone(),
                 dst: plan.mirror.texture.clone(),
+                view_dim: plan.mirror.view_dim,
                 width: plan.width,
                 height: plan.height,
                 depth: plan.depth,
                 row_bytes: plan.row_bytes,
                 padded,
+                mip_scratch,
+                mip_levels,
             });
             commit_mirrors.push((plan.handle, plan.mirror));
         }
@@ -777,6 +851,7 @@ impl WgpuBackend {
                 resource: wgpu::BindingResource::TextureView(view),
             });
         }
+        self.push_sampler_entries(pipeline.samplers, &mut entries);
         // The failure word and its readback, from the pile, cleared below
         // before the pass. A whole sum records its first total that does not
         // fit there too.

@@ -37,6 +37,7 @@ const OVERRUN: i64 = failure::OVERRUN as i64;
 /// The imported helpers, by function id.
 struct Imports {
     linear: FuncId,
+    filtered: FuncId,
     key: FuncId,
     typed: FuncId,
     button: FuncId,
@@ -226,6 +227,7 @@ fn compile_once(
     };
     let (f, i) = (types::F32, types::I32);
     let linear_sig = sig(&[ptr, i, f, f, f, ptr], &[]);
+    let filtered_sig = sig(&[ptr, i, f, f, f, i, f, f, f, f, ptr], &[]);
     let key_sig = sig(&[ptr, i], &[i]);
     let put_sig = sig(&[ptr, i, f, f, f, ptr], &[]);
     let put_rows_sig = sig(&[ptr, i, i, ptr], &[]);
@@ -236,6 +238,7 @@ fn compile_once(
     let binary64_sig = sig(&[types::F64, types::F64], &[types::F64]);
     let imports = Imports {
         linear: declare(&mut jit, "entelechy_jit_linear", &linear_sig)?,
+        filtered: declare(&mut jit, "entelechy_jit_filtered", &filtered_sig)?,
         key: declare(&mut jit, "entelechy_jit_key", &key_sig)?,
         typed: declare(&mut jit, "entelechy_jit_typed", &key_sig)?,
         button: declare(&mut jit, "entelechy_jit_button", &key_sig)?,
@@ -519,6 +522,7 @@ struct Fx<'a, 'b> {
     coords: Option<(Value, Value, Value, Value)>,
     calls: Vec<FuncRef>,
     linear: FuncRef,
+    filtered: FuncRef,
     key: FuncRef,
     typed: FuncRef,
     button: FuncRef,
@@ -596,6 +600,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             jit.declare_func_in_func(id, b.func)
         };
         let linear = import(jit, &mut b, imports.linear);
+        let filtered = import(jit, &mut b, imports.filtered);
         let key = import(jit, &mut b, imports.key);
         let typed = import(jit, &mut b, imports.typed);
         let button = import(jit, &mut b, imports.button);
@@ -650,6 +655,7 @@ impl<'a, 'b> Fx<'a, 'b> {
             coords: None,
             calls,
             linear,
+            filtered,
             key,
             typed,
             button,
@@ -2767,6 +2773,41 @@ impl<'a, 'b> Fx<'a, 'b> {
                 self.b
                     .ins()
                     .call(self.linear, &[self.ctx, index, x, y, z, out]);
+                self.load_scratch(&tys)
+            }
+            Op::AtFiltered {
+                input,
+                at,
+                repeat,
+                lod,
+                grad,
+            } => {
+                let tys = word_types(self.module, ty);
+                let words = self.words(at);
+                let out = self.scratch_addr();
+                let index = self.i32c(*input as i64);
+                let half = self.f32c(0.5);
+                let zero = self.f32c(0.0);
+                let (x, y, z) = match self.ty(at) {
+                    Type::Float => (words[0], half, half),
+                    Type::Vec2 => (words[0], words[1], half),
+                    _ => (words[0], words[1], words[2]),
+                };
+                let (mode, a0, a1, a2, a3) = if let Some(lod_id) = lod {
+                    let lw = self.words(lod_id);
+                    (1i64, lw[0], zero, zero, zero)
+                } else if let Some((dx_id, dy_id)) = grad {
+                    let dx = self.words(dx_id);
+                    let dy = self.words(dy_id);
+                    (2i64, dx[0], dx[1], dy[0], dy[1])
+                } else {
+                    (0i64, zero, zero, zero, zero)
+                };
+                let flags = self.i32c((mode << 1) | i64::from(*repeat));
+                self.b.ins().call(
+                    self.filtered,
+                    &[self.ctx, index, x, y, z, flags, a0, a1, a2, a3, out],
+                );
                 self.load_scratch(&tys)
             }
             Op::Spend(counted) => {

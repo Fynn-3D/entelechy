@@ -115,6 +115,7 @@ impl WgpuBackend {
                     });
                 }
             }
+            self.push_sampler_entries(pipeline.samplers, &mut entries);
             let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("entelechy repeat"),
                 layout: &pipeline.main.1,

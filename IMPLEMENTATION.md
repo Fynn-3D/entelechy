@@ -93,15 +93,22 @@ Packages built from existing modes, with no engine feature of their own.
   [planner](crates/core/graph/src/evaluate/plan.rs)); `values()` are a
   Kernel's words, `storage()` the Field's bytes. Held by the matrix's
   `narrow` rows and the [packed part](examples/data/README.md).
-- Hardware block-compressed textures (`BC1`, `BC4`, `BC5`, `BC7`): pure-Rust
-  Khronos §17 codec in the Host ([block](crates/core/host/src/block.rs)),
-  zero-decompression `.ktx2` and `.dds` containers in
-  [formats](crates/interface/formats/src/texture.rs) and
-  [import](crates/interface/import/src/texture.rs), native
-  `TEXTURE_COMPRESSION_BC` 2D and `Texture2DArray` residency with GPU-to-GPU
-  compressed layer `join` and software fallback
+- Hardware block-compressed textures (`BC1`, `BC4`, `BC5`, `BC7`) and mipmap
+  chains: pure-Rust Khronos §17 codec with multi-mip generation and BC5
+  normal-map renormalization in the Host ([block](crates/core/host/src/block.rs)),
+  deterministic CPU/JIT mipmap pyramid & 16x anisotropic reference filter
+  ([mip](crates/core/host/src/mip.rs)), multi-mip zero-decompression `.ktx2`
+  and `.dds` containers in [formats](crates/interface/formats/src/texture.rs)
+  and [import](crates/interface/import/src/texture.rs), native
+  `TEXTURE_COMPRESSION_BC` multi-mip 2D and `Texture2DArray` residency with
+  multi-mip GPU-to-GPU compressed layer `join`, GPU compute 2D/2D-array/3D
+  mipmap generation (`MipGenPipelines`), hardware trilinear & 16x anisotropic
+  samplers (`textureSampleLevel` / `textureSampleGrad`, optional
+  `FLOAT32_FILTERABLE` with software mip fallback)
   ([texture](crates/backends/gpu/src/texture.rs),
-  [gpu parity](crates/backends/gpu/tests/parity.rs)), plus bounded
+  [wgsl](crates/backends/gpu/src/wgsl/prelude.rs),
+  [gpu parity](crates/backends/gpu/tests/parity.rs),
+  [jit parity](crates/backends/jit/tests/parity.rs)), plus bounded
   cancellable background `IoPool` and frame-paced `Volume<E>` `fields` node
   streaming ([store](crates/interface/documents/src/store.rs),
   [field_nodes](crates/interface/documents/src/inputs/field_nodes.rs),

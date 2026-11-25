@@ -531,6 +531,16 @@ pub(super) enum Instr {
         kind: Address,
         n: usize,
     },
+    AtFiltered {
+        dst: usize,
+        input: usize,
+        position: usize,
+        kind: Address,
+        repeat: bool,
+        lod: Option<usize>,
+        grad: Option<(usize, usize)>,
+        n: usize,
+    },
     Put {
         dst: usize,
         input: usize,

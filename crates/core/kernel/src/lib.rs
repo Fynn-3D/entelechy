@@ -1273,11 +1273,12 @@ impl Runtime {
         }
         // Zero-decompression Host block concatenation when every part holds
         // whole layers of the same BlockFormat for a Volume array.
-        if let Domain::Volume(w, h, total_layers) = domain
+        if let Domain::Volume(w, h, _total_layers) = domain
             && !parts.is_empty()
             && let Some(layer_elems) = (w as usize).checked_mul(h as usize).filter(|&n| n > 0)
         {
             let mut common_format: Option<BlockFormat> = None;
+            let mut common_mips = u32::MAX;
             let mut all_compressed = true;
             for (part, range) in parts {
                 if range.is_empty()
@@ -1311,26 +1312,31 @@ impl Runtime {
                     None => common_format = Some(blocks.format()),
                     _ => {}
                 }
+                common_mips = common_mips.min(blocks.mip_count());
             }
             if all_compressed
                 && let Some(format) = common_format
-                && let Some(layer_bytes) = format.byte_len(Domain::Grid(w, h))
+                && common_mips >= 1
+                && let Some(total_bytes) = format.mip_chain_byte_len(domain, common_mips)
             {
-                let mut joined_bytes = Vec::with_capacity(layer_bytes * total_layers as usize);
-                for (part, range) in parts {
-                    let blocks = self
-                        .host
-                        .data(*part)
-                        .map_err(abi)?
-                        .blocks()
-                        .expect("verified compressed");
-                    let src_layer = range.start / layer_elems;
-                    let layers = range.len() / layer_elems;
-                    let byte_start = src_layer * layer_bytes;
-                    let byte_end = (src_layer + layers) * layer_bytes;
-                    joined_bytes.extend_from_slice(&blocks.bytes()[byte_start..byte_end]);
+                let mut joined_bytes = Vec::with_capacity(total_bytes);
+                for mip in 0..common_mips {
+                    let mip_layer_dom = entelechy_abi::block::mip_domain(Domain::Grid(w, h), mip);
+                    let mip_layer_bytes = format.byte_len(mip_layer_dom).expect("valid mip");
+                    for (part, range) in parts {
+                        let data = self.host.data(*part).map_err(abi)?;
+                        let blocks = data.blocks().expect("verified compressed");
+                        let mip_slice = blocks.mip_bytes(data.domain(), mip);
+                        let src_layer = range.start / layer_elems;
+                        let layers = range.len() / layer_elems;
+                        let byte_start = src_layer * mip_layer_bytes;
+                        let byte_end = (src_layer + layers) * mip_layer_bytes;
+                        joined_bytes.extend_from_slice(&mip_slice[byte_start..byte_end]);
+                    }
                 }
-                let blocks = CompressedBlocks::new(format, domain, joined_bytes).map_err(abi)?;
+                let blocks =
+                    CompressedBlocks::new_with_mips(format, domain, common_mips, joined_bytes)
+                        .map_err(abi)?;
                 let data = FieldData::from_blocks(domain, blocks).map_err(abi)?;
                 return self.host.adopt(data).map_err(abi);
             }

@@ -627,6 +627,13 @@ impl<'a> Reader<'a> {
                 body: self.block(next, depth)?,
             },
             46 => Op::Meet(self.opt(vid)?),
+            47 => Op::AtFiltered {
+                input: self.u32()?,
+                at: vid(self)?,
+                repeat: self.byte()? != 0,
+                lod: self.opt(vid)?,
+                grad: self.opt(|r| Ok((vid(r)?, vid(r)?)))?,
+            },
             other => return Err(format!("invalid instruction tag {other}")),
         };
         Ok(Instruction { id, ty, op })

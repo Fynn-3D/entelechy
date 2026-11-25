@@ -37,7 +37,7 @@ pub fn emit_reduce_packed_groups_longs(
     let (count_binding, in_binding, out_binding) = reduce_bindings(module);
     let mut out = String::new();
     // The map shader's context, params and inputs, which `merge` may read.
-    emit_preamble(&mut out, module, false, packs, &[], longs);
+    emit_preamble(&mut out, module, false, packs, &[], longs, false);
     let _ = writeln!(
         out,
         "@group(0) @binding({count_binding}) var<uniform> level: vec4<u32>;"

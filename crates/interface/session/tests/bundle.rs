@@ -332,3 +332,74 @@ fn v1_bundle_stream_still_decodes_and_bundled_saves_round_trip_across_sessions()
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn filtered_sampling_ops_round_trip_through_binary_bundle() {
+    let dir =
+        std::env::temp_dir().join(format!("entelechy-bundle-filtered-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let scene_path = dir.join("scene.esn");
+    std::fs::write(
+        &scene_path,
+        "kernel s.tex@1 {
+            requires { field.write; }
+            output result: Grid<Vec4>;
+            compute {
+                let p = coord();
+                let c = if (int(p.x) + int(p.y)) % 2 == 0 { 1.0 } else { 0.0 };
+                return vec4(c, p.x / 16.0, p.y / 16.0, 1.0);
+            }
+        }
+        kernel s.sample@1 {
+            requires { field.read; field.write; }
+            input tex: Grid<Vec4>;
+            output result: Grid<Vec4>;
+            compute {
+                let p = coord() * 2.0 + vec2(0.5, 0.5);
+                let a = at_repeat(tex, p - vec2(4.0, 4.0));
+                let b = at_linear(tex, p, 1.5);
+                let c = at_repeat(tex, p, 1.0);
+                let d = at_linear(tex, p, vec2(4.0, 0.0), vec2(0.0, 0.5));
+                let e = at_repeat(tex, p, vec2(4.0, 0.0), vec2(0.0, 0.5));
+                return (a + b + c + d + e) * 0.2;
+            }
+        }
+        node tex: s.tex@1 { domain = vec2(16, 16); }
+        node out: s.sample@1 { tex <- tex.result; domain = vec2(8, 8); }
+        output result <- out.result;
+        ",
+    )
+    .unwrap();
+
+    let built = Session::build("cpu", Limits::default(), Wait::blocking()).unwrap();
+    let mut doc_session = Session::open_with(&scene_path, None, built.runtime);
+    doc_session.sync();
+    doc_session.evaluate(&Context::default()).unwrap();
+    let expected = output_words(&mut doc_session, "result");
+
+    let bundle = doc_session
+        .bundle_with_fonts(|_, _, _| unreachable!("no fonts"))
+        .unwrap();
+    let decoded = Bundle::decode(&bundle.encode()).expect("filtered op bundle decodes");
+
+    for backend in ["cpu", "jit"] {
+        let mut session = Session::open_bundle(
+            decoded.clone(),
+            backend,
+            Limits::default(),
+            Wait::blocking(),
+            false,
+        )
+        .unwrap()
+        .session;
+        session.evaluate(&Context::default()).unwrap();
+        assert_eq!(
+            output_words(&mut session, "result"),
+            expected,
+            "bundled filtered sampling mismatch on {backend}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -93,6 +93,13 @@ pub(crate) struct WgpuBackend {
     row_pad: OnceLock<Result<texture::RowPadPipeline, String>>,
     /// The pass that unpacks a hardware BCn texture into a storage buffer when needed.
     decompress_bc: OnceLock<Result<texture::DecompressBcPipelines, String>>,
+    /// The passes that generate 2D/2D-array/3D mipmap chains on the GPU.
+    mip_gen: OnceLock<Result<texture::MipGenPipelines, String>>,
+    /// Persistent hardware filtering samplers (clamp/repeat x trilinear/16x aniso).
+    sampler_clamp: wgpu::Sampler,
+    sampler_repeat: wgpu::Sampler,
+    sampler_aniso_clamp: wgpu::Sampler,
+    sampler_aniso_repeat: wgpu::Sampler,
     /// Buffers released Fields left behind; see [`Spare`].
     spare: Spare,
     /// The rasterizer's own targets, kept by shape; see [`SpareTextures`].
@@ -127,6 +134,9 @@ pub(crate) struct WgpuBackend {
     /// Whether the adapter offers hardware BC1/BC4/BC5/BC7 block-compressed
     /// textures (`TEXTURE_COMPRESSION_BC`).
     texture_compression_bc: bool,
+    /// Whether the adapter offers hardware linear/anisotropic filtering on
+    /// 32-bit float textures (`FLOAT32_FILTERABLE`).
+    float32_filterable: bool,
     /// Failure words and their readback buffers, for reuse: a checked node
     /// takes a pair each run.
     failures: Arc<Mutex<Vec<(wgpu::Buffer, wgpu::Buffer)>>>,
@@ -382,6 +392,12 @@ impl WgpuBackend {
         if texture_compression_bc {
             features |= wgpu::Features::TEXTURE_COMPRESSION_BC;
         }
+        let float32_filterable = adapter
+            .features()
+            .contains(wgpu::Features::FLOAT32_FILTERABLE);
+        if float32_filterable {
+            features |= wgpu::Features::FLOAT32_FILTERABLE;
+        }
         let (device, queue) = wait
             .block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("entelechy"),
@@ -438,6 +454,28 @@ impl WgpuBackend {
             page_queue.clone(),
             Arc::clone(&pending_checks),
         ));
+        let make_sampler = |label: &str, xy_mode: wgpu::AddressMode, anisotropy_clamp: u16| {
+            device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some(label),
+                address_mode_u: xy_mode,
+                address_mode_v: xy_mode,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Linear,
+                lod_min_clamp: 0.0,
+                lod_max_clamp: 32.0,
+                compare: None,
+                anisotropy_clamp,
+                border_color: None,
+            })
+        };
+        let sampler_clamp = make_sampler("entelechy clamp", wgpu::AddressMode::ClampToEdge, 1);
+        let sampler_repeat = make_sampler("entelechy repeat", wgpu::AddressMode::Repeat, 1);
+        let sampler_aniso_clamp =
+            make_sampler("entelechy aniso clamp", wgpu::AddressMode::ClampToEdge, 16);
+        let sampler_aniso_repeat =
+            make_sampler("entelechy aniso repeat", wgpu::AddressMode::Repeat, 16);
         Ok(Self {
             wait,
             spent,
@@ -455,6 +493,11 @@ impl WgpuBackend {
             same: OnceLock::new(),
             row_pad: OnceLock::new(),
             decompress_bc: OnceLock::new(),
+            mip_gen: OnceLock::new(),
+            sampler_clamp,
+            sampler_repeat,
+            sampler_aniso_clamp,
+            sampler_aniso_repeat,
             spare,
             targets,
             mirrors,
@@ -465,6 +508,7 @@ impl WgpuBackend {
             int64_atomics,
             primitive_index,
             texture_compression_bc,
+            float32_filterable,
             uploaded: std::sync::atomic::AtomicU64::new(0),
             failures: Arc::new(Mutex::new(Vec::new())),
             last_nanos: std::sync::atomic::AtomicU64::new(u64::MAX),
@@ -583,6 +627,51 @@ impl WgpuBackend {
     /// Whether the open device has hardware BC1/BC4/BC5/BC7 block compression.
     pub fn supports_texture_compression_bc(&self) -> bool {
         self.texture_compression_bc
+    }
+
+    /// Disables hardware `FLOAT32_FILTERABLE` sampling so tests can exercise
+    /// the software mip-filtering fallback on `Word` textures.
+    pub fn without_float32_filterable(mut self) -> Self {
+        self.float32_filterable = false;
+        self
+    }
+
+    /// Whether the open device offers hardware linear/anisotropic filtering on
+    /// 32-bit float textures (`FLOAT32_FILTERABLE`).
+    pub fn supports_float32_filterable(&self) -> bool {
+        self.float32_filterable
+    }
+
+    /// Appends the hardware `wgpu::Sampler` bind group entries declared by `samplers`.
+    pub(crate) fn push_sampler_entries<'a>(
+        &'a self,
+        samplers: wgsl::SamplerSet,
+        entries: &mut Vec<wgpu::BindGroupEntry<'a>>,
+    ) {
+        if samplers.clamp {
+            entries.push(wgpu::BindGroupEntry {
+                binding: wgsl::SAMPLER_CLAMP_BINDING,
+                resource: wgpu::BindingResource::Sampler(&self.sampler_clamp),
+            });
+        }
+        if samplers.repeat {
+            entries.push(wgpu::BindGroupEntry {
+                binding: wgsl::SAMPLER_REPEAT_BINDING,
+                resource: wgpu::BindingResource::Sampler(&self.sampler_repeat),
+            });
+        }
+        if samplers.aniso_clamp {
+            entries.push(wgpu::BindGroupEntry {
+                binding: wgsl::SAMPLER_ANISO_CLAMP_BINDING,
+                resource: wgpu::BindingResource::Sampler(&self.sampler_aniso_clamp),
+            });
+        }
+        if samplers.aniso_repeat {
+            entries.push(wgpu::BindGroupEntry {
+                binding: wgsl::SAMPLER_ANISO_REPEAT_BINDING,
+                resource: wgpu::BindingResource::Sampler(&self.sampler_aniso_repeat),
+            });
+        }
     }
 
     /// How `module`'s shaders compute a `Long`: as the device's own, unless
@@ -1488,6 +1577,25 @@ impl GpuBackend {
     pub fn supports_texture_compression_bc(&self) -> bool {
         match &self.0 {
             Driver::Wgpu(b) => b.supports_texture_compression_bc(),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(_) => false,
+        }
+    }
+
+    /// Disables hardware `FLOAT32_FILTERABLE` sampling so tests can exercise
+    /// the software mip-filtering fallback on `Word` textures.
+    pub fn without_float32_filterable(self) -> Self {
+        match self.0 {
+            Driver::Wgpu(b) => Self(Driver::Wgpu(Box::new((*b).without_float32_filterable()))),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(b) => Self(Driver::WebGl(b)),
+        }
+    }
+
+    /// Whether the open GPU supports hardware filtering on 32-bit float textures.
+    pub fn supports_float32_filterable(&self) -> bool {
+        match &self.0 {
+            Driver::Wgpu(b) => b.supports_float32_filterable(),
             #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
             Driver::WebGl(_) => false,
         }

@@ -13,9 +13,10 @@ use std::str::FromStr;
 
 pub use entelechy_host::{
     BlockFormat, Census, CompressedBlocks, Domain, Encoding, FieldBytes, FieldData, Handle, Host,
-    HostError, Image, MadeFrom, PAGE_WORDS, Pages, Pixel, Scalar, Schema, Shape, Version,
+    HostError, Image, MadeFrom, MipPyramid, PAGE_WORDS, Pages, Pixel, Scalar, Schema, Shape,
+    Version,
 };
-pub use entelechy_host::{DEFAULT_WORK, MAX_WORK, block, encoding};
+pub use entelechy_host::{DEFAULT_WORK, MAX_WORK, block, encoding, mip};
 
 /// A named authority a Kernel may declare and be granted; what each
 /// grants is [`Capability::doc`].
@@ -1340,6 +1341,13 @@ impl<'a> Scope<'a> {
     pub fn blocks(&self, field: Handle) -> Result<Option<&CompressedBlocks>, AbiError> {
         self.require(Capability::FieldRead)?;
         Ok(self.host.data(field)?.blocks())
+    }
+
+    /// Borrows the Host [`FieldData`] behind an input handle (for CPU/JIT
+    /// filtered mipmap sampling). Requires `field.read`.
+    pub fn field_data(&self, field: Handle) -> Result<&FieldData, AbiError> {
+        self.require(Capability::FieldRead)?;
+        Ok(self.host.data(field)?)
     }
 
     /// A copy of an input's memory as kept, to write in place: a scan's

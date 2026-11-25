@@ -745,6 +745,19 @@ fn renamed(op: &Op, map: impl Fn(ValueId) -> ValueId) -> Op {
         }
         Op::At(input, at) => Op::At(*input, map(*at)),
         Op::AtLinear(input, at) => Op::AtLinear(*input, map(*at)),
+        Op::AtFiltered {
+            input,
+            at,
+            repeat,
+            lod,
+            grad,
+        } => Op::AtFiltered {
+            input: *input,
+            at: map(*at),
+            repeat: *repeat,
+            lod: lod.map(&map),
+            grad: grad.map(|(dx, dy)| (map(dx), map(dy))),
+        },
         Op::Key(at) => Op::Key(map(*at)),
         Op::Typed(at) => Op::Typed(map(*at)),
         Op::Button(at) => Op::Button(map(*at)),

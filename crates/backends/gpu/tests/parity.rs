@@ -4160,3 +4160,479 @@ fn hardware_compressed_volume_join_copies_blocks_gpu_to_gpu_without_decompressio
         }
     }
 }
+
+#[test]
+fn hardware_mipmaps_trilinear_and_repeat_match_cpu_across_uncompressed_and_bc_formats() {
+    let Some(gpu) = gpu() else { return };
+    use entelechy_abi::{BlockFormat, CompressedBlocks, Encoding, FieldData, Scalar, Schema};
+
+    let source = "kernel test.mips@1 {
+        requires { field.read; field.write; }
+        input rows: Rows<Vec2>;
+        input f32_grid: Grid<Vec4>;
+        input snorm_grid: Grid<Vec2 as snorm8>;
+        input vol3d: Volume<Vec4 as f16>;
+        input bc7_grid: Grid<Vec4 as unorm8>;
+        input bc5_norm: Grid<Vec2 as unorm8>;
+        input odd_bc7: Grid<Vec4 as unorm8>;
+        output result: Grid<Vec4>;
+        compute {
+            let p = coord();
+            let r = at_repeat(rows, p.x * 1.5 - 2.0);
+            let m0 = at_repeat(f32_grid, p * 2.0 - vec2(1.5, 2.5));
+            let m1 = at_linear(f32_grid, p * 2.0 + vec2(0.5, 0.5), 1.0);
+            let m2 = at_repeat(f32_grid, p * 2.0 + vec2(0.5, 0.5), 2.5);
+            let sn = at_linear(snorm_grid, p * 2.0 + vec2(0.5, 0.5), 1.5);
+            let v3 = at_linear(vol3d, vec3(p.x + 0.5, p.y + 0.5, 2.0), 1.0);
+            let b7 = at_repeat(bc7_grid, p * 4.0 - vec2(2.0, 2.0), 2.0);
+            let b5 = at_linear(bc5_norm, p * 2.0 + vec2(0.5, 0.5), 1.0);
+            let odd = at_repeat(odd_bc7, p * 1.7 - vec2(1.0, 0.5), 1.0);
+            return vec4(
+                (r.x + m0.x + m1.x + m2.x) * 0.25,
+                (sn.x + v3.x + b7.x + odd.x) * 0.25,
+                (sn.y + v3.y + b5.y + odd.y) * 0.25,
+                (r.y + v3.z + b7.z + b5.x) * 0.25
+            );
+        }
+    }";
+    let module = compile(source).unwrap();
+
+    // 1D Rows<Vec2>
+    let rows_vals: Vec<u32> = (0..4)
+        .flat_map(|i| [(i as f32 / 3.0).to_bits(), (1.0 - i as f32 / 3.0).to_bits()])
+        .collect();
+    let rows_data = FieldData::from_values(
+        Schema::new(vec![Scalar::Float; 2]),
+        Domain::Rows(4),
+        &rows_vals,
+    )
+    .unwrap();
+
+    // 16x16 uncompressed f32 checkerboard (averages to 0.5 at mip >= 1)
+    let mut f32_vals = Vec::with_capacity(16 * 16 * 4);
+    for y in 0..16u32 {
+        for x in 0..16u32 {
+            let c = if (x + y) % 2 == 0 { 1.0f32 } else { 0.0 };
+            f32_vals
+                .extend_from_slice(&[c, x as f32 / 15.0, y as f32 / 15.0, 1.0].map(f32::to_bits));
+        }
+    }
+    let f32_data =
+        FieldData::from_values(Schema::pixel(), Domain::Grid(16, 16), &f32_vals).unwrap();
+
+    // 16x16 snorm8 Grid<Vec2 as snorm8>
+    let snorm_schema = Schema::new(vec![Scalar::Float; 2])
+        .with_encoding(Encoding::Snorm8)
+        .unwrap();
+    let mut snorm_vals = Vec::with_capacity(16 * 16 * 2);
+    for y in 0..16u32 {
+        for x in 0..16u32 {
+            let sx = (x as f32 / 15.0) * 2.0 - 1.0;
+            let sy = (y as f32 / 15.0) * 2.0 - 1.0;
+            snorm_vals.extend_from_slice(&[sx.to_bits(), sy.to_bits()]);
+        }
+    }
+    let snorm_data =
+        FieldData::from_values(snorm_schema, Domain::Grid(16, 16), &snorm_vals).unwrap();
+
+    // 8x8x4 3D Volume<Vec4 as f16> (true 3D 2x2x2 mipmaps)
+    let vol_schema = Schema::pixel().with_encoding(Encoding::F16).unwrap();
+    let mut vol_vals = Vec::with_capacity(8 * 8 * 4 * 4);
+    for z in 0..4u32 {
+        for y in 0..8u32 {
+            for x in 0..8u32 {
+                let vz = if z < 2 { 0.2f32 } else { 0.8 };
+                vol_vals.extend_from_slice(
+                    &[x as f32 / 7.0, y as f32 / 7.0, vz, 1.0].map(f32::to_bits),
+                );
+            }
+        }
+    }
+    let vol_data = FieldData::from_values(vol_schema, Domain::Volume(8, 8, 4), &vol_vals).unwrap();
+
+    // 32x32 multi-mip BC7 checkerboard
+    let mut bc7_px = vec![0u8; 32 * 32 * 4];
+    for y in 0..32usize {
+        for x in 0..32usize {
+            let b = (y * 32 + x) * 4;
+            let c = if (x + y) % 2 == 0 { 240u8 } else { 16u8 };
+            bc7_px[b..b + 4].copy_from_slice(&[c, (x * 7) as u8, (y * 7) as u8, 255]);
+        }
+    }
+    let bc7_blocks = CompressedBlocks::encode_unorm8_mips(
+        BlockFormat::Bc7RgbaUnorm,
+        Domain::Grid(32, 32),
+        &bc7_px,
+        6,
+        false,
+    )
+    .unwrap();
+    assert_eq!(bc7_blocks.mip_count(), 6);
+    let bc7_data = FieldData::from_blocks(Domain::Grid(32, 32), bc7_blocks).unwrap();
+
+    // 16x16 multi-mip BC5 normal-renormalized
+    let mut bc5_px = vec![0u8; 16 * 16 * 2];
+    for y in 0..16usize {
+        for x in 0..16usize {
+            let b = (y * 16 + x) * 2;
+            bc5_px[b] = if (x + y) % 2 == 0 { 190 } else { 66 };
+            bc5_px[b + 1] = 160;
+        }
+    }
+    let bc5_blocks = CompressedBlocks::encode_unorm8_mips(
+        BlockFormat::Bc5RgUnorm,
+        Domain::Grid(16, 16),
+        &bc5_px,
+        5,
+        true,
+    )
+    .unwrap();
+    let bc5_data = FieldData::from_blocks(Domain::Grid(16, 16), bc5_blocks).unwrap();
+
+    // 13x9 odd-sized multi-mip BC7 (exercises physical != logical padding safety)
+    let mut odd_px = vec![0u8; 13 * 9 * 4];
+    for y in 0..9usize {
+        for x in 0..13usize {
+            let b = (y * 13 + x) * 4;
+            odd_px[b..b + 4].copy_from_slice(&[(x * 20) as u8, (y * 28) as u8, 128, 255]);
+        }
+    }
+    let odd_blocks = CompressedBlocks::encode_unorm8_mips(
+        BlockFormat::Bc7RgbaUnorm,
+        Domain::Grid(13, 9),
+        &odd_px,
+        4,
+        false,
+    )
+    .unwrap();
+    let odd_data = FieldData::from_blocks(Domain::Grid(13, 9), odd_blocks).unwrap();
+
+    let fields = [
+        rows_data, f32_data, snorm_data, vol_data, bc7_data, bc5_data, odd_data,
+    ];
+    let out_domain = Domain::Grid(8, 8);
+
+    let mut cpu_host = Host::new(8 << 20);
+    let cpu_inputs: Vec<_> = fields
+        .iter()
+        .map(|f| cpu_host.adopt(f.clone()).unwrap())
+        .collect();
+    let cpu_out = {
+        let mut scope = Scope::new(&mut cpu_host, all());
+        CpuBackend
+            .execute(
+                &module,
+                &Invocation {
+                    inputs: cpu_inputs,
+                    params: vec![],
+                    domain: out_domain,
+                    context: Context::default(),
+                },
+                &mut scope,
+            )
+            .unwrap()[0]
+    };
+    let cpu_words = cpu_host.data(cpu_out).unwrap().storage().to_vec();
+
+    // Verify both hardware FLOAT32_FILTERABLE path AND non-filterable fallback!
+    for (label, backend) in [
+        ("hw", gpu),
+        (
+            "no_f32_filter",
+            GpuBackend::new().unwrap().without_float32_filterable(),
+        ),
+    ] {
+        let mut gpu_host = Host::new(8 << 20);
+        let gpu_inputs: Vec<_> = fields
+            .iter()
+            .map(|f| gpu_host.adopt(f.clone()).unwrap())
+            .collect();
+        let prep = backend.prepare(&module).unwrap();
+        let gpu_out = {
+            let mut scope = Scope::new(&mut gpu_host, all());
+            backend
+                .execute(
+                    prep.as_ref(),
+                    &module,
+                    &Invocation {
+                        inputs: gpu_inputs,
+                        params: vec![],
+                        domain: out_domain,
+                        context: Context::default(),
+                    },
+                    &mut scope,
+                )
+                .unwrap()[0]
+        };
+        let gpu_words = {
+            let dev = gpu_host.resident(gpu_out).unwrap().unwrap();
+            backend.download(dev, out_domain.count() * 16).unwrap()
+        };
+        for (idx, (&cw, &gw)) in cpu_words.iter().zip(gpu_words.iter()).enumerate() {
+            let cf = f32::from_bits(cw);
+            let gf = f32::from_bits(gw);
+            assert!(
+                (cf - gf).abs() <= 0.02,
+                "{label} mipmap parity mismatch at word {idx}: cpu={cf} vs gpu={gf} (diff={})",
+                (cf - gf).abs()
+            );
+        }
+    }
+}
+
+#[test]
+fn hardware_16x_anisotropic_filtering_preserves_grazing_detail_and_wraps_seamlessly() {
+    let Some(gpu) = gpu() else { return };
+    use entelechy_abi::{BlockFormat, CompressedBlocks, Encoding, FieldData, Schema};
+
+    // High-frequency horizontal stripes (even rows = 1.0, odd rows = 0.0) on a 64x64
+    // f16 Grid and a 2-layer multi-mip BC7 Volume (layer 0 horizontal, layer 1 vertical).
+    let w = 64u32;
+    let h = 64u32;
+    let mut f16_vals = Vec::with_capacity((w * h * 4) as usize);
+    let mut bc_px = vec![0u8; (w * h * 2 * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let hz = if y % 2 == 0 { 1.0f32 } else { 0.0 };
+            f16_vals.extend_from_slice(&[hz, hz, hz, 1.0].map(f32::to_bits));
+            // Layer 0: horizontal stripes; Layer 1: vertical stripes.
+            let b0 = ((y * w + x) * 4) as usize;
+            let c0 = if y % 2 == 0 { 255u8 } else { 0u8 };
+            bc_px[b0..b0 + 4].copy_from_slice(&[c0, c0, c0, 255]);
+            let b1 = (((w * h) + y * w + x) * 4) as usize;
+            let c1 = if x % 2 == 0 { 255u8 } else { 0u8 };
+            bc_px[b1..b1 + 4].copy_from_slice(&[c1, c1, c1, 255]);
+        }
+    }
+    let f16_data = FieldData::from_values(
+        Schema::pixel().with_encoding(Encoding::F16).unwrap(),
+        Domain::Grid(w, h),
+        &f16_vals,
+    )
+    .unwrap();
+    let bc_blocks = CompressedBlocks::encode_unorm8_mips(
+        BlockFormat::Bc7RgbaUnorm,
+        Domain::Volume(w, h, 2),
+        &bc_px,
+        7,
+        false,
+    )
+    .unwrap();
+    let bc_vol = FieldData::from_blocks(Domain::Volume(w, h, 2), bc_blocks).unwrap();
+
+    // Sample grazing along X (`ddx = (12, 0), ddy = (0, 0.25)`) at even & odd rows
+    // crossing the repeat wrap seam (`x = 0.25` and `x = 63.75`), vs isotropic `lod = 3.58`.
+    let source = "kernel test.aniso@1 {
+        requires { field.read; field.write; }
+        input stripes: Grid<Vec4 as f16>;
+        input atlas: Volume<Vec4 as unorm8>;
+        output out: Rows<Vec4>;
+        compute {
+            let e = element();
+            let x = if e % 2 == 0 { 0.25 } else { 63.75 };
+            let row = float(e / 2) + 0.5;
+            let ddx = vec2(12.0, 0.0);
+            let ddy = vec2(0.0, 0.25);
+            let iso = at_repeat(stripes, vec2(x, row), 3.58);
+            let aniso_grid = at_repeat(stripes, vec2(x, row), ddx, ddy);
+            let aniso_arr0 = at_repeat(atlas, vec3(x, row, 0.5), ddx, ddy);
+            // Layer 1 has vertical stripes; grazing along Y preserves vertical stripes!
+            let aniso_arr1 = at_repeat(atlas, vec3(row, x, 1.5), vec2(0.25, 0.0), vec2(0.0, 12.0));
+            return vec4(iso.x, aniso_grid.x, aniso_arr0.x, aniso_arr1.x);
+        }
+    }";
+    let module = compile(source).unwrap();
+    let out_domain = Domain::Rows(8);
+
+    let run_cpu = || {
+        let mut host = Host::new(8 << 20);
+        let inputs = vec![
+            host.adopt(f16_data.clone()).unwrap(),
+            host.adopt(bc_vol.clone()).unwrap(),
+        ];
+        let mut scope = Scope::new(&mut host, all());
+        let out = CpuBackend
+            .execute(
+                &module,
+                &Invocation {
+                    inputs,
+                    params: vec![],
+                    domain: out_domain,
+                    context: Context::default(),
+                },
+                &mut scope,
+            )
+            .unwrap()[0];
+        host.data(out).unwrap().storage().to_vec()
+    };
+    let run_gpu = || {
+        let mut host = Host::new(8 << 20);
+        let inputs = vec![
+            host.adopt(f16_data.clone()).unwrap(),
+            host.adopt(bc_vol.clone()).unwrap(),
+        ];
+        let prep = gpu.prepare(&module).unwrap();
+        let mut scope = Scope::new(&mut host, all());
+        let out = gpu
+            .execute(
+                prep.as_ref(),
+                &module,
+                &Invocation {
+                    inputs,
+                    params: vec![],
+                    domain: out_domain,
+                    context: Context::default(),
+                },
+                &mut scope,
+            )
+            .unwrap()[0];
+        let dev = host.resident(out).unwrap().unwrap();
+        gpu.download(dev, out_domain.count() * 16).unwrap()
+    };
+
+    for (label, words) in [("cpu", run_cpu()), ("gpu", run_gpu())] {
+        for e in 0..8usize {
+            let iso = f32::from_bits(words[e * 4]);
+            let aniso_g = f32::from_bits(words[e * 4 + 1]);
+            let aniso_0 = f32::from_bits(words[e * 4 + 2]);
+            let aniso_1 = f32::from_bits(words[e * 4 + 3]);
+            // Isotropic at lod 3.58 collapses alternating 1/0 stripes to ~0.5.
+            assert!(
+                (iso - 0.5).abs() < 0.08,
+                "{label}[{e}]: isotropic should average to ~0.5, got {iso}"
+            );
+            let expect_white = (e / 2) % 2 == 0;
+            for (name, val) in [
+                ("aniso_grid", aniso_g),
+                ("aniso_arr0", aniso_0),
+                ("aniso_arr1", aniso_1),
+            ] {
+                if expect_white {
+                    assert!(
+                        val > 0.80,
+                        "{label}[{e}] {name}: 16x aniso must preserve white stripe (>0.8), got {val}"
+                    );
+                } else {
+                    assert!(
+                        val < 0.20,
+                        "{label}[{e}] {name}: 16x aniso must preserve black stripe (<0.2), got {val}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn hardware_compressed_multimip_volume_join_preserves_full_mip_chain_gpu_to_gpu() {
+    let Some(gpu) = gpu() else { return };
+    if !gpu.supports_texture_compression_bc() {
+        return;
+    }
+    use entelechy_abi::{BlockFormat, CompressedBlocks, FieldData};
+
+    let w = 32u32;
+    let h = 32u32;
+    let fmt = BlockFormat::Bc7RgbaUnorm;
+    let mut px0 = vec![0u8; (w * h * 4) as usize];
+    let mut px1 = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            let b = (y * w as usize + x) * 4;
+            let chk = if (x + y) % 2 == 0 { 240u8 } else { 16u8 };
+            px0[b..b + 4].copy_from_slice(&[chk, chk, chk, 255]);
+            px1[b..b + 4].copy_from_slice(&[30, 80, 230, 255]);
+        }
+    }
+    let l0 = FieldData::from_blocks(
+        Domain::Grid(w, h),
+        CompressedBlocks::encode_unorm8_mips(fmt, Domain::Grid(w, h), &px0, 6, false).unwrap(),
+    )
+    .unwrap();
+    let l1 = FieldData::from_blocks(
+        Domain::Grid(w, h),
+        CompressedBlocks::encode_unorm8_mips(fmt, Domain::Grid(w, h), &px1, 6, false).unwrap(),
+    )
+    .unwrap();
+    let mips = l0.blocks().unwrap().mip_count();
+    assert_eq!(mips, 6);
+
+    let mut host = Host::new(8 << 20);
+    let h0 = host.adopt(l0).unwrap();
+    let h1 = host.adopt(l1).unwrap();
+    {
+        let mut scope = Scope::new(&mut host, all());
+        Backend::upload(&gpu, h0, &mut scope).unwrap();
+        Backend::upload(&gpu, h1, &mut scope).unwrap();
+    }
+    host.let_go_of_copy(h0).unwrap();
+    host.let_go_of_copy(h1).unwrap();
+
+    let layer_elems = (w * h) as usize;
+    let joined_domain = Domain::Volume(w, h, 2);
+    let joined = {
+        let mut scope = Scope::new(&mut host, all());
+        Backend::join(
+            &gpu,
+            &[(h0, 0..layer_elems), (h1, 0..layer_elems)],
+            &fmt.schema(),
+            joined_domain,
+            &mut scope,
+        )
+        .unwrap()
+        .expect("multi-mip GPU compressed join succeeds")
+    };
+    let expected_bytes = fmt.mip_chain_byte_len(joined_domain, mips).unwrap() as u64;
+    let mem = host.field_bytes(joined).unwrap();
+    assert_eq!(mem.host, 0);
+    assert_eq!(
+        mem.device, expected_bytes,
+        "joined Texture2DArray must keep all {mips} compressed mip levels GPU-resident"
+    );
+
+    // Sample mip 0 (checkerboard peak ~0.94) and mip 2 (averaged ~0.50) on layer 0,
+    // plus mip 2 solid blue on layer 1.
+    let probe = compile(
+        "kernel test.probe_mips@1 {
+            requires { field.read; field.write; }
+            input atlas: Volume<Vec4 as unorm8>;
+            output out: Rows<Vec4>;
+            compute {
+                let l0_m0 = at_repeat(atlas, vec3(0.5, 0.5, 0.5), 0.0);
+                let l0_m2 = at_repeat(atlas, vec3(16.0, 16.0, 0.5), 2.0);
+                let l1_m2 = at_repeat(atlas, vec3(16.0, 16.0, 1.5), 2.0);
+                return vec4(l0_m0.x, l0_m2.x, l1_m2.z, l1_m2.x);
+            }
+        }",
+    )
+    .unwrap();
+    let prep = gpu.prepare(&probe).unwrap();
+    let out = {
+        let mut scope = Scope::new(&mut host, all());
+        gpu.execute(
+            prep.as_ref(),
+            &probe,
+            &Invocation {
+                inputs: vec![joined],
+                params: vec![],
+                domain: Domain::Rows(1),
+                context: Context::default(),
+            },
+            &mut scope,
+        )
+        .unwrap()[0]
+    };
+    let dev = host.resident(out).unwrap().unwrap();
+    let words = gpu.download(dev, 16).unwrap();
+    let l0_m0 = f32::from_bits(words[0]);
+    let l0_m2 = f32::from_bits(words[1]);
+    let l1_m2_b = f32::from_bits(words[2]);
+    let l1_m2_r = f32::from_bits(words[3]);
+    assert!((l0_m0 - 240.0 / 255.0).abs() < 0.03, "mip0={l0_m0}");
+    assert!(
+        (l0_m2 - 0.5).abs() < 0.04,
+        "mip2 should average checkerboard to ~0.5, got {l0_m2}"
+    );
+    assert!((l1_m2_b - 230.0 / 255.0).abs() < 0.03, "l1_b={l1_m2_b}");
+    assert!((l1_m2_r - 30.0 / 255.0).abs() < 0.03, "l1_r={l1_m2_r}");
+}

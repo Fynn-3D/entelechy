@@ -75,7 +75,11 @@ fn block_reads(instructions: &[Instruction], reads: &[bool]) -> bool {
     instructions
         .iter()
         .any(|instruction| match &instruction.op {
-            Op::Sample(_) | Op::At(..) | Op::AtLinear(..) | Op::Part { .. } => true,
+            Op::Sample(_)
+            | Op::At(..)
+            | Op::AtLinear(..)
+            | Op::AtFiltered { .. }
+            | Op::Part { .. } => true,
             Op::Call(callee, _) => reads.get(*callee as usize).copied().unwrap_or(true),
             other => other
                 .blocks()
@@ -139,6 +143,7 @@ impl Walk<'_> {
             | Op::Sample(_)
             | Op::At(..)
             | Op::AtLinear(..)
+            | Op::AtFiltered { .. }
             | Op::Part { .. } => true,
             Op::Carried => self.carried.last().copied().unwrap_or(true),
             Op::Index => false,

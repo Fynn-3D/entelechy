@@ -52,6 +52,12 @@ pub struct View {
     schema: *const entelechy_abi::Schema,
     /// For a memory, the pages its writes have changed; null for an input.
     changed: *mut Changed,
+    /// Heap-allocated cached mipmap pyramid (`Box<MipPyramid>` inside the
+    /// Host's `FieldData`, stable even when `Host::slots` reallocates); null
+    /// when this input needs no mipmaps or is a mutable scan memory.
+    pyramid: *const entelechy_abi::MipPyramid,
+    /// Logical extent shape (0 = Rows, 1 = Grid, 2 = Volume).
+    shape: u32,
 }
 
 /// The pages of a memory a scan's writes changed, and whether those are
@@ -665,6 +671,38 @@ struct Shared {
 unsafe impl Sync for Shared {}
 unsafe impl Send for Shared {}
 
+/// Returns whether `module` samples input `target` with explicit `lod` or
+/// `grad`, so `shared()` pre-populates its heap-pinned `MipPyramid`.
+fn input_needs_mipmaps(module: &Validated, target: u32) -> bool {
+    fn walk(body: &[entelechy_ir::Instruction], target: u32) -> bool {
+        body.iter().any(|instr| {
+            matches!(
+                instr.op,
+                entelechy_ir::Op::AtFiltered {
+                    input,
+                    lod: Some(_),
+                    ..
+                } | entelechy_ir::Op::AtFiltered {
+                    input,
+                    grad: Some(_),
+                    ..
+                } if input == target
+            ) || instr
+                .op
+                .blocks()
+                .iter()
+                .any(|block| walk(&block.body, target))
+        })
+    }
+    module
+        .functions
+        .iter()
+        .chain([&module.entry])
+        .chain(module.merge.iter())
+        .chain(module.init.iter())
+        .any(|func| walk(&func.body, target))
+}
+
 /// The inputs' views and their context for a run over `domain`. Named
 /// memories get working copies the views point at, so steps read their
 /// own writes and the inputs stay intact.
@@ -683,7 +721,7 @@ fn shared(
         let layout = scope.schema(*handle)?;
         let stride = layout.value_words() as u32;
         let bytes = layout.element_bytes() as u32;
-        let (words, len, changed) = if module.manifest.memories.contains(&port.name) {
+        let (words, len, changed, pyramid) = if module.manifest.memories.contains(&port.name) {
             // A working copy the steps write: the bound Field stays as it is.
             let mut copy = scope.working(*handle)?;
             let len = copy.len();
@@ -694,10 +732,28 @@ fn shared(
             });
             let changed_at: *mut Changed = &mut *changed;
             memories.push((index, copy, changed));
-            (pointer.cast_const(), len, changed_at)
+            (pointer.cast_const(), len, changed_at, std::ptr::null())
         } else {
+            let pyramid_ptr = if input_needs_mipmaps(module, index as u32) {
+                scope
+                    .field_data(*handle)?
+                    .mip_pyramid()
+                    .map_or(std::ptr::null(), |p| p as *const entelechy_abi::MipPyramid)
+            } else {
+                std::ptr::null()
+            };
             let words = scope.storage(*handle)?;
-            (words.as_ptr(), words.len(), std::ptr::null_mut())
+            (
+                words.as_ptr(),
+                words.len(),
+                std::ptr::null_mut(),
+                pyramid_ptr,
+            )
+        };
+        let shape = match extent.shape() {
+            entelechy_abi::Shape::Rows => 0,
+            entelechy_abi::Shape::Grid => 1,
+            entelechy_abi::Shape::Volume => 2,
         };
         // The vector has room for every input: what it holds stays put.
         let schema = if layout.is_wide() {
@@ -717,6 +773,8 @@ fn shared(
             len,
             schema,
             changed,
+            pyramid,
+            shape,
         });
     }
     let mut params: Vec<u32> = Vec::new();
@@ -1837,6 +1895,83 @@ unsafe extern "C" fn entelechy_jit_linear(
     }
 }
 
+/// `at_linear` (with lod or gradients) and `at_repeat`: shares the Host's exact
+/// [`entelechy_abi::mip::sample_filtered`] implementation with the CPU backend.
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn entelechy_jit_filtered(
+    ctx: *const Ctx,
+    input: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+    flags: u32,
+    a0: f32,
+    a1: f32,
+    a2: f32,
+    a3: f32,
+    out: *mut u32,
+) {
+    let view = unsafe { view(ctx, input) };
+    let stride = view.stride as usize;
+    let out_slice = unsafe { std::slice::from_raw_parts_mut(out, stride) };
+    let repeat = (flags & 1) != 0;
+    let mode = (flags >> 1) & 3;
+    let lod = (mode == 1).then_some(a0);
+    let grad = (mode == 2).then_some(([a0, a1], [a2, a3]));
+    let domain = match view.shape {
+        0 => Domain::Rows(view.width),
+        1 => Domain::Grid(view.width, view.height),
+        _ => Domain::Volume(view.width, view.height, view.depth),
+    };
+    if mode == 0 {
+        let storage = unsafe { std::slice::from_raw_parts(view.words, view.len) };
+        if view.schema.is_null() {
+            let wide = entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float; stride]);
+            entelechy_abi::mip::sample_mip0_raw(
+                &wide,
+                storage,
+                domain,
+                [x, y, z],
+                repeat,
+                out_slice,
+            );
+        } else {
+            let schema = unsafe { &*view.schema };
+            entelechy_abi::mip::sample_mip0_raw(
+                schema,
+                storage,
+                domain,
+                [x, y, z],
+                repeat,
+                out_slice,
+            );
+        }
+        return;
+    }
+    if !view.pyramid.is_null() {
+        let pyramid = unsafe { &*view.pyramid };
+        entelechy_abi::mip::sample_pyramid_words(
+            pyramid,
+            domain.shape(),
+            [x, y, z],
+            repeat,
+            lod,
+            grad,
+            out_slice,
+        );
+        return;
+    }
+    let schema = if view.schema.is_null() {
+        entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float; stride])
+    } else {
+        unsafe { (*view.schema).clone() }
+    };
+    let words = unsafe { std::slice::from_raw_parts(view.words, view.len) };
+    let tmp = entelechy_abi::FieldData::from_storage(schema, domain, words.to_vec())
+        .expect("memory view storage matches domain");
+    entelechy_abi::mip::sample_filtered(&tmp, [x, y, z], repeat, lod, grad, out_slice);
+}
+
 /// Whether a key is held, by code.
 unsafe extern "C" fn entelechy_jit_key(ctx: *const Ctx, code: i32) -> i32 {
     if !(0..256).contains(&code) {
@@ -2043,6 +2178,10 @@ pub(crate) fn symbols() -> Vec<(&'static str, *const u8)> {
         ),
         ("entelechy_jit_sample", entelechy_jit_sample as *const u8),
         ("entelechy_jit_linear", entelechy_jit_linear as *const u8),
+        (
+            "entelechy_jit_filtered",
+            entelechy_jit_filtered as *const u8,
+        ),
         ("entelechy_jit_key", entelechy_jit_key as *const u8),
         ("entelechy_jit_typed", entelechy_jit_typed as *const u8),
         ("entelechy_jit_button", entelechy_jit_button as *const u8),

@@ -1437,6 +1437,70 @@ impl<'a> Checker<'a> {
                 }
                 port.element()
             }
+            Op::AtFiltered {
+                input,
+                at,
+                lod,
+                grad,
+                ..
+            } => {
+                self.require(Capability::FieldRead, position)?;
+                let port = self.input(*input, position)?;
+                let actual = self.operand(*at, position)?;
+                let expected = linear_index_type(port.shape());
+                if actual != expected {
+                    return Err(self.fail(format!(
+                        "{position} interpolates input `{}`, a {}, at {actual} instead of {expected}",
+                        port.name,
+                        port.shape(),
+                    )));
+                }
+                if !port
+                    .ty
+                    .schema
+                    .scalars()
+                    .iter()
+                    .all(|s| *s == crate::Scalar::Float)
+                {
+                    return Err(self.fail(format!(
+                        "{position} interpolates input `{}`, whose layout {} is not all floats",
+                        port.name, port.ty.schema
+                    )));
+                }
+                if lod.is_some() && grad.is_some() {
+                    return Err(
+                        self.fail(format!("{position} cannot specify both lod and gradients"))
+                    );
+                }
+                if let Some(lod_id) = lod {
+                    if port.shape() == crate::Shape::Rows {
+                        return Err(self.fail(format!(
+                            "{position} mipmap lod requires a Grid or Volume input, not Rows"
+                        )));
+                    }
+                    let lod_ty = self.operand(*lod_id, position)?;
+                    if lod_ty != Type::Float {
+                        return Err(self.fail(format!(
+                            "{position} mipmap lod expects Float, found {lod_ty}"
+                        )));
+                    }
+                }
+                if let Some((dx, dy)) = grad {
+                    if port.shape() == crate::Shape::Rows {
+                        return Err(self.fail(format!(
+                            "{position} gradient filtering requires a Grid or Volume input, not Rows"
+                        )));
+                    }
+                    let dx_ty = self.operand(*dx, position)?;
+                    let dy_ty = self.operand(*dy, position)?;
+                    if dx_ty != Type::Vec2 || dy_ty != Type::Vec2 {
+                        return Err(self.fail(format!(
+                            "{position} gradient filtering expects Vec2, Vec2, found {dx_ty}, {dy_ty}"
+                        )));
+                    }
+                }
+                port.element()
+            }
             Op::Count(input) => {
                 self.require(Capability::FieldRead, position)?;
                 self.input(*input, position)?;

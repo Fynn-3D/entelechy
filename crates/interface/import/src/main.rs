@@ -10,15 +10,16 @@ use entelechy_import::{audio, font, gltf, midi, svg, texture};
 
 const USAGE: &str = "\
 usage:
-  entelechy-import <file> [--out <dir>] [--rate <fps>] [--chars <text>] [--format bc7|bc5|bc4|bc1] [--container ktx2|dds]
+  entelechy-import <file> [--out <dir>] [--rate <fps>] [--chars <text>] [--format bc7|bc5|bc4|bc1] [--container ktx2|dds] [--no-mips] [--normal]
       A model (.gltf, .glb) becomes <stem>.vertices.field, <stem>.triangles.field
       and, when it has one in PNG, <stem>.albedo.png. A model with a skin also
       becomes <stem>.weights.field and <stem>.skeleton.field, and one
       <stem>.<name>.clip.field per animation, sampled at --rate frames a second
       (30 by default), which the `animation` package poses a mesh from; an image
-      (.png, .ppm, .pgm) becomes a hardware block-compressed texture <stem>.ktx2
-      (or --container dds) in --format (bc7/bc5/bc4/bc1, chosen by channel count
-      by default); a sound (.mp3, .ogg, .flac,
+      (.png, .ppm, .pgm) becomes a mipmapped hardware block-compressed texture
+      <stem>.ktx2 (or --container dds) in --format (bc7/bc5/bc4/bc1, chosen by
+      channel count by default; pass --no-mips for a single mip level or
+      --normal for BC5 normal-map mip renormalization); a sound (.mp3, .ogg, .flac,
       .m4a, .aac, .mka, .wav) becomes <stem>.wav at its own rate; a score (.mid,
       .midi) becomes <stem>.notes.field, a row a note with its seconds, its key,
       how hard it was struck and its channel; a drawing (.svg) becomes
@@ -52,6 +53,8 @@ fn import(args: &[String]) -> Result<(), String> {
     let mut chars = None;
     let mut format = None;
     let mut container = "ktx2".to_owned();
+    let mut generate_mips = true;
+    let mut normal_map = false;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -79,6 +82,8 @@ fn import(args: &[String]) -> Result<(), String> {
                     .ok_or("--container needs `ktx2` or `dds`")?
                     .to_ascii_lowercase();
             }
+            "--no-mips" => generate_mips = false,
+            "--normal" => normal_map = true,
             other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
             other => {
                 if source.replace(PathBuf::from(other)).is_some() {
@@ -224,13 +229,15 @@ fn import(args: &[String]) -> Result<(), String> {
             }
         }
         "png" | "ppm" | "pgm" | "ktx2" | "dds" => {
-            let imported = texture::import(&source, &out, format, &container)?;
+            let imported =
+                texture::import(&source, &out, format, &container, generate_mips, normal_map)?;
             println!(
-                "wrote {}: {}x{} ({} layer(s), {}, {} bytes)",
+                "wrote {}: {}x{} ({} layer(s), {} mip(s), {}, {} bytes)",
                 imported.file.display(),
                 imported.width,
                 imported.height,
                 imported.layers,
+                imported.mips,
                 imported.format,
                 imported.bytes
             );

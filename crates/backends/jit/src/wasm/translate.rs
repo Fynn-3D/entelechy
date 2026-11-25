@@ -1631,6 +1631,43 @@ impl<'a> Fx<'a> {
                 let tys = word_types(self.module, ty);
                 self.load_scratch(&tys)
             }
+            Op::AtFiltered {
+                input,
+                at,
+                repeat,
+                lod,
+                grad,
+            } => {
+                let words = self.words(at);
+                let half = self.f32c(0.5);
+                let zero = self.f32c(0.0);
+                let (x, y, z) = match self.ty(at) {
+                    Type::Float => (words[0], half, half),
+                    Type::Vec2 => (words[0], words[1], half),
+                    _ => (words[0], words[1], words[2]),
+                };
+                let (mode, a0, a1, a2, a3) = if let Some(lod_id) = lod {
+                    let lw = self.words(lod_id);
+                    (1i32, lw[0], zero, zero, zero)
+                } else if let Some((dx_id, dy_id)) = grad {
+                    let dx = self.words(dx_id);
+                    let dy = self.words(dy_id);
+                    (2i32, dx[0], dx[1], dy[0], dy[1])
+                } else {
+                    (0i32, zero, zero, zero, zero)
+                };
+                let flags = self.i32c((mode << 1) | i32::from(*repeat));
+                let index = self.i32c(*input as i32);
+                let out = self.scratch_addr();
+                let ctx = self.ctx;
+                self.helper(
+                    "entelechy_jit_filtered",
+                    &[ctx, index, x, y, z, flags, a0, a1, a2, a3, out],
+                    None,
+                );
+                let tys = word_types(self.module, ty);
+                self.load_scratch(&tys)
+            }
             Op::Spend(counted) => {
                 let ran = match self.ran.get(&counted.0) {
                     Some(ran) => *ran,

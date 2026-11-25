@@ -1327,6 +1327,22 @@ pub enum Op {
     /// linearly (bilinear on a grid, trilinear on a volume; clamped at the
     /// edges). All-float layouts only. Host call: `field.read`.
     AtLinear(u32, ValueId),
+    /// Filtered read of an all-float input with explicit addressing (`repeat`:
+    /// wrap on X/Y vs clamp) and optional mipmap LOD (`lod: Float`) or 2D
+    /// texel-space gradients (`grad: (Vec2, Vec2)`) for trilinear and
+    /// anisotropic filtering. Host call: `field.read`.
+    AtFiltered {
+        /// Input manifest index.
+        input: u32,
+        /// Texel-space address (`Float`, `Vec2`, or `Vec3`).
+        at: ValueId,
+        /// Whether X/Y wrap modulo extent (`true` = `at_repeat`, `false` = `at_linear`).
+        repeat: bool,
+        /// Explicit mip level (`Float`), if any.
+        lod: Option<ValueId>,
+        /// Explicit texel-space screen derivatives `(ddx, ddy)` (`Vec2`, `Vec2`), if any.
+        grad: Option<(ValueId, ValueId)>,
+    },
     /// Number of elements of an input as `Int`. Host call: `field.read`.
     Count(u32),
     /// Extent of an input as its index type. Host call: `field.read`.

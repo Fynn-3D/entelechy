@@ -283,6 +283,22 @@ impl fmt::Display for Op {
                 Ok(())
             }
             Self::AtLinear(input, index) => write!(f, "host at.linear input{input} {index}"),
+            Self::AtFiltered {
+                input,
+                at,
+                repeat,
+                lod,
+                grad,
+            } => {
+                let kind = if *repeat { "at.repeat" } else { "at.linear" };
+                match (lod, grad) {
+                    (Some(lod), _) => write!(f, "host {kind} input{input} {at} lod {lod}"),
+                    (_, Some((dx, dy))) => {
+                        write!(f, "host {kind} input{input} {at} grad {dx} {dy}")
+                    }
+                    (None, None) => write!(f, "host {kind} input{input} {at}"),
+                }
+            }
             Self::Count(input) => write!(f, "host count input{input}"),
             Self::Size(input) => write!(f, "host size input{input}"),
             Self::Put(input, index, value) => write!(f, "host put input{input} {index} {value}"),

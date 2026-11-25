@@ -47,6 +47,169 @@ pub const INPUT_BINDING: u32 = 3;
 /// ([`entelechy_rules::Run`]).
 pub const FAILURE_BINDING: u32 = 90;
 
+/// Binding index of the linear ClampToEdge hardware sampler (`anisotropy = 1`).
+pub const SAMPLER_CLAMP_BINDING: u32 = 97;
+/// Binding index of the linear Repeat (X/Y) / ClampToEdge (Z) hardware sampler (`anisotropy = 1`).
+pub const SAMPLER_REPEAT_BINDING: u32 = 98;
+/// Binding index of the 16x anisotropic ClampToEdge hardware sampler.
+pub const SAMPLER_ANISO_CLAMP_BINDING: u32 = 99;
+/// Binding index of the 16x anisotropic Repeat (X/Y) / ClampToEdge (Z) hardware sampler.
+pub const SAMPLER_ANISO_REPEAT_BINDING: u32 = 100;
+
+/// Which hardware `wgpu::Sampler`s a module's WGSL shader declares and binds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SamplerSet {
+    /// Linear ClampToEdge trilinear sampler (`SAMPLER_CLAMP_BINDING`).
+    pub clamp: bool,
+    /// Linear Repeat (X/Y) / ClampToEdge (Z) trilinear sampler (`SAMPLER_REPEAT_BINDING`).
+    pub repeat: bool,
+    /// 16x anisotropic ClampToEdge sampler (`SAMPLER_ANISO_CLAMP_BINDING`).
+    pub aniso_clamp: bool,
+    /// 16x anisotropic Repeat (X/Y) / ClampToEdge (Z) sampler (`SAMPLER_ANISO_REPEAT_BINDING`).
+    pub aniso_repeat: bool,
+}
+
+/// Summary of `Op::AtFiltered` uses across a module's functions.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FilteredUses {
+    /// Whether the module contains any `Op::AtFiltered` instruction.
+    pub any: bool,
+    /// Inputs sampled via 2-arg `at_repeat(field, pos)` (mip 0).
+    pub repeat_2arg: Vec<usize>,
+    /// Inputs sampled via 3-arg `at_linear(field, pos, lod)`.
+    pub clamp_lod: Vec<usize>,
+    /// Inputs sampled via 3-arg `at_repeat(field, pos, lod)`.
+    pub repeat_lod: Vec<usize>,
+    /// Inputs sampled via 4-arg `at_linear(field, pos, ddx, ddy)`.
+    pub clamp_grad: Vec<usize>,
+    /// Inputs sampled via 4-arg `at_repeat(field, pos, ddx, ddy)`.
+    pub repeat_grad: Vec<usize>,
+    /// Inputs requiring full hardware mipmap chains (`lod` or `grad`).
+    pub mipmapped: Vec<usize>,
+    /// `Volume` inputs sampled with 2D gradients (`grad`), which must bind as
+    /// `texture_2d_array<f32>` so WGSL `textureSampleGrad` accepts `vec2<f32>`.
+    pub grad_volumes: Vec<usize>,
+}
+
+/// Scans `module` for all `Op::AtFiltered` instructions across entry and helper functions.
+pub fn filtered_uses(module: &Module) -> FilteredUses {
+    #[derive(Default)]
+    struct Acc {
+        any: bool,
+        repeat_2arg: std::collections::BTreeSet<usize>,
+        clamp_lod: std::collections::BTreeSet<usize>,
+        repeat_lod: std::collections::BTreeSet<usize>,
+        clamp_grad: std::collections::BTreeSet<usize>,
+        repeat_grad: std::collections::BTreeSet<usize>,
+        mipmapped: std::collections::BTreeSet<usize>,
+        grad_volumes: std::collections::BTreeSet<usize>,
+    }
+
+    fn walk(body: &[Instruction], manifest: &entelechy_ir::Manifest, acc: &mut Acc) {
+        for instr in body {
+            if let Op::AtFiltered {
+                input,
+                repeat,
+                lod,
+                grad,
+                ..
+            } = &instr.op
+            {
+                acc.any = true;
+                let idx = *input as usize;
+                if grad.is_some() {
+                    acc.mipmapped.insert(idx);
+                    if *repeat {
+                        acc.repeat_grad.insert(idx);
+                    } else {
+                        acc.clamp_grad.insert(idx);
+                    }
+                    if manifest
+                        .inputs
+                        .get(idx)
+                        .is_some_and(|p| p.shape() == Shape::Volume)
+                    {
+                        acc.grad_volumes.insert(idx);
+                    }
+                } else if lod.is_some() {
+                    acc.mipmapped.insert(idx);
+                    if *repeat {
+                        acc.repeat_lod.insert(idx);
+                    } else {
+                        acc.clamp_lod.insert(idx);
+                    }
+                } else if *repeat {
+                    acc.repeat_2arg.insert(idx);
+                }
+            }
+            for block in instr.op.blocks() {
+                walk(&block.body, manifest, acc);
+            }
+        }
+    }
+
+    let mut acc = Acc::default();
+    for func in module
+        .functions
+        .iter()
+        .chain([&module.entry])
+        .chain(module.merge.iter())
+        .chain(module.init.iter())
+    {
+        walk(&func.body, &module.manifest, &mut acc);
+    }
+
+    FilteredUses {
+        any: acc.any,
+        repeat_2arg: acc.repeat_2arg.into_iter().collect(),
+        clamp_lod: acc.clamp_lod.into_iter().collect(),
+        repeat_lod: acc.repeat_lod.into_iter().collect(),
+        clamp_grad: acc.clamp_grad.into_iter().collect(),
+        repeat_grad: acc.repeat_grad.into_iter().collect(),
+        mipmapped: acc.mipmapped.into_iter().collect(),
+        grad_volumes: acc.grad_volumes.into_iter().collect(),
+    }
+}
+
+/// Whether textured input `index` supports hardware filtering samplers on a
+/// device with `float32_filterable`.
+pub fn input_is_filterable(module: &Module, index: usize, float32_filterable: bool) -> bool {
+    input_encoding(module, index) != Encoding::Word || float32_filterable
+}
+
+/// Whether `Volume` input `index` binds as `texture_2d_array<f32>` (true for
+/// `Unorm8` streamed stacks and any `Volume` sampled with 2D gradients) rather
+/// than `texture_3d<f32>`.
+pub fn input_is_2d_array(module: &Module, index: usize, uses: &FilteredUses) -> bool {
+    module.manifest.inputs[index].shape() == Shape::Volume
+        && (input_encoding(module, index) == Encoding::Unorm8 || uses.grad_volumes.contains(&index))
+}
+
+/// Hardware samplers required by `module` given `textured` inputs and
+/// `float32_filterable`.
+pub fn samplers_for(module: &Module, textured: &[usize], float32_filterable: bool) -> SamplerSet {
+    let uses = filtered_uses(module);
+    let mut set = SamplerSet::default();
+    for &index in textured {
+        if !input_is_filterable(module, index, float32_filterable) {
+            continue;
+        }
+        if uses.clamp_lod.contains(&index) {
+            set.clamp = true;
+        }
+        if uses.repeat_lod.contains(&index) || uses.repeat_2arg.contains(&index) {
+            set.repeat = true;
+        }
+        if uses.clamp_grad.contains(&index) {
+            set.aniso_clamp = true;
+        }
+        if uses.repeat_grad.contains(&index) {
+            set.aniso_repeat = true;
+        }
+    }
+    set
+}
+
 /// How a shader computes a `Long`: as the device's own 64-bit integer, or,
 /// on a device without one (a page's WebGPU), as a pair of 32-bit words
 /// with every operation a helper ([`pairs_take`] says which modules can).
@@ -276,6 +439,7 @@ pub fn textured_inputs_for_limits(
     #[derive(Default)]
     struct FuncReads {
         linear: std::collections::BTreeSet<usize>,
+        mipmapped: std::collections::BTreeSet<usize>,
         at: std::collections::BTreeSet<usize>,
         loop_linear: std::collections::BTreeSet<usize>,
         loop_at: std::collections::BTreeSet<usize>,
@@ -290,6 +454,18 @@ pub fn textured_inputs_for_limits(
                     out.linear.insert(*idx as usize);
                     if in_loop {
                         out.loop_linear.insert(*idx as usize);
+                    }
+                }
+                Op::AtFiltered {
+                    input, lod, grad, ..
+                } => {
+                    let idx = *input as usize;
+                    out.linear.insert(idx);
+                    if lod.is_some() || grad.is_some() {
+                        out.mipmapped.insert(idx);
+                    }
+                    if in_loop {
+                        out.loop_linear.insert(idx);
                     }
                 }
                 Op::At(idx, _) => {
@@ -341,12 +517,14 @@ pub fn textured_inputs_for_limits(
     }
 
     let mut linear_used: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    let mut mipmapped_used: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     let mut at_used: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     let mut loop_linear: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     let mut loop_at: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     let mut part_used: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     for (idx, f) in funcs.iter().enumerate() {
         linear_used.extend(f.linear.iter().copied());
+        mipmapped_used.extend(f.mipmapped.iter().copied());
         at_used.extend(f.at.iter().copied());
         loop_linear.extend(f.loop_linear.iter().copied());
         loop_at.extend(f.loop_at.iter().copied());
@@ -357,6 +535,7 @@ pub fn textured_inputs_for_limits(
         }
     }
 
+    let mut mipmapped = Vec::new();
     let mut volumes = Vec::new();
     let mut primary_grids = Vec::new();
     let mut spill_grids = Vec::new();
@@ -372,6 +551,10 @@ pub fn textured_inputs_for_limits(
             enc,
             Encoding::Word | Encoding::F16 | Encoding::Unorm8 | Encoding::Snorm8
         ) {
+            continue;
+        }
+        if mipmapped_used.contains(&index) && matches!(port.shape(), Shape::Grid | Shape::Volume) {
+            mipmapped.push(index);
             continue;
         }
         let narrow = enc != Encoding::Word;
@@ -393,8 +576,9 @@ pub fn textured_inputs_for_limits(
             _ => {}
         }
     }
-    let mut chosen: Vec<usize> = volumes
+    let mut chosen: Vec<usize> = mipmapped
         .into_iter()
+        .chain(volumes)
         .chain(primary_grids)
         .take(max_textures)
         .collect();

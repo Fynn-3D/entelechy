@@ -330,9 +330,18 @@ impl Builder<'_> {
                 }
                 Ok(self.emit(element, Op::At(input, index)))
             }
-            "at_linear" => {
+            "at_linear" | "at_repeat" => {
                 self.require(name, Capability::FieldRead, span)?;
-                self.arity(name, args, 2, span)?;
+                let repeat = name == "at_repeat";
+                if !(2..=4).contains(&args.len()) {
+                    return Err(semantic(
+                        span,
+                        format!(
+                            "`{name}` takes 2, 3 (with lod), or 4 (with ddx, ddy) arguments, found {}",
+                            args.len()
+                        ),
+                    ));
+                }
                 let (input, port) = self.input_index(&args[0], name)?;
                 let element = port.element();
                 let expected = entelechy_ir::linear_index_type(port.shape());
@@ -356,11 +365,86 @@ impl Builder<'_> {
                     return Err(semantic(
                         args[0].span,
                         format!(
-                            "`at_linear` interpolates floats, but `{port_name}` lays out as {layout}"
+                            "`{name}` interpolates floats, but `{port_name}` lays out as {layout}"
                         ),
                     ));
                 }
-                Ok(self.emit(element, Op::AtLinear(input, index)))
+                if args.len() == 2 {
+                    if !repeat {
+                        return Ok(self.emit(element, Op::AtLinear(input, index)));
+                    }
+                    return Ok(self.emit(
+                        element,
+                        Op::AtFiltered {
+                            input,
+                            at: index,
+                            repeat: true,
+                            lod: None,
+                            grad: None,
+                        },
+                    ));
+                }
+                if shape == Shape::Rows {
+                    return Err(semantic(
+                        span,
+                        format!(
+                            "`{name}` with mipmap lod or gradients requires a Grid or Volume, not Rows"
+                        ),
+                    ));
+                }
+                if args.len() == 3 {
+                    let lod = self.value(&args[2])?;
+                    if self.ty(lod) != Type::Float {
+                        return Err(semantic(
+                            args[2].span,
+                            format!(
+                                "`{name}` lod expects Float, found {}",
+                                self.describe(self.ty(lod))
+                            ),
+                        ));
+                    }
+                    Ok(self.emit(
+                        element,
+                        Op::AtFiltered {
+                            input,
+                            at: index,
+                            repeat,
+                            lod: Some(lod),
+                            grad: None,
+                        },
+                    ))
+                } else {
+                    let ddx = self.value(&args[2])?;
+                    let ddy = self.value(&args[3])?;
+                    if self.ty(ddx) != Type::Vec2 {
+                        return Err(semantic(
+                            args[2].span,
+                            format!(
+                                "`{name}` ddx expects Vec2, found {}",
+                                self.describe(self.ty(ddx))
+                            ),
+                        ));
+                    }
+                    if self.ty(ddy) != Type::Vec2 {
+                        return Err(semantic(
+                            args[3].span,
+                            format!(
+                                "`{name}` ddy expects Vec2, found {}",
+                                self.describe(self.ty(ddy))
+                            ),
+                        ));
+                    }
+                    Ok(self.emit(
+                        element,
+                        Op::AtFiltered {
+                            input,
+                            at: index,
+                            repeat,
+                            lod: None,
+                            grad: Some((ddx, ddy)),
+                        },
+                    ))
+                }
             }
             "count" => {
                 self.require(name, Capability::FieldRead, span)?;

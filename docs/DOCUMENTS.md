@@ -317,6 +317,12 @@ Fields and context:
   grids). `at_linear(f, position)` blends neighbors (bilinear over a
   grid, trilinear over a volume, a `Float` position over rows; centers at
   half-integers, edges clamp), only where the layout is all floats.
+  `at_linear(f, position, lod)` samples hardware trilinear mipmaps over a
+  `Grid` or `Volume` (`lod = 0.0` is base resolution); `at_linear(f, position,
+  ddx, ddy)` samples with up to 16x hardware anisotropic filtering given
+  texel-space screen derivatives (`Vec2`). `at_repeat` mirrors `at_linear`
+  with seamless periodic wrapping on X/Y (and clamped Z layers on `Volume`)
+  for 2-argument mip-0, 3-argument `lod`, and 4-argument `(ddx, ddy)` forms.
 - `count(f)` the element count, `size(f)` the extent, `element()` the
   linear index, `coord()` and `domain()` the address and extent over a
   grid or volume.

@@ -819,6 +819,25 @@ impl Emitter<'_> {
                 expression
             }
             Op::AtLinear(input, index) => format!("linear_in{input}({})", v(index)),
+            Op::AtFiltered {
+                input,
+                at,
+                repeat,
+                lod,
+                grad,
+            } => {
+                if let Some((ddx, ddy)) = grad {
+                    let prefix = if *repeat { "grad_repeat" } else { "grad_clamp" };
+                    format!("{prefix}_in{input}({}, {}, {})", v(at), v(ddx), v(ddy))
+                } else if let Some(lod) = lod {
+                    let prefix = if *repeat { "lod_repeat" } else { "lod_clamp" };
+                    format!("{prefix}_in{input}({}, {})", v(at), v(lod))
+                } else if *repeat {
+                    format!("repeat_in{input}({})", v(at))
+                } else {
+                    format!("linear_in{input}({})", v(at))
+                }
+            }
         };
         let _ = self.function;
         self.line(depth, &format!("let v{}: {ty_name} = {expression};", id.0));

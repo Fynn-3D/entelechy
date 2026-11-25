@@ -88,10 +88,9 @@ fn domain_for(width: u32, height: u32, layers: u32) -> Result<Domain, String> {
     })
 }
 
-/// Inspects a KTX2 header and returns `(format, domain, level0_offset,
-/// level0_byte_len, level0_uncompressed_len, supercompression)`.
-fn parse_ktx2_header(bytes: &[u8]) -> Result<(BlockFormat, Domain, u64, u64, u64, u32), String> {
-    if bytes.len() < 104 || bytes[..12] != KTX2_MAGIC {
+/// Inspects a KTX2 header and returns `(format, domain, level_count, supercompression)`.
+fn parse_ktx2_header(bytes: &[u8]) -> Result<(BlockFormat, Domain, u32, u32), String> {
+    if bytes.len() < 80 || bytes[..12] != KTX2_MAGIC {
         return Err("not a KTX 2.0 file".to_owned());
     }
     let vk_format = u32_le(bytes, 12)?;
@@ -101,23 +100,20 @@ fn parse_ktx2_header(bytes: &[u8]) -> Result<(BlockFormat, Domain, u64, u64, u64
     let depth = u32_le(bytes, 28)?.max(1);
     let layers = u32_le(bytes, 32)?.max(1);
     let faces = u32_le(bytes, 36)?.max(1);
+    let level_count = u32_le(bytes, 40)?.max(1);
     let supercomp = u32_le(bytes, 44)?;
     let total_layers = depth
         .checked_mul(layers)
         .and_then(|v| v.checked_mul(faces))
         .ok_or_else(|| "KTX2 layer count overflow".to_owned())?;
     let domain = domain_for(width, height, total_layers)?;
-    let level0_offset = u64_le(bytes, 80)?;
-    let level0_bytes = u64_le(bytes, 88)?;
-    let level0_uncomp = u64_le(bytes, 96)?;
-    Ok((
-        format,
-        domain,
-        level0_offset,
-        level0_bytes,
-        level0_uncomp,
-        supercomp,
-    ))
+    let max_mips = entelechy_host::block::max_mip_count(domain);
+    if level_count > max_mips {
+        return Err(format!(
+            "KTX2 declares {level_count} mip levels, exceeding maximum {max_mips} for {domain}"
+        ));
+    }
+    Ok((format, domain, level_count, supercomp))
 }
 
 /// Inspects a DDS header and returns `(format, domain, mip_count, body_offset)`.
@@ -131,7 +127,7 @@ fn parse_dds_header(bytes: &[u8]) -> Result<(BlockFormat, Domain, u32, usize), S
     }
     let height = u32_le(bytes, 12)?;
     let width = u32_le(bytes, 16)?;
-    let mip_count = u32_le(bytes, 28)?.max(1);
+    let raw_mips = u32_le(bytes, 28)?.max(1);
     let fourcc = &bytes[84..88];
     let (format, layers, body_offset) = match fourcc {
         b"DXT1" => (BlockFormat::Bc1RgbaUnorm, 1, 128),
@@ -153,36 +149,38 @@ fn parse_dds_header(bytes: &[u8]) -> Result<(BlockFormat, Domain, u32, usize), S
         }
     };
     let domain = domain_for(width, height, layers)?;
+    let mip_count = raw_mips.min(entelechy_host::block::max_mip_count(domain));
     Ok((format, domain, mip_count, body_offset))
 }
 
-/// Compressed Host budget words required by a `.ktx2` or `.dds` file, read
-/// from its header alone before loading its body.
+/// Compressed Host budget words required by a `.ktx2` or `.dds` file (across
+/// all mip levels), read from its header alone before loading its body.
 pub fn words(start: &[u8], extension: &str) -> Result<usize, String> {
-    let (format, domain) = match extension {
+    let (format, domain, mip_count) = match extension {
         "ktx2" => {
-            let (f, d, ..) = parse_ktx2_header(start)?;
-            (f, d)
+            let (f, d, m, _) = parse_ktx2_header(start)?;
+            (f, d, m)
         }
         "dds" => {
-            let (f, d, ..) = parse_dds_header(start)?;
-            (f, d)
+            let (f, d, m, _) = parse_dds_header(start)?;
+            (f, d, m)
         }
         other => return Err(format!("not a compressed texture extension `{other}`")),
     };
     let bytes = format
-        .byte_len(domain)
+        .mip_chain_byte_len(domain, mip_count)
         .ok_or_else(|| "compressed texture size overflow".to_owned())?;
     Ok(bytes.div_ceil(4))
 }
 
-/// Decodes a KTX 2.0 file directly into a block-compressed [`FieldData`].
+/// Decodes a KTX 2.0 file (all mip levels `0..levelCount`) directly into a
+/// block-compressed [`FieldData`].
 pub fn decode_ktx2(bytes: &[u8], max_words: usize) -> Result<FieldData, String> {
-    let (format, domain, offset, byte_len, uncomp_len, supercomp) = parse_ktx2_header(bytes)?;
-    let expected = format
-        .byte_len(domain)
+    let (format, domain, level_count, supercomp) = parse_ktx2_header(bytes)?;
+    let total_expected = format
+        .mip_chain_byte_len(domain, level_count)
         .ok_or_else(|| "KTX2 byte length overflow".to_owned())?;
-    let needed_words = expected.div_ceil(4);
+    let needed_words = total_expected.div_ceil(4);
     if needed_words > max_words {
         return Err(entelechy_host::HostError::BudgetExceeded {
             requested: needed_words,
@@ -190,46 +188,74 @@ pub fn decode_ktx2(bytes: &[u8], max_words: usize) -> Result<FieldData, String> 
         }
         .to_string());
     }
-    let start = usize::try_from(offset).map_err(|_| "KTX2 offset overflow".to_owned())?;
-    let len = usize::try_from(byte_len).map_err(|_| "KTX2 level length overflow".to_owned())?;
-    let end = start
-        .checked_add(len)
-        .ok_or_else(|| "KTX2 level range overflow".to_owned())?;
-    let level_slice = bytes
-        .get(start..end)
-        .ok_or_else(|| "KTX2 level 0 data is truncated".to_owned())?;
-    let raw = match supercomp {
-        0 => level_slice.to_vec(),
-        3 => {
-            let cap = usize::try_from(uncomp_len)
-                .unwrap_or(expected)
-                .max(expected);
-            crate::inflate::unzlib(level_slice, cap)
-                .map_err(|e| format!("KTX2 zlib supercompression: {e}"))?
-        }
-        other => {
-            return Err(format!(
-                "unsupported KTX2 supercompression scheme {other}; use uncompressed (0) or zlib (3)"
-            ));
-        }
-    };
-    if raw.len() != expected {
-        return Err(format!(
-            "KTX2 level 0 holds {} bytes, expected {expected} for {format} over {domain}",
-            raw.len()
-        ));
+    let index_end = 80usize
+        .checked_add(level_count as usize * 24)
+        .ok_or_else(|| "KTX2 level index overflow".to_owned())?;
+    if bytes.len() < index_end {
+        return Err("KTX2 level index table is truncated".to_owned());
     }
-    let blocks = CompressedBlocks::new(format, domain, raw).map_err(|e| e.to_string())?;
+    let mut all_bytes = Vec::with_capacity(total_expected);
+    for mip in 0..level_count {
+        let entry = 80 + mip as usize * 24;
+        let offset = u64_le(bytes, entry)?;
+        let byte_len = u64_le(bytes, entry + 8)?;
+        let uncomp_len = u64_le(bytes, entry + 16)?;
+        let level_dom = entelechy_host::block::mip_domain(domain, mip);
+        let expected = format
+            .byte_len(level_dom)
+            .ok_or_else(|| "KTX2 mip byte length overflow".to_owned())?;
+        let start = usize::try_from(offset).map_err(|_| "KTX2 offset overflow".to_owned())?;
+        let len = usize::try_from(byte_len).map_err(|_| "KTX2 level length overflow".to_owned())?;
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| "KTX2 level range overflow".to_owned())?;
+        let level_slice = bytes
+            .get(start..end)
+            .ok_or_else(|| format!("KTX2 mip level {mip} data is truncated"))?;
+        match supercomp {
+            0 => {
+                if level_slice.len() != expected {
+                    return Err(format!(
+                        "KTX2 mip level {mip} holds {} bytes, expected {expected} for {format} over {level_dom}",
+                        level_slice.len()
+                    ));
+                }
+                all_bytes.extend_from_slice(level_slice);
+            }
+            3 => {
+                let cap = usize::try_from(uncomp_len)
+                    .unwrap_or(expected)
+                    .max(expected);
+                let raw = crate::inflate::unzlib(level_slice, cap)
+                    .map_err(|e| format!("KTX2 mip level {mip} zlib supercompression: {e}"))?;
+                if raw.len() != expected {
+                    return Err(format!(
+                        "KTX2 mip level {mip} holds {} bytes, expected {expected} for {format} over {level_dom}",
+                        raw.len()
+                    ));
+                }
+                all_bytes.extend_from_slice(&raw);
+            }
+            other => {
+                return Err(format!(
+                    "unsupported KTX2 supercompression scheme {other}; use uncompressed (0) or zlib (3)"
+                ));
+            }
+        }
+    }
+    let blocks = CompressedBlocks::new_with_mips(format, domain, level_count, all_bytes)
+        .map_err(|e| e.to_string())?;
     FieldData::from_blocks(domain, blocks).map_err(|e| e.to_string())
 }
 
-/// Decodes a DDS file directly into a block-compressed [`FieldData`].
+/// Decodes a DDS file (all mip levels `0..dwMipMapCount`) directly into a
+/// block-compressed [`FieldData`].
 pub fn decode_dds(bytes: &[u8], max_words: usize) -> Result<FieldData, String> {
     let (format, domain, mip_count, body_offset) = parse_dds_header(bytes)?;
-    let expected = format
-        .byte_len(domain)
+    let total_expected = format
+        .mip_chain_byte_len(domain, mip_count)
         .ok_or_else(|| "DDS byte length overflow".to_owned())?;
-    let needed_words = expected.div_ceil(4);
+    let needed_words = total_expected.div_ceil(4);
     if needed_words > max_words {
         return Err(entelechy_host::HostError::BudgetExceeded {
             requested: needed_words,
@@ -240,53 +266,50 @@ pub fn decode_dds(bytes: &[u8], max_words: usize) -> Result<FieldData, String> {
     let body = bytes
         .get(body_offset..)
         .ok_or_else(|| "DDS body is missing".to_owned())?;
-    let w = domain.width();
-    let h = domain.height();
+    if body.len() < total_expected {
+        return Err(format!(
+            "DDS body holds {} bytes, expected at least {total_expected}",
+            body.len()
+        ));
+    }
     let layers = domain.depth() as usize;
-    let slice_mip0 = format
-        .byte_len(Domain::Grid(w, h))
-        .ok_or_else(|| "DDS slice byte length overflow".to_owned())?;
     let raw = if layers == 1 || mip_count <= 1 {
-        let slice = body.get(..expected).ok_or_else(|| {
-            format!(
-                "DDS body holds {} bytes, expected at least {expected}",
-                body.len()
-            )
-        })?;
-        slice.to_vec()
+        body[..total_expected].to_vec()
     } else {
-        // Multi-layer DDS with mipmaps stores all mips of slice 0, then slice 1, ...
-        let mut stride = 0usize;
-        let (mut mw, mut mh) = (w, h);
-        for _ in 0..mip_count {
-            stride = stride
-                .checked_add(
-                    format
-                        .byte_len(Domain::Grid(mw, mh))
-                        .ok_or_else(|| "DDS mip chain overflow".to_owned())?,
-                )
+        // Multi-layer DDS stores [layer0: mip0..M][layer1: mip0..M]...;
+        // CompressedBlocks stores [mip0: layer0..L][mip1: layer0..L]...
+        let w = domain.width();
+        let h = domain.height();
+        let mut mip_sizes = Vec::with_capacity(mip_count as usize);
+        let mut layer_stride = 0usize;
+        for m in 0..mip_count {
+            let sz = format
+                .byte_len(entelechy_host::block::mip_domain(Domain::Grid(w, h), m))
                 .ok_or_else(|| "DDS mip chain overflow".to_owned())?;
-            mw = (mw / 2).max(1);
-            mh = (mh / 2).max(1);
+            mip_sizes.push(sz);
+            layer_stride = layer_stride
+                .checked_add(sz)
+                .ok_or_else(|| "DDS mip chain overflow".to_owned())?;
         }
-        let mut out = Vec::with_capacity(expected);
-        for layer in 0..layers {
-            let at = layer
-                .checked_mul(stride)
-                .ok_or_else(|| "DDS layer offset overflow".to_owned())?;
-            let slice = body
-                .get(at..at + slice_mip0)
-                .ok_or_else(|| "DDS mipmapped array is truncated".to_owned())?;
-            out.extend_from_slice(slice);
+        let mut out = Vec::with_capacity(total_expected);
+        let mut mip_offset_in_layer = 0usize;
+        for sz in mip_sizes {
+            for layer in 0..layers {
+                let at = layer * layer_stride + mip_offset_in_layer;
+                out.extend_from_slice(&body[at..at + sz]);
+            }
+            mip_offset_in_layer += sz;
         }
         out
     };
-    let blocks = CompressedBlocks::new(format, domain, raw).map_err(|e| e.to_string())?;
+    let blocks = CompressedBlocks::new_with_mips(format, domain, mip_count, raw)
+        .map_err(|e| e.to_string())?;
     FieldData::from_blocks(domain, blocks).map_err(|e| e.to_string())
 }
 
-/// Encodes [`CompressedBlocks`] over `domain` into a conformant KTX 2.0 byte
-/// stream (single level, uncompressed supercompression).
+/// Encodes [`CompressedBlocks`] (including all mip levels) over `domain` into a
+/// conformant KTX 2.0 byte stream (uncompressed supercompression, 16-byte level
+/// alignment per KTX2 §3.11).
 pub fn encode_ktx2(domain: Domain, blocks: &CompressedBlocks) -> Result<Vec<u8>, String> {
     if domain.shape() == Shape::Rows {
         return Err("KTX2 requires a Grid or Volume".to_owned());
@@ -296,11 +319,21 @@ pub fn encode_ktx2(domain: Domain, blocks: &CompressedBlocks) -> Result<Vec<u8>,
     } else {
         0
     };
-    let data = blocks.bytes();
-    let header_and_index = 80 + 24;
-    // Align level 0 data to 16 bytes per KTX2 §3.11.
-    let offset = (header_and_index + 15) & !15;
-    let mut out = Vec::with_capacity(offset + data.len());
+    let mip_count = blocks.mip_count();
+    let header_and_index = 80 + mip_count as usize * 24;
+    // Per KTX2 §3.11, store mip data smallest-first with 16-byte alignment,
+    // while keeping the level index ordered mip 0 (largest) .. mip N-1.
+    let mut offsets = vec![0usize; mip_count as usize];
+    let mut lengths = vec![0usize; mip_count as usize];
+    let mut cursor = (header_and_index + 15) & !15;
+    for mip in (0..mip_count).rev() {
+        cursor = (cursor + 15) & !15;
+        let len = blocks.mip_bytes(domain, mip).len();
+        offsets[mip as usize] = cursor;
+        lengths[mip as usize] = len;
+        cursor += len;
+    }
+    let mut out = Vec::with_capacity(cursor);
     out.extend_from_slice(&KTX2_MAGIC);
     out.extend_from_slice(&block_format_to_vk(blocks.format()).to_le_bytes()); // vkFormat
     out.extend_from_slice(&1u32.to_le_bytes()); // typeSize = 1 for block-compressed
@@ -309,26 +342,30 @@ pub fn encode_ktx2(domain: Domain, blocks: &CompressedBlocks) -> Result<Vec<u8>,
     out.extend_from_slice(&0u32.to_le_bytes()); // pixelDepth = 0 for 2D / 2D array
     out.extend_from_slice(&layer_count.to_le_bytes());
     out.extend_from_slice(&1u32.to_le_bytes()); // faceCount = 1
-    out.extend_from_slice(&1u32.to_le_bytes()); // levelCount = 1
+    out.extend_from_slice(&mip_count.to_le_bytes()); // levelCount
     out.extend_from_slice(&0u32.to_le_bytes()); // supercompressionScheme = None
     // DFD / KVD / SGD offsets & lengths (all zero).
     out.extend_from_slice(&[0u8; 32]);
     debug_assert_eq!(out.len(), 80);
-    // Level 0 index entry (24 bytes).
-    out.extend_from_slice(&(offset as u64).to_le_bytes());
-    out.extend_from_slice(&(data.len() as u64).to_le_bytes());
-    out.extend_from_slice(&(data.len() as u64).to_le_bytes());
-    out.resize(offset, 0);
-    out.extend_from_slice(data);
+    for mip in 0..mip_count as usize {
+        out.extend_from_slice(&(offsets[mip] as u64).to_le_bytes());
+        out.extend_from_slice(&(lengths[mip] as u64).to_le_bytes());
+        out.extend_from_slice(&(lengths[mip] as u64).to_le_bytes());
+    }
+    for mip in (0..mip_count).rev() {
+        out.resize(offsets[mip as usize], 0);
+        out.extend_from_slice(blocks.mip_bytes(domain, mip));
+    }
     Ok(out)
 }
 
-/// Encodes [`CompressedBlocks`] over `domain` into a conformant DDS DX10 byte
-/// stream (148-byte header + raw blocks).
+/// Encodes [`CompressedBlocks`] (including all mip levels) over `domain` into a
+/// conformant DDS DX10 byte stream (148-byte header + interleaved layer mips).
 pub fn encode_dds(domain: Domain, blocks: &CompressedBlocks) -> Result<Vec<u8>, String> {
     if domain.shape() == Shape::Rows {
         return Err("DDS requires a Grid or Volume".to_owned());
     }
+    let mip_count = blocks.mip_count();
     let data = blocks.bytes();
     let linear_size = blocks
         .format()
@@ -338,13 +375,14 @@ pub fn encode_dds(domain: Domain, blocks: &CompressedBlocks) -> Result<Vec<u8>, 
     out.extend_from_slice(&DDS_MAGIC);
     // DDS_HEADER (124 bytes)
     out.extend_from_slice(&124u32.to_le_bytes()); // dwSize
-    // DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT | DDSD_LINEARSIZE
-    out.extend_from_slice(&0x0008_1007u32.to_le_bytes()); // dwFlags
+    // DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PIXELFORMAT | DDSD_LINEARSIZE [| DDSD_MIPMAPCOUNT]
+    let flags = 0x0008_1007u32 | if mip_count > 1 { 0x0002_0000 } else { 0 };
+    out.extend_from_slice(&flags.to_le_bytes()); // dwFlags
     out.extend_from_slice(&domain.height().to_le_bytes());
     out.extend_from_slice(&domain.width().to_le_bytes());
     out.extend_from_slice(&linear_size.to_le_bytes()); // dwPitchOrLinearSize
     out.extend_from_slice(&0u32.to_le_bytes()); // dwDepth
-    out.extend_from_slice(&1u32.to_le_bytes()); // dwMipMapCount
+    out.extend_from_slice(&mip_count.to_le_bytes()); // dwMipMapCount
     out.extend_from_slice(&[0u8; 44]); // dwReserved1[11]
     // DDS_PIXELFORMAT (32 bytes)
     out.extend_from_slice(&32u32.to_le_bytes()); // dwSize
@@ -352,7 +390,8 @@ pub fn encode_dds(domain: Domain, blocks: &CompressedBlocks) -> Result<Vec<u8>, 
     out.extend_from_slice(b"DX10"); // dwFourCC
     out.extend_from_slice(&[0u8; 20]); // bitcounts & masks
     // dwCaps..dwReserved2 (20 bytes)
-    out.extend_from_slice(&0x1000u32.to_le_bytes()); // DDSCAPS_TEXTURE
+    let caps = 0x1000u32 | if mip_count > 1 { 0x0040_0008 } else { 0 };
+    out.extend_from_slice(&caps.to_le_bytes()); // DDSCAPS_TEXTURE [| COMPLEX | MIPMAP]
     out.extend_from_slice(&[0u8; 16]);
     debug_assert_eq!(out.len(), 128);
     // DDS_HEADER_DXT10 (20 bytes)
@@ -362,16 +401,51 @@ pub fn encode_dds(domain: Domain, blocks: &CompressedBlocks) -> Result<Vec<u8>, 
     out.extend_from_slice(&domain.depth().to_le_bytes()); // arraySize
     out.extend_from_slice(&0u32.to_le_bytes()); // miscFlags2
     debug_assert_eq!(out.len(), 148);
-    out.extend_from_slice(data);
+    let layers = domain.depth() as usize;
+    if layers == 1 || mip_count <= 1 {
+        out.extend_from_slice(data);
+    } else {
+        // Interleave [mip][layer] into DDS [layer][mip].
+        let w = domain.width();
+        let h = domain.height();
+        for layer in 0..layers {
+            for mip in 0..mip_count {
+                let mip_slice = blocks.mip_bytes(domain, mip);
+                let layer_bytes = blocks
+                    .format()
+                    .byte_len(entelechy_host::block::mip_domain(Domain::Grid(w, h), mip))
+                    .ok_or_else(|| "DDS mip size overflow".to_owned())?;
+                out.extend_from_slice(&mip_slice[layer * layer_bytes..(layer + 1) * layer_bytes]);
+            }
+        }
+    }
     Ok(out)
 }
 
 /// Compresses an arbitrary `Grid`/`Volume` [`FieldData`] into
-/// [`CompressedBlocks`] (reusing existing compressed blocks verbatim when
+/// [`CompressedBlocks`] (single mip level; reuses existing blocks verbatim when
 /// already compressed in `format`).
 pub fn compress_field(data: &FieldData, format: BlockFormat) -> Result<CompressedBlocks, String> {
     if let Some(existing) = data.blocks()
         && existing.format() == format
+    {
+        return Ok(existing.clone());
+    }
+    compress_field_mips(data, format, 1, false)
+}
+
+/// Compresses an arbitrary `Grid`/`Volume` [`FieldData`] into
+/// [`CompressedBlocks`] with `mip_count` mip levels (`1..=max_mip_count`),
+/// applying normal-map renormalization for BC5 when `normal_map` is true.
+pub fn compress_field_mips(
+    data: &FieldData,
+    format: BlockFormat,
+    mip_count: u32,
+    normal_map: bool,
+) -> Result<CompressedBlocks, String> {
+    if let Some(existing) = data.blocks()
+        && existing.format() == format
+        && existing.mip_count() == mip_count
     {
         return Ok(existing.clone());
     }
@@ -397,7 +471,8 @@ pub fn compress_field(data: &FieldData, format: BlockFormat) -> Result<Compresse
             pixels[i * target_ch + c] = crate::byte(v);
         }
     }
-    CompressedBlocks::encode_unorm8(format, domain, &pixels).map_err(|e| e.to_string())
+    CompressedBlocks::encode_unorm8_mips(format, domain, &pixels, mip_count, normal_map)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -430,6 +505,34 @@ mod tests {
                 let from_dds = decode_dds(&dds, usize::MAX).unwrap();
                 assert_eq!(from_dds.domain(), domain);
                 assert_eq!(from_dds.blocks(), Some(&blocks));
+
+                // Full mipmap chain round-trip (single texture + multi-layer array).
+                let full_mips = entelechy_host::block::max_mip_count(domain);
+                let mip_blocks = CompressedBlocks::encode_unorm8_mips(
+                    format,
+                    domain,
+                    &pixels,
+                    full_mips,
+                    format == BlockFormat::Bc5RgUnorm,
+                )
+                .unwrap();
+                assert_eq!(mip_blocks.mip_count(), full_mips);
+
+                let ktx_m = encode_ktx2(domain, &mip_blocks).unwrap();
+                assert_eq!(
+                    words(&ktx_m[..80], "ktx2").unwrap(),
+                    mip_blocks.bytes().len().div_ceil(4)
+                );
+                let from_ktx_m = decode_ktx2(&ktx_m, usize::MAX).unwrap();
+                assert_eq!(from_ktx_m.blocks(), Some(&mip_blocks));
+
+                let dds_m = encode_dds(domain, &mip_blocks).unwrap();
+                assert_eq!(
+                    words(&dds_m[..148], "dds").unwrap(),
+                    mip_blocks.bytes().len().div_ceil(4)
+                );
+                let from_dds_m = decode_dds(&dds_m, usize::MAX).unwrap();
+                assert_eq!(from_dds_m.blocks(), Some(&mip_blocks));
             }
         }
     }

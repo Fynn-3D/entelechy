@@ -44,8 +44,20 @@ builtin at requires field.read
   at(field: Volume<T>, at: Vec3) -> T
 builtin at_linear requires field.read
   at_linear(field: Grid<T>, position: Vec2) -> T
+  at_linear(field: Grid<T>, position: Vec2, ddx: Vec2, ddy: Vec2) -> T
+  at_linear(field: Grid<T>, position: Vec2, lod: Float) -> T
   at_linear(field: Rows<T>, position: Float) -> T
   at_linear(field: Volume<T>, position: Vec3) -> T
+  at_linear(field: Volume<T>, position: Vec3, ddx: Vec2, ddy: Vec2) -> T
+  at_linear(field: Volume<T>, position: Vec3, lod: Float) -> T
+builtin at_repeat requires field.read
+  at_repeat(field: Grid<T>, position: Vec2) -> T
+  at_repeat(field: Grid<T>, position: Vec2, ddx: Vec2, ddy: Vec2) -> T
+  at_repeat(field: Grid<T>, position: Vec2, lod: Float) -> T
+  at_repeat(field: Rows<T>, position: Float) -> T
+  at_repeat(field: Volume<T>, position: Vec3) -> T
+  at_repeat(field: Volume<T>, position: Vec3, ddx: Vec2, ddy: Vec2) -> T
+  at_repeat(field: Volume<T>, position: Vec3, lod: Float) -> T
 builtin atan
   atan(x: DVec2) -> DVec2
   atan(x: DVec3) -> DVec3

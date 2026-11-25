@@ -116,6 +116,84 @@ impl BlockFormat {
             _ => None,
         }
     }
+
+    /// Total compressed byte count across `mip_count` mip levels (`0..mip_count`),
+    /// each level storing all `domain.depth()` layers contiguously.
+    pub fn mip_chain_byte_len(self, domain: Domain, mip_count: u32) -> Option<usize> {
+        if mip_count == 0 || mip_count > max_mip_count(domain) {
+            return None;
+        }
+        let mut total = 0usize;
+        for m in 0..mip_count {
+            let level_bytes = self.byte_len(mip_domain(domain, m))?;
+            total = total.checked_add(level_bytes)?;
+        }
+        Some(total)
+    }
+
+    /// Byte offset range of mip level `mip` within a `mip_count`-level chain.
+    pub fn mip_byte_range(
+        self,
+        domain: Domain,
+        mip_count: u32,
+        mip: u32,
+    ) -> Option<std::ops::Range<usize>> {
+        if mip >= mip_count || mip_count > max_mip_count(domain) {
+            return None;
+        }
+        let mut offset = 0usize;
+        for m in 0..mip {
+            offset = offset.checked_add(self.byte_len(mip_domain(domain, m))?)?;
+        }
+        let len = self.byte_len(mip_domain(domain, mip))?;
+        let end = offset.checked_add(len)?;
+        Some(offset..end)
+    }
+}
+
+/// Full 2D / 2D-array mipmap level count for `domain` (`floor(log2(max(w, h))) + 1`).
+pub fn max_mip_count(domain: Domain) -> u32 {
+    match domain.shape() {
+        Shape::Rows => 1,
+        Shape::Grid | Shape::Volume => {
+            let m = domain.width().max(domain.height()).max(1);
+            32 - m.leading_zeros()
+        }
+    }
+}
+
+/// Full 3D mipmap level count for a `Volume` (`floor(log2(max(w, h, d))) + 1`).
+pub fn max_3d_mip_count(domain: Domain) -> u32 {
+    let m = domain
+        .width()
+        .max(domain.height())
+        .max(domain.depth())
+        .max(1);
+    32 - m.leading_zeros()
+}
+
+/// Logical extent of 2D / 2D-array mip level `mip` (array depth preserved).
+pub fn mip_domain(domain: Domain, mip: u32) -> Domain {
+    let shift = mip.min(31);
+    match domain {
+        Domain::Rows(n) => Domain::Rows(n),
+        Domain::Grid(w, h) => Domain::Grid((w >> shift).max(1), (h >> shift).max(1)),
+        Domain::Volume(w, h, d) => Domain::Volume((w >> shift).max(1), (h >> shift).max(1), d),
+    }
+}
+
+/// Logical extent of 3D volume mip level `mip` (width, height, and depth halved).
+pub fn mip_domain_3d(domain: Domain, mip: u32) -> Domain {
+    let shift = mip.min(31);
+    match domain {
+        Domain::Rows(n) => Domain::Rows(n),
+        Domain::Grid(w, h) => Domain::Grid((w >> shift).max(1), (h >> shift).max(1)),
+        Domain::Volume(w, h, d) => Domain::Volume(
+            (w >> shift).max(1),
+            (h >> shift).max(1),
+            (d >> shift).max(1),
+        ),
+    }
 }
 
 impl fmt::Display for BlockFormat {
@@ -125,17 +203,30 @@ impl fmt::Display for BlockFormat {
 }
 
 /// Immutable hardware-native 4x4 block-compressed bytes for a `Grid` or stacked
-/// `Volume` (2D texture array) Field.
+/// `Volume` (2D texture array) Field, carrying `1..=max_mip_count` mip levels.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompressedBlocks {
     format: BlockFormat,
+    mip_count: u32,
     bytes: Arc<[u8]>,
 }
 
 impl CompressedBlocks {
-    /// Wraps raw compressed block bytes, validating exact size for `domain`.
+    /// Wraps single-level (`mip_count = 1`) compressed block bytes, validating
+    /// exact size for `domain`.
     pub fn new(format: BlockFormat, domain: Domain, bytes: Vec<u8>) -> Result<Self, HostError> {
-        let Some(expected) = format.byte_len(domain) else {
+        Self::new_with_mips(format, domain, 1, bytes)
+    }
+
+    /// Wraps `mip_count` levels of compressed block bytes (`mip 0` followed by
+    /// `mip 1`, ..., each level storing all `domain.depth()` layers contiguously).
+    pub fn new_with_mips(
+        format: BlockFormat,
+        domain: Domain,
+        mip_count: u32,
+        bytes: Vec<u8>,
+    ) -> Result<Self, HostError> {
+        let Some(expected) = format.mip_chain_byte_len(domain, mip_count) else {
             return Err(HostError::ZeroSize);
         };
         if bytes.len() != expected {
@@ -146,6 +237,7 @@ impl CompressedBlocks {
         }
         Ok(Self {
             format,
+            mip_count,
             bytes: Arc::from(bytes),
         })
     }
@@ -155,17 +247,39 @@ impl CompressedBlocks {
         self.format
     }
 
-    /// Raw compressed bytes, layer after layer, block-row after block-row.
+    /// Number of mip levels held (`>= 1`).
+    pub fn mip_count(&self) -> u32 {
+        self.mip_count
+    }
+
+    /// All raw compressed bytes across all mip levels (`0..mip_count`).
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
 
-    /// Decodes all compressed blocks into packed `unorm8` little-endian `u32`
-    /// storage words matching [`BlockFormat::schema`] over `domain`.
+    /// Raw compressed bytes for mip level `mip` (all layers of that mip).
+    pub fn mip_bytes(&self, domain: Domain, mip: u32) -> &[u8] {
+        let range = self
+            .format
+            .mip_byte_range(domain, self.mip_count, mip)
+            .expect("valid mip level for compressed blocks");
+        &self.bytes[range]
+    }
+
+    /// Decodes mip level `0` into packed `unorm8` little-endian `u32` storage
+    /// words matching [`BlockFormat::schema`] over `domain`.
     pub fn decode_storage(&self, domain: Domain) -> Vec<u32> {
-        let w = domain.width() as usize;
-        let h = domain.height() as usize;
-        let d = domain.depth() as usize;
+        self.decode_mip_storage(domain, 0)
+    }
+
+    /// Decodes mip level `mip` into packed `unorm8` little-endian `u32` storage
+    /// words over `mip_domain(domain, mip)`.
+    pub fn decode_mip_storage(&self, domain: Domain, mip: u32) -> Vec<u32> {
+        let level_dom = mip_domain(domain, mip);
+        let level_bytes = self.mip_bytes(domain, mip);
+        let w = level_dom.width() as usize;
+        let h = level_dom.height() as usize;
+        let d = level_dom.depth() as usize;
         let ch = self.format.channels();
         let mut out_bytes = vec![0u8; w * h * d * ch];
         let bx_count = w.div_ceil(4);
@@ -177,7 +291,7 @@ impl CompressedBlocks {
             for by in 0..by_count {
                 for bx in 0..bx_count {
                     let block_idx = z * layer_blocks + by * bx_count + bx;
-                    let src = &self.bytes[block_idx * bsize..(block_idx + 1) * bsize];
+                    let src = &level_bytes[block_idx * bsize..(block_idx + 1) * bsize];
                     let mut rgba = [[0u8; 4]; 16];
                     match self.format {
                         BlockFormat::Bc1RgbaUnorm => decode_bc1_block(src, &mut rgba),
@@ -228,21 +342,35 @@ impl CompressedBlocks {
     }
 
     /// Compresses packed `unorm8` texel bytes (`w * h * d * channels`) into
-    /// `format`.
+    /// a single mip level (`mip_count = 1`) of `format`.
     pub fn encode_unorm8(
         format: BlockFormat,
         domain: Domain,
         pixels: &[u8],
     ) -> Result<Self, HostError> {
-        let Some(expected_out) = format.byte_len(domain) else {
+        Self::encode_unorm8_mips(format, domain, pixels, 1, false)
+    }
+
+    /// Compresses packed `unorm8` texel bytes (`w * h * d * channels`) into
+    /// `mip_count` mip levels (`1..=max_mip_count(domain)`), box-downsampling
+    /// each subsequent level (with unit-normal renormalization for BC5 when
+    /// `normal_map` is true).
+    pub fn encode_unorm8_mips(
+        format: BlockFormat,
+        domain: Domain,
+        pixels: &[u8],
+        mip_count: u32,
+        normal_map: bool,
+    ) -> Result<Self, HostError> {
+        let Some(total_out) = format.mip_chain_byte_len(domain, mip_count) else {
             return Err(HostError::ZeroSize);
         };
-        let w = domain.width() as usize;
-        let h = domain.height() as usize;
+        let w0 = domain.width() as usize;
+        let h0 = domain.height() as usize;
         let d = domain.depth() as usize;
         let ch = format.channels();
-        let expected_in = w
-            .checked_mul(h)
+        let expected_in = w0
+            .checked_mul(h0)
             .and_then(|v| v.checked_mul(d))
             .and_then(|v| v.checked_mul(ch));
         if expected_in != Some(pixels.len()) {
@@ -251,49 +379,144 @@ impl CompressedBlocks {
                 actual: pixels.len().div_ceil(4),
             });
         }
-        let bx_count = w.div_ceil(4);
-        let by_count = h.div_ceil(4);
-        let bsize = format.block_bytes();
-        let mut out = vec![0u8; expected_out];
-        let layer_blocks = bx_count * by_count;
+        let mut all_bytes = Vec::with_capacity(total_out);
+        let mut cur_w = w0;
+        let mut cur_h = h0;
+        let mut cur_pixels: Vec<u8> = Vec::new();
 
-        for z in 0..d {
-            for by in 0..by_count {
-                for bx in 0..bx_count {
-                    let mut tile = [[0u8; 4]; 16];
-                    for py in 0..4 {
-                        let y = (by * 4 + py).min(h - 1);
-                        for px in 0..4 {
-                            let x = (bx * 4 + px).min(w - 1);
-                            let idx = ((z * h + y) * w + x) * ch;
-                            let t = &mut tile[py * 4 + px];
-                            t[..ch].copy_from_slice(&pixels[idx..idx + ch]);
-                            if ch < 4 {
-                                t[3] = 255;
-                            }
+        for mip in 0..mip_count {
+            let level_pixels: &[u8] = if mip == 0 { pixels } else { &cur_pixels };
+            encode_unorm8_level(format, cur_w, cur_h, d, level_pixels, &mut all_bytes);
+            if mip + 1 < mip_count {
+                let next_w = (cur_w >> 1).max(1);
+                let next_h = (cur_h >> 1).max(1);
+                cur_pixels = downsample_unorm8_2x2(
+                    level_pixels,
+                    cur_w,
+                    cur_h,
+                    next_w,
+                    next_h,
+                    d,
+                    ch,
+                    normal_map && format == BlockFormat::Bc5RgUnorm,
+                );
+                cur_w = next_w;
+                cur_h = next_h;
+            }
+        }
+        Self::new_with_mips(format, domain, mip_count, all_bytes)
+    }
+}
+
+fn encode_unorm8_level(
+    format: BlockFormat,
+    w: usize,
+    h: usize,
+    d: usize,
+    pixels: &[u8],
+    out: &mut Vec<u8>,
+) {
+    let ch = format.channels();
+    let bx_count = w.div_ceil(4);
+    let by_count = h.div_ceil(4);
+    let bsize = format.block_bytes();
+    let base_len = out.len();
+    out.resize(base_len + d * bx_count * by_count * bsize, 0);
+    let layer_blocks = bx_count * by_count;
+
+    for z in 0..d {
+        for by in 0..by_count {
+            for bx in 0..bx_count {
+                let mut tile = [[0u8; 4]; 16];
+                for py in 0..4 {
+                    let y = (by * 4 + py).min(h - 1);
+                    for px in 0..4 {
+                        let x = (bx * 4 + px).min(w - 1);
+                        let idx = ((z * h + y) * w + x) * ch;
+                        let t = &mut tile[py * 4 + px];
+                        t[..ch].copy_from_slice(&pixels[idx..idx + ch]);
+                        if ch < 4 {
+                            t[3] = 255;
                         }
                     }
-                    let block_idx = z * layer_blocks + by * bx_count + bx;
-                    let dst = &mut out[block_idx * bsize..(block_idx + 1) * bsize];
-                    match format {
-                        BlockFormat::Bc1RgbaUnorm => encode_bc1_block(&tile, dst),
-                        BlockFormat::Bc4RUnorm => {
-                            let r = tile.map(|p| p[0]);
-                            encode_bc4_block(&r, dst);
-                        }
-                        BlockFormat::Bc5RgUnorm => {
-                            let r = tile.map(|p| p[0]);
-                            let g = tile.map(|p| p[1]);
-                            encode_bc4_block(&r, &mut dst[0..8]);
-                            encode_bc4_block(&g, &mut dst[8..16]);
-                        }
-                        BlockFormat::Bc7RgbaUnorm => encode_bc7_block(&tile, dst),
+                }
+                let block_idx = z * layer_blocks + by * bx_count + bx;
+                let dst =
+                    &mut out[base_len + block_idx * bsize..base_len + (block_idx + 1) * bsize];
+                match format {
+                    BlockFormat::Bc1RgbaUnorm => encode_bc1_block(&tile, dst),
+                    BlockFormat::Bc4RUnorm => {
+                        let r = tile.map(|p| p[0]);
+                        encode_bc4_block(&r, dst);
+                    }
+                    BlockFormat::Bc5RgUnorm => {
+                        let r = tile.map(|p| p[0]);
+                        let g = tile.map(|p| p[1]);
+                        encode_bc4_block(&r, &mut dst[0..8]);
+                        encode_bc4_block(&g, &mut dst[8..16]);
+                    }
+                    BlockFormat::Bc7RgbaUnorm => encode_bc7_block(&tile, dst),
+                }
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn downsample_unorm8_2x2(
+    src: &[u8],
+    sw: usize,
+    sh: usize,
+    dw: usize,
+    dh: usize,
+    depth: usize,
+    ch: usize,
+    renormalize_xy: bool,
+) -> Vec<u8> {
+    let mut dst = vec![0u8; dw * dh * depth * ch];
+    for z in 0..depth {
+        for y in 0..dh {
+            let sy0 = (y * 2).min(sh - 1);
+            let sy1 = (y * 2 + 1).min(sh - 1);
+            for x in 0..dw {
+                let sx0 = (x * 2).min(sw - 1);
+                let sx1 = (x * 2 + 1).min(sw - 1);
+                let i00 = ((z * sh + sy0) * sw + sx0) * ch;
+                let i10 = ((z * sh + sy0) * sw + sx1) * ch;
+                let i01 = ((z * sh + sy1) * sw + sx0) * ch;
+                let i11 = ((z * sh + sy1) * sw + sx1) * ch;
+                let out = ((z * dh + y) * dw + x) * ch;
+                if renormalize_xy && ch == 2 {
+                    let mut acc = [0.0f32; 3];
+                    for i in [i00, i10, i01, i11] {
+                        let nx = (f32::from(src[i]) / 255.0) * 2.0 - 1.0;
+                        let ny = (f32::from(src[i + 1]) / 255.0) * 2.0 - 1.0;
+                        let nz = (1.0 - nx * nx - ny * ny).max(0.0).sqrt();
+                        acc[0] += nx;
+                        acc[1] += ny;
+                        acc[2] += nz;
+                    }
+                    let len = (acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]).sqrt();
+                    let (nx, ny) = if len > 1e-6 {
+                        (acc[0] / len, acc[1] / len)
+                    } else {
+                        (0.0, 0.0)
+                    };
+                    dst[out] = ((nx * 0.5 + 0.5).clamp(0.0, 1.0) * 255.0).round() as u8;
+                    dst[out + 1] = ((ny * 0.5 + 0.5).clamp(0.0, 1.0) * 255.0).round() as u8;
+                } else {
+                    for c in 0..ch {
+                        let sum = u16::from(src[i00 + c])
+                            + u16::from(src[i10 + c])
+                            + u16::from(src[i01 + c])
+                            + u16::from(src[i11 + c]);
+                        dst[out + c] = ((sum + 2) / 4) as u8;
                     }
                 }
             }
         }
-        Self::new(format, domain, out)
     }
+    dst
 }
 
 // ---------------------------------------------------------------------------

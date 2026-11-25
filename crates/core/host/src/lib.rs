@@ -12,9 +12,11 @@
 
 pub mod block;
 pub mod encoding;
+pub mod mip;
 
 pub use block::{BlockFormat, CompressedBlocks};
 pub use encoding::Encoding;
+pub use mip::MipPyramid;
 
 use std::any::Any;
 use std::fmt;
@@ -587,6 +589,7 @@ pub struct FieldData {
     domain: Domain,
     storage: Vec<u32>,
     compressed: Option<Box<CompressedPayload>>,
+    mips: std::sync::OnceLock<Option<Box<mip::MipPyramid>>>,
 }
 
 impl Clone for FieldData {
@@ -601,6 +604,7 @@ impl Clone for FieldData {
                     decoded: std::sync::OnceLock::new(),
                 })
             }),
+            mips: std::sync::OnceLock::new(),
         }
     }
 }
@@ -640,6 +644,7 @@ impl FieldData {
             domain,
             storage,
             compressed: None,
+            mips: std::sync::OnceLock::new(),
         })
     }
 
@@ -661,13 +666,18 @@ impl FieldData {
             domain,
             storage,
             compressed: None,
+            mips: std::sync::OnceLock::new(),
         })
     }
 
-    /// Wraps hardware block-compressed texture data (BC1, BC4, BC5, BC7) as a
-    /// typed Field whose logical schema is `unorm8` over `domain`.
+    /// Wraps hardware block-compressed texture data (BC1, BC4, BC5, BC7, with
+    /// 1 or more mip levels) as a typed Field whose logical schema is `unorm8`
+    /// over `domain`.
     pub fn from_blocks(domain: Domain, blocks: CompressedBlocks) -> Result<Self, HostError> {
-        let Some(expected) = blocks.format().byte_len(domain) else {
+        let Some(expected) = blocks
+            .format()
+            .mip_chain_byte_len(domain, blocks.mip_count())
+        else {
             return Err(HostError::ZeroSize);
         };
         if blocks.bytes().len() != expected {
@@ -684,6 +694,7 @@ impl FieldData {
                 blocks,
                 decoded: std::sync::OnceLock::new(),
             })),
+            mips: std::sync::OnceLock::new(),
         })
     }
 
@@ -704,6 +715,7 @@ impl FieldData {
             domain,
             storage,
             compressed: None,
+            mips: std::sync::OnceLock::new(),
         })
     }
 
@@ -719,7 +731,15 @@ impl FieldData {
             domain: Domain::Grid(image.width, image.height),
             storage,
             compressed: None,
+            mips: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Lazily-built deterministic mipmap pyramid for CPU/JIT filtered sampling.
+    pub fn mip_pyramid(&self) -> Option<&mip::MipPyramid> {
+        self.mips
+            .get_or_init(|| mip::MipPyramid::from_field(self).map(Box::new))
+            .as_deref()
     }
 
     /// The element layout.
@@ -771,8 +791,9 @@ impl FieldData {
     }
 
     /// Ensures mutable uncompressed word storage, decoding compressed blocks
-    /// once if needed.
+    /// once if needed and invalidating any cached mipmap pyramid.
     fn storage_mut_uncompressed(&mut self) -> &mut Vec<u32> {
+        self.mips = std::sync::OnceLock::new();
         if let Some(mut c) = self.compressed.take() {
             self.storage = c
                 .decoded

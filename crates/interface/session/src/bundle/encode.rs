@@ -496,6 +496,22 @@ impl Writer {
                 self.tag_u32(38, *i);
                 self.u32(v.0);
             }
+            Op::AtFiltered {
+                input,
+                at,
+                repeat,
+                lod,
+                grad,
+            } => {
+                self.tag_u32(47, *input);
+                self.u32(at.0);
+                self.byte(u8::from(*repeat));
+                self.opt(lod.as_ref(), |w, id| w.u32(id.0));
+                self.opt(grad.as_ref(), |w, (dx, dy)| {
+                    w.u32(dx.0);
+                    w.u32(dy.0);
+                });
+            }
             Op::Count(i) => self.tag_u32(39, *i),
             Op::Size(i) => self.tag_u32(40, *i),
             Op::Put(i, at, v) => {

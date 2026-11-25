@@ -1736,3 +1736,105 @@ fn signed_zero_constants_stay_distinct_across_shared_code_cache() {
     assert_eq!(host.data(pos_out).unwrap().storage(), [0.0f32.to_bits()]);
     assert_eq!(host.data(neg_out).unwrap().storage(), [(-0.0f32).to_bits()]);
 }
+
+#[test]
+fn at_repeat_trilinear_and_anisotropic_match_cpu_bit_for_bit() {
+    use entelechy_abi::{BlockFormat, CompressedBlocks, Encoding, FieldData, Scalar, Schema};
+
+    let source = "kernel test.filtered_jit@1 {
+        requires { field.read; field.write; }
+        input rows: Rows<Float>;
+        input grid: Grid<Vec4>;
+        input bc7: Grid<Vec4 as unorm8>;
+        input vol: Volume<Vec4 as f16>;
+        output out: Grid<Vec4>;
+        compute {
+            let p = coord();
+            let r = at_repeat(rows, p.x * 1.7 - 2.3);
+            let g0 = at_repeat(grid, p * vec2(1.5, 1.25) - vec2(1.0, 0.75));
+            let g_lod = at_linear(grid, p * 2.0 + vec2(0.5, 0.5), 1.35);
+            let b_lod = at_repeat(bc7, p * 2.5 - vec2(3.0, 2.0), 1.5);
+            let b_aniso = at_repeat(bc7, p * 2.0 + vec2(0.5, 0.5), vec2(6.0, 0.0), vec2(0.0, 0.5));
+            let v_lod = at_linear(vol, vec3(p.x + 0.5, p.y + 0.5, 1.25), 0.75);
+            let v_aniso = at_linear(vol, vec3(p.x + 0.5, p.y + 0.5, 0.5), vec2(4.0, 0.0), vec2(0.0, 0.5));
+            return vec4(r + g0.x + g_lod.x, b_lod.y + b_aniso.y, v_lod.z + v_aniso.z, g0.w + b_aniso.w);
+        }
+    }";
+    let module = compile(source).unwrap();
+    let jit = JitBackend::new().unwrap();
+    let prep = jit.prepare(&module).unwrap();
+
+    let rows_data = FieldData::from_values(
+        Schema::new(vec![Scalar::Float]),
+        Domain::Rows(4),
+        &[0.1f32, 0.4, 0.7, 1.0].map(f32::to_bits),
+    )
+    .unwrap();
+
+    let mut grid_vals = Vec::with_capacity(16 * 16 * 4);
+    for y in 0..16u32 {
+        for x in 0..16u32 {
+            let chk = if (x + y) % 2 == 0 { 1.0f32 } else { 0.0 };
+            grid_vals
+                .extend_from_slice(&[chk, x as f32 / 15.0, y as f32 / 15.0, 1.0].map(f32::to_bits));
+        }
+    }
+    let grid_data =
+        FieldData::from_values(Schema::pixel(), Domain::Grid(16, 16), &grid_vals).unwrap();
+
+    let mut bc_pixels = vec![0u8; 16 * 16 * 4];
+    for y in 0..16usize {
+        for x in 0..16usize {
+            let b = (y * 16 + x) * 4;
+            let stripe = if y % 2 == 0 { 240u8 } else { 20u8 };
+            bc_pixels[b..b + 4].copy_from_slice(&[stripe, (x * 15) as u8, (y * 15) as u8, 255]);
+        }
+    }
+    let bc_blocks = CompressedBlocks::encode_unorm8_mips(
+        BlockFormat::Bc7RgbaUnorm,
+        Domain::Grid(16, 16),
+        &bc_pixels,
+        5,
+        false,
+    )
+    .unwrap();
+    let bc_data = FieldData::from_blocks(Domain::Grid(16, 16), bc_blocks).unwrap();
+
+    let vol_schema = Schema::pixel().with_encoding(Encoding::F16).unwrap();
+    let mut vol_vals = Vec::with_capacity(8 * 8 * 4 * 4);
+    for z in 0..4u32 {
+        for y in 0..8u32 {
+            for x in 0..8u32 {
+                vol_vals.extend_from_slice(
+                    &[x as f32 / 7.0, y as f32 / 7.0, z as f32 / 3.0, 1.0].map(f32::to_bits),
+                );
+            }
+        }
+    }
+    let vol_data = FieldData::from_values(vol_schema, Domain::Volume(8, 8, 4), &vol_vals).unwrap();
+
+    let run = |on_jit: bool| {
+        let mut host = Host::new(8 << 20);
+        let inputs = vec![
+            host.adopt(rows_data.clone()).unwrap(),
+            host.adopt(grid_data.clone()).unwrap(),
+            host.adopt(bc_data.clone()).unwrap(),
+            host.adopt(vol_data.clone()).unwrap(),
+        ];
+        let inv = Invocation {
+            inputs,
+            params: vec![],
+            domain: Domain::Grid(8, 8),
+            context: Context::default(),
+        };
+        let mut scope = Scope::new(&mut host, all());
+        let out = if on_jit {
+            jit.execute(prep.as_ref(), &module, &inv, &mut scope)
+                .unwrap()[0]
+        } else {
+            CpuBackend.execute(&module, &inv, &mut scope).unwrap()[0]
+        };
+        host.data(out).unwrap().storage().to_vec()
+    };
+    assert_eq!(run(false), run(true));
+}

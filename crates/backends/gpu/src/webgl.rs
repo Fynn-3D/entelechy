@@ -500,6 +500,12 @@ impl WebGlBackend {
         if module.holds(entelechy_abi::Type::Double) {
             return Some("it holds a Double, which the device does not compute".to_owned());
         }
+        if wgsl::filtered_uses(module).any {
+            return Some(
+                "it uses filtered or mipmap sampling, which WebGL2 delegates to the ordered backend"
+                    .to_owned(),
+            );
+        }
         if module.holds(entelechy_abi::Type::Long) && !wgsl::pairs_take(module) {
             return Some(
                 "it holds a Long vector or unsupported Long intrinsic on a 32-bit device"

@@ -1423,6 +1423,46 @@ impl<'p, 's> Machine<'p, 's> {
                     self.stack[fp + dst + i] = v.to_bits();
                 }
             }
+            Instr::AtFiltered {
+                dst,
+                input,
+                position,
+                kind,
+                repeat,
+                lod,
+                grad,
+                n,
+            } => {
+                let view = &program.inputs[*input];
+                let address = read_address(s, fp + position, *kind, 0.5);
+                let lod_val = lod.map(|at| f(s[fp + at]));
+                let grad_val = grad.map(|(dx, dy)| {
+                    (
+                        [f(s[fp + dx]), f(s[fp + dx + 1])],
+                        [f(s[fp + dy]), f(s[fp + dy + 1])],
+                    )
+                });
+                let out_slice = &mut self.stack[fp + dst..fp + dst + *n];
+                if let Some(mem_words) = self.memories[*input].as_deref() {
+                    let schema = view
+                        .narrow
+                        .clone()
+                        .unwrap_or_else(|| view.field.schema().clone());
+                    let tmp = entelechy_abi::FieldData::from_storage(
+                        schema,
+                        view.domain,
+                        mem_words.to_vec(),
+                    )
+                    .expect("memory storage matches domain");
+                    entelechy_abi::mip::sample_filtered(
+                        &tmp, address, *repeat, lod_val, grad_val, out_slice,
+                    );
+                } else {
+                    entelechy_abi::mip::sample_filtered(
+                        view.field, address, *repeat, lod_val, grad_val, out_slice,
+                    );
+                }
+            }
         }
         Ok(())
     }

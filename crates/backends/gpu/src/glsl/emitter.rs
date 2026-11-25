@@ -610,13 +610,14 @@ impl Emitter<'_> {
                 .0
             }
             Op::AtLinear(input, index) => format!("linear_in{input}({})", v(index)),
-            Op::Clock
+            Op::AtFiltered { .. }
+            | Op::Clock
             | Op::Lane
             | Op::Exchange(..)
             | Op::Lanes { .. }
             | Op::Meet(_)
             | Op::Emit(_)
-            | Op::Put(..) => unreachable!("WebGL2 declines non-map and Double modules"),
+            | Op::Put(..) => unreachable!("WebGL2 declines non-map, Double, and filtered modules"),
         };
         self.line(depth, &format!("{ty_name} v{} = {expression};", id.0));
     }

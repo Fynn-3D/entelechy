@@ -425,7 +425,7 @@ fn long_of(low: u32, high: u32) -> i64 {
 
 /// The preamble of the map and fold shaders: uniforms, outputs when
 /// `with_output`, inputs, structs, input readers and addresses, helpers,
-/// mixers, linear readers and memory writers. With `longs` in pairs, a
+/// mixers, linear/filtered readers and memory writers. With `longs` in pairs, a
 /// Long is a pair of words (`i64` an alias of `vec2<u32>`).
 pub(crate) fn emit_preamble(
     out: &mut String,
@@ -434,8 +434,11 @@ pub(crate) fn emit_preamble(
     packs: &[Vec<usize>],
     textured: &[usize],
     longs: Longs,
+    float32_filterable: bool,
 ) {
     let manifest = &module.manifest;
+    let uses = filtered_uses(module);
+    let samplers = samplers_for(module, textured, float32_filterable);
     if longs == Longs::Pairs && module.holds(Type::Long) {
         out.push_str(LONG_PAIR_WORDS.trim_start());
     }
@@ -479,10 +482,9 @@ pub(crate) fn emit_preamble(
             continue;
         }
         if textured.contains(&index) {
-            let enc = input_encoding(module, index);
             let tex_ty = match port.shape() {
                 Shape::Grid => "texture_2d<f32>",
-                Shape::Volume if enc == Encoding::Unorm8 => "texture_2d_array<f32>",
+                Shape::Volume if input_is_2d_array(module, index, &uses) => "texture_2d_array<f32>",
                 Shape::Volume => "texture_3d<f32>",
                 Shape::Rows => unreachable!("rows inputs are never textured"),
             };
@@ -503,6 +505,30 @@ pub(crate) fn emit_preamble(
             out,
             "@group(0) @binding({}) var<storage, {access}> in{index}: array<u32>;",
             INPUT_BINDING + index as u32,
+        );
+    }
+    if samplers.clamp {
+        let _ = writeln!(
+            out,
+            "@group(0) @binding({SAMPLER_CLAMP_BINDING}) var samp_clamp: sampler;"
+        );
+    }
+    if samplers.repeat {
+        let _ = writeln!(
+            out,
+            "@group(0) @binding({SAMPLER_REPEAT_BINDING}) var samp_repeat: sampler;"
+        );
+    }
+    if samplers.aniso_clamp {
+        let _ = writeln!(
+            out,
+            "@group(0) @binding({SAMPLER_ANISO_CLAMP_BINDING}) var samp_aniso_clamp: sampler;"
+        );
+    }
+    if samplers.aniso_repeat {
+        let _ = writeln!(
+            out,
+            "@group(0) @binding({SAMPLER_ANISO_REPEAT_BINDING}) var samp_aniso_repeat: sampler;"
         );
     }
     out.push('\n');
@@ -839,7 +865,7 @@ fn index_in{index}(c: vec2<f32>) -> u32 {{
                     );
                 }
                 Shape::Volume => {
-                    let load_expr = if input_encoding(module, index) == Encoding::Unorm8 {
+                    let load_expr = if input_is_2d_array(module, index, &uses) {
                         format!(
                             "textureLoad(in{index}, vec2<i32>(i32(x), i32(y)), i32(z), 0){swizzle}"
                         )
@@ -1011,8 +1037,23 @@ fn urem_u32(a: u32, b: u32) -> u32 {{
         emit_encodings(out);
     }
     emit_mixers(out, module);
+    if uses.any {
+        emit_filter_axis_helpers(out);
+    }
     for (index, port) in manifest.inputs.iter().enumerate() {
-        emit_linear(out, module, index, port, textured.contains(&index));
+        let is_textured = textured.contains(&index);
+        emit_linear(out, module, index, port, is_textured);
+        if uses.any {
+            emit_filtered(
+                out,
+                module,
+                index,
+                port,
+                is_textured,
+                &uses,
+                float32_filterable,
+            );
+        }
         if manifest.memories.contains(&port.name) {
             emit_memory_writer(out, module, index, port);
         }
@@ -1243,5 +1284,602 @@ pub(crate) fn emit_linear(
                 mix("near".into(), "far".into(), "f.z")
             );
         }
+    }
+}
+
+/// Shared WGSL helpers for filtered sampling (`at_repeat`, `lod`, and `ddx/ddy`).
+fn emit_filter_axis_helpers(out: &mut String) {
+    let _ = writeln!(
+        out,
+        "struct AxisTap {{ lo: u32, hi: u32, f: f32 }}
+fn filter_axis(c: f32, n: u32, repeat: bool) -> AxisTap {{
+    if (n <= 1u || is_nan(c)) {{
+        return AxisTap(0u, 0u, 0.0);
+    }}
+    let t = c - 0.5;
+    if (repeat) {{
+        let nf = f32(n);
+        let raw = t - floor(t / nf) * nf;
+        let w = select(raw, 0.0, raw >= nf || raw < 0.0);
+        let lo = min(u32(floor(w)), n - 1u);
+        let hi = select(lo + 1u, 0u, lo + 1u >= n);
+        let f = clamp(w - floor(w), 0.0, 1.0);
+        return AxisTap(lo, hi, f);
+    }}
+    let max_i = f32(n - 1u);
+    if (t <= 0.0) {{ return AxisTap(0u, 0u, 0.0); }}
+    if (t >= max_i) {{ return AxisTap(n - 1u, n - 1u, 0.0); }}
+    let lo = u32(floor(t));
+    let hi = min(lo + 1u, n - 1u);
+    let f = clamp(t - floor(t), 0.0, 1.0);
+    return AxisTap(lo, hi, f);
+}}
+fn clean_grad(g: vec2<f32>) -> vec2<f32> {{
+    let bad = (bitcast<vec2<u32>>(g) & vec2<u32>(0x7FFFFFFFu)) >= vec2<u32>(0x7F800000u);
+    return select(g, vec2<f32>(0.0, 0.0), bad);
+}}"
+    );
+}
+
+/// Emits filtered sampling helpers (`repeat_in{i}`, `lod_*_in{i}`, `grad_*_in{i}`)
+/// actually referenced by `Op::AtFiltered` on input `index`.
+#[allow(clippy::too_many_arguments)]
+fn emit_filtered(
+    out: &mut String,
+    module: &Module,
+    index: usize,
+    port: &entelechy_ir::Port,
+    is_textured: bool,
+    uses: &FilteredUses,
+    float32_filterable: bool,
+) {
+    let need_repeat_2 = uses.repeat_2arg.contains(&index);
+    let need_clamp_lod = uses.clamp_lod.contains(&index);
+    let need_repeat_lod = uses.repeat_lod.contains(&index);
+    let need_clamp_grad = uses.clamp_grad.contains(&index);
+    let need_repeat_grad = uses.repeat_grad.contains(&index);
+    if !(need_repeat_2 || need_clamp_lod || need_repeat_lod || need_clamp_grad || need_repeat_grad)
+    {
+        return;
+    }
+    let element = port.element();
+    if !all_floats(module, element) {
+        return;
+    }
+    let slot = CONTEXT_HEAD + index;
+    let ty = wgsl_type(element);
+    let filterable = is_textured && input_is_filterable(module, index, float32_filterable);
+    let is_array = input_is_2d_array(module, index, uses);
+    let swizzle = match element {
+        Type::Float => ".x",
+        Type::Vec2 => ".xy",
+        Type::Vec4 => "",
+        _ => "",
+    };
+
+    if need_repeat_2 {
+        let load = |x: &str, y: &str, z: &str| {
+            if is_textured {
+                match port.shape() {
+                    Shape::Grid => format!("texel_in{index}({x}, {y})"),
+                    Shape::Volume => format!("texel_in{index}({x}, {y}, {z})"),
+                    Shape::Rows => unreachable!("rows inputs are never textured"),
+                }
+            } else {
+                format!("load_in{index}((({z}) * u32(h) + ({y})) * u32(w) + ({x}))")
+            }
+        };
+        let mix = |a: String, b: String, t: &str| mix_call(module, element, &a, &b, t);
+        match port.shape() {
+            Shape::Rows => {
+                let _ = writeln!(
+                    out,
+                    "fn repeat_in{index}(c: f32) -> {ty} {{
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = 1u;
+    let ax = filter_axis(c, w, true);
+    return {};
+}}",
+                    mix(load("ax.lo", "0u", "0u"), load("ax.hi", "0u", "0u"), "ax.f")
+                );
+            }
+            Shape::Grid => {
+                let hw_fast = if filterable {
+                    format!(
+                        "    let dims = textureDimensions(in{index});
+    if (dims.x == w && dims.y == h) {{
+        let cc = select(c, vec2<f32>(0.0, 0.0), is_nan2(c));
+        let uv = cc / vec2<f32>(f32(w), f32(h));
+        return textureSampleLevel(in{index}, samp_repeat, uv, 0.0){swizzle};
+    }}\n"
+                    )
+                } else {
+                    String::new()
+                };
+                let _ = writeln!(
+                    out,
+                    "fn repeat_in{index}(c: vec2<f32>) -> {ty} {{
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = bitcast<u32>(ctx[{slot}].y);
+{hw_fast}    let ax = filter_axis(c.x, w, true);
+    let ay = filter_axis(c.y, h, true);
+    let top = {};
+    let bot = {};
+    return {};
+}}",
+                    mix(
+                        load("ax.lo", "ay.lo", "0u"),
+                        load("ax.hi", "ay.lo", "0u"),
+                        "ax.f"
+                    ),
+                    mix(
+                        load("ax.lo", "ay.hi", "0u"),
+                        load("ax.hi", "ay.hi", "0u"),
+                        "ax.f"
+                    ),
+                    mix("top".into(), "bot".into(), "ay.f")
+                );
+            }
+            Shape::Volume => {
+                let hw_fast = if filterable && is_array {
+                    format!(
+                        "    let dims = textureDimensions(in{index});
+    if (dims.x == w && dims.y == h) {{
+        let cc = select(c.xy, vec2<f32>(0.0, 0.0), is_nan2(c.xy));
+        let uv = cc / vec2<f32>(f32(w), f32(h));
+        let az = filter_axis(c.z, d, false);
+        let a = textureSampleLevel(in{index}, samp_repeat, uv, i32(az.lo), 0.0){swizzle};
+        if (az.lo == az.hi || az.f <= 0.0) {{ return a; }}
+        let b = textureSampleLevel(in{index}, samp_repeat, uv, i32(az.hi), 0.0){swizzle};
+        return mix(a, b, az.f);
+    }}\n"
+                    )
+                } else if filterable {
+                    format!(
+                        "    let cc = select(c, vec3<f32>(0.0, 0.0, 0.0), is_nan3(c));
+    let uv = cc / vec3<f32>(f32(w), f32(h), f32(d));
+    return textureSampleLevel(in{index}, samp_repeat, uv, 0.0){swizzle};\n"
+                    )
+                } else {
+                    String::new()
+                };
+                if filterable && !is_array {
+                    let _ = writeln!(
+                        out,
+                        "fn repeat_in{index}(c: vec3<f32>) -> {ty} {{
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = bitcast<u32>(ctx[{slot}].y);
+    let d = bitcast<u32>(ctx[{slot}].z);
+{hw_fast}}}"
+                    );
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "fn repeat_in{index}(c: vec3<f32>) -> {ty} {{
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = bitcast<u32>(ctx[{slot}].y);
+    let d = bitcast<u32>(ctx[{slot}].z);
+{hw_fast}    let ax = filter_axis(c.x, w, true);
+    let ay = filter_axis(c.y, h, true);
+    let az = filter_axis(c.z, d, false);
+    let near_top = {};
+    let near_bot = {};
+    let near = {};
+    if (az.lo == az.hi || az.f <= 0.0) {{ return near; }}
+    let far_top = {};
+    let far_bot = {};
+    let far = {};
+    return {};
+}}",
+                        mix(
+                            load("ax.lo", "ay.lo", "az.lo"),
+                            load("ax.hi", "ay.lo", "az.lo"),
+                            "ax.f"
+                        ),
+                        mix(
+                            load("ax.lo", "ay.hi", "az.lo"),
+                            load("ax.hi", "ay.hi", "az.lo"),
+                            "ax.f"
+                        ),
+                        mix("near_top".into(), "near_bot".into(), "ay.f"),
+                        mix(
+                            load("ax.lo", "ay.lo", "az.hi"),
+                            load("ax.hi", "ay.lo", "az.hi"),
+                            "ax.f"
+                        ),
+                        mix(
+                            load("ax.lo", "ay.hi", "az.hi"),
+                            load("ax.hi", "ay.hi", "az.hi"),
+                            "ax.f"
+                        ),
+                        mix("far_top".into(), "far_bot".into(), "ay.f"),
+                        mix("near".into(), "far".into(), "az.f")
+                    );
+                }
+            }
+        }
+    }
+
+    let need_any_mip = need_clamp_lod || need_repeat_lod || need_clamp_grad || need_repeat_grad;
+    if !need_any_mip || !is_textured {
+        return;
+    }
+
+    // Emit software per-mip `textureLoad` helpers for non-filterable `Word`
+    // textures (when `!float32_filterable`) and odd-sized padded BCn fallbacks.
+    match port.shape() {
+        Shape::Grid => {
+            let _ = writeln!(
+                out,
+                "fn soft_level_in{index}(uv: vec2<f32>, level: u32, repeat_xy: bool) -> {ty} {{
+    let w0 = bitcast<u32>(ctx[{slot}].x);
+    let h0 = bitcast<u32>(ctx[{slot}].y);
+    let mw = max(w0 >> level, 1u);
+    let mh = max(h0 >> level, 1u);
+    let ax = filter_axis(uv.x * f32(mw), mw, repeat_xy);
+    let ay = filter_axis(uv.y * f32(mh), mh, repeat_xy);
+    let lv = i32(level);
+    let v00 = textureLoad(in{index}, vec2<i32>(i32(ax.lo), i32(ay.lo)), lv){swizzle};
+    let v10 = textureLoad(in{index}, vec2<i32>(i32(ax.hi), i32(ay.lo)), lv){swizzle};
+    let v01 = textureLoad(in{index}, vec2<i32>(i32(ax.lo), i32(ay.hi)), lv){swizzle};
+    let v11 = textureLoad(in{index}, vec2<i32>(i32(ax.hi), i32(ay.hi)), lv){swizzle};
+    return mix(mix(v00, v10, ax.f), mix(v01, v11, ax.f), ay.f);
+}}
+fn soft_lod_in{index}(c: vec2<f32>, lod: f32, repeat_xy: bool) -> {ty} {{
+    let w0 = bitcast<u32>(ctx[{slot}].x);
+    let h0 = bitcast<u32>(ctx[{slot}].y);
+    let max_l = textureNumLevels(in{index}) - 1u;
+    let clod = clamp(select(lod, 0.0, is_nan(lod)), 0.0, f32(max_l));
+    let l0 = min(u32(floor(clod)), max_l);
+    let l1 = min(l0 + 1u, max_l);
+    let frac = clod - f32(l0);
+    let cc = select(c, vec2<f32>(0.0, 0.0), is_nan2(c));
+    let uv = cc / vec2<f32>(f32(w0), f32(h0));
+    let a = soft_level_in{index}(uv, l0, repeat_xy);
+    if (l0 == l1 || frac <= 0.0) {{ return a; }}
+    return mix(a, soft_level_in{index}(uv, l1, repeat_xy), frac);
+}}"
+            );
+            if need_clamp_grad || need_repeat_grad {
+                let _ = writeln!(
+                    out,
+                    "fn soft_aniso_in{index}(c: vec2<f32>, ddx: vec2<f32>, ddy: vec2<f32>, repeat_xy: bool) -> {ty} {{
+    let gx = clean_grad(ddx);
+    let gy = clean_grad(ddy);
+    let lx = length(gx);
+    let ly = length(gy);
+    var major = gy;
+    var p_max = ly;
+    var p_min = lx;
+    if (lx >= ly) {{
+        major = gx;
+        p_max = lx;
+        p_min = ly;
+    }}
+    var ratio = 1.0;
+    if (p_min > 1e-6) {{
+        ratio = min(p_max / p_min, 16.0);
+    }} else if (p_max > 1.0) {{
+        ratio = min(p_max, 16.0);
+    }}
+    let n_taps = clamp(u32(ceil(ratio)), 1u, 16u);
+    var lod = 0.0;
+    if (p_max > 1e-6) {{
+        lod = max(log2(max(p_max / f32(n_taps), 1e-6)), 0.0);
+    }}
+    if (n_taps == 1u) {{
+        return soft_lod_in{index}(c, lod, repeat_xy);
+    }}
+    var acc = {ty}(0.0);
+    let inv_n = 1.0 / f32(n_taps);
+    for (var k: u32 = 0u; k < n_taps; k = k + 1u) {{
+        let t = (f32(k) + 0.5) * inv_n - 0.5;
+        acc = acc + soft_lod_in{index}(c + major * t, lod, repeat_xy);
+    }}
+    return acc * inv_n;
+}}"
+                );
+            }
+            for (needed, name, samp, repeat_lit) in [
+                (need_clamp_lod, "lod_clamp", "samp_clamp", "false"),
+                (need_repeat_lod, "lod_repeat", "samp_repeat", "true"),
+            ] {
+                if !needed {
+                    continue;
+                }
+                if filterable {
+                    let _ = writeln!(
+                        out,
+                        "fn {name}_in{index}(c: vec2<f32>, lod: f32) -> {ty} {{
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = bitcast<u32>(ctx[{slot}].y);
+    let dims = textureDimensions(in{index});
+    if (dims.x == w && dims.y == h) {{
+        let cc = select(c, vec2<f32>(0.0, 0.0), is_nan2(c));
+        let uv = cc / vec2<f32>(f32(w), f32(h));
+        let clod = select(max(lod, 0.0), 0.0, is_nan(lod));
+        return textureSampleLevel(in{index}, {samp}, uv, clod){swizzle};
+    }}
+    return soft_lod_in{index}(c, lod, {repeat_lit});
+}}"
+                    );
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "fn {name}_in{index}(c: vec2<f32>, lod: f32) -> {ty} {{
+    return soft_lod_in{index}(c, lod, {repeat_lit});
+}}"
+                    );
+                }
+            }
+            for (needed, name, samp, repeat_lit) in [
+                (need_clamp_grad, "grad_clamp", "samp_aniso_clamp", "false"),
+                (need_repeat_grad, "grad_repeat", "samp_aniso_repeat", "true"),
+            ] {
+                if !needed {
+                    continue;
+                }
+                if filterable {
+                    let _ = writeln!(
+                        out,
+                        "fn {name}_in{index}(c: vec2<f32>, ddx: vec2<f32>, ddy: vec2<f32>) -> {ty} {{
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = bitcast<u32>(ctx[{slot}].y);
+    let dims = textureDimensions(in{index});
+    if (dims.x == w && dims.y == h) {{
+        let inv = vec2<f32>(1.0 / f32(w), 1.0 / f32(h));
+        let cc = select(c, vec2<f32>(0.0, 0.0), is_nan2(c));
+        return textureSampleGrad(in{index}, {samp}, cc * inv, clean_grad(ddx) * inv, clean_grad(ddy) * inv){swizzle};
+    }}
+    return soft_aniso_in{index}(c, ddx, ddy, {repeat_lit});
+}}"
+                    );
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "fn {name}_in{index}(c: vec2<f32>, ddx: vec2<f32>, ddy: vec2<f32>) -> {ty} {{
+    return soft_aniso_in{index}(c, ddx, ddy, {repeat_lit});
+}}"
+                    );
+                }
+            }
+        }
+        Shape::Volume if is_array => {
+            let _ = writeln!(
+                out,
+                "fn soft_level_in{index}(uv: vec2<f32>, z0: u32, z1: u32, fz: f32, level: u32, repeat_xy: bool) -> {ty} {{
+    let w0 = bitcast<u32>(ctx[{slot}].x);
+    let h0 = bitcast<u32>(ctx[{slot}].y);
+    let mw = max(w0 >> level, 1u);
+    let mh = max(h0 >> level, 1u);
+    let ax = filter_axis(uv.x * f32(mw), mw, repeat_xy);
+    let ay = filter_axis(uv.y * f32(mh), mh, repeat_xy);
+    let lv = i32(level);
+    let lz0 = i32(z0);
+    let n00 = textureLoad(in{index}, vec2<i32>(i32(ax.lo), i32(ay.lo)), lz0, lv){swizzle};
+    let n10 = textureLoad(in{index}, vec2<i32>(i32(ax.hi), i32(ay.lo)), lz0, lv){swizzle};
+    let n01 = textureLoad(in{index}, vec2<i32>(i32(ax.lo), i32(ay.hi)), lz0, lv){swizzle};
+    let n11 = textureLoad(in{index}, vec2<i32>(i32(ax.hi), i32(ay.hi)), lz0, lv){swizzle};
+    let a = mix(mix(n00, n10, ax.f), mix(n01, n11, ax.f), ay.f);
+    if (z0 == z1 || fz <= 0.0) {{ return a; }}
+    let lz1 = i32(z1);
+    let f00 = textureLoad(in{index}, vec2<i32>(i32(ax.lo), i32(ay.lo)), lz1, lv){swizzle};
+    let f10 = textureLoad(in{index}, vec2<i32>(i32(ax.hi), i32(ay.lo)), lz1, lv){swizzle};
+    let f01 = textureLoad(in{index}, vec2<i32>(i32(ax.lo), i32(ay.hi)), lz1, lv){swizzle};
+    let f11 = textureLoad(in{index}, vec2<i32>(i32(ax.hi), i32(ay.hi)), lz1, lv){swizzle};
+    let b = mix(mix(f00, f10, ax.f), mix(f01, f11, ax.f), ay.f);
+    return mix(a, b, fz);
+}}
+fn soft_lod_in{index}(c: vec3<f32>, lod: f32, repeat_xy: bool) -> {ty} {{
+    let w0 = bitcast<u32>(ctx[{slot}].x);
+    let h0 = bitcast<u32>(ctx[{slot}].y);
+    let d0 = bitcast<u32>(ctx[{slot}].z);
+    let max_l = textureNumLevels(in{index}) - 1u;
+    let clod = clamp(select(lod, 0.0, is_nan(lod)), 0.0, f32(max_l));
+    let l0 = min(u32(floor(clod)), max_l);
+    let l1 = min(l0 + 1u, max_l);
+    let frac = clod - f32(l0);
+    let cc = select(c.xy, vec2<f32>(0.0, 0.0), is_nan2(c.xy));
+    let uv = cc / vec2<f32>(f32(w0), f32(h0));
+    let az = filter_axis(c.z, d0, false);
+    let a = soft_level_in{index}(uv, az.lo, az.hi, az.f, l0, repeat_xy);
+    if (l0 == l1 || frac <= 0.0) {{ return a; }}
+    return mix(a, soft_level_in{index}(uv, az.lo, az.hi, az.f, l1, repeat_xy), frac);
+}}"
+            );
+            if need_clamp_grad || need_repeat_grad {
+                let _ = writeln!(
+                    out,
+                    "fn soft_aniso_in{index}(c: vec3<f32>, ddx: vec2<f32>, ddy: vec2<f32>, repeat_xy: bool) -> {ty} {{
+    let gx = clean_grad(ddx);
+    let gy = clean_grad(ddy);
+    let lx = length(gx);
+    let ly = length(gy);
+    var major = gy;
+    var p_max = ly;
+    var p_min = lx;
+    if (lx >= ly) {{
+        major = gx;
+        p_max = lx;
+        p_min = ly;
+    }}
+    var ratio = 1.0;
+    if (p_min > 1e-6) {{
+        ratio = min(p_max / p_min, 16.0);
+    }} else if (p_max > 1.0) {{
+        ratio = min(p_max, 16.0);
+    }}
+    let n_taps = clamp(u32(ceil(ratio)), 1u, 16u);
+    var lod = 0.0;
+    if (p_max > 1e-6) {{
+        lod = max(log2(max(p_max / f32(n_taps), 1e-6)), 0.0);
+    }}
+    if (n_taps == 1u) {{
+        return soft_lod_in{index}(c, lod, repeat_xy);
+    }}
+    var acc = {ty}(0.0);
+    let inv_n = 1.0 / f32(n_taps);
+    for (var k: u32 = 0u; k < n_taps; k = k + 1u) {{
+        let t = (f32(k) + 0.5) * inv_n - 0.5;
+        let tap_c = vec3<f32>(c.xy + major * t, c.z);
+        acc = acc + soft_lod_in{index}(tap_c, lod, repeat_xy);
+    }}
+    return acc * inv_n;
+}}"
+                );
+            }
+            for (needed, name, samp, repeat_lit) in [
+                (need_clamp_lod, "lod_clamp", "samp_clamp", "false"),
+                (need_repeat_lod, "lod_repeat", "samp_repeat", "true"),
+            ] {
+                if !needed {
+                    continue;
+                }
+                if filterable {
+                    let _ = writeln!(
+                        out,
+                        "fn {name}_in{index}(c: vec3<f32>, lod: f32) -> {ty} {{
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = bitcast<u32>(ctx[{slot}].y);
+    let d = bitcast<u32>(ctx[{slot}].z);
+    let dims = textureDimensions(in{index});
+    if (dims.x == w && dims.y == h) {{
+        let cc = select(c.xy, vec2<f32>(0.0, 0.0), is_nan2(c.xy));
+        let uv = cc / vec2<f32>(f32(w), f32(h));
+        let clod = select(max(lod, 0.0), 0.0, is_nan(lod));
+        let az = filter_axis(c.z, d, false);
+        let a = textureSampleLevel(in{index}, {samp}, uv, i32(az.lo), clod){swizzle};
+        if (az.lo == az.hi || az.f <= 0.0) {{ return a; }}
+        let b = textureSampleLevel(in{index}, {samp}, uv, i32(az.hi), clod){swizzle};
+        return mix(a, b, az.f);
+    }}
+    return soft_lod_in{index}(c, lod, {repeat_lit});
+}}"
+                    );
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "fn {name}_in{index}(c: vec3<f32>, lod: f32) -> {ty} {{
+    return soft_lod_in{index}(c, lod, {repeat_lit});
+}}"
+                    );
+                }
+            }
+            for (needed, name, samp, repeat_lit) in [
+                (need_clamp_grad, "grad_clamp", "samp_aniso_clamp", "false"),
+                (need_repeat_grad, "grad_repeat", "samp_aniso_repeat", "true"),
+            ] {
+                if !needed {
+                    continue;
+                }
+                if filterable {
+                    let _ = writeln!(
+                        out,
+                        "fn {name}_in{index}(c: vec3<f32>, ddx: vec2<f32>, ddy: vec2<f32>) -> {ty} {{
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = bitcast<u32>(ctx[{slot}].y);
+    let d = bitcast<u32>(ctx[{slot}].z);
+    let dims = textureDimensions(in{index});
+    if (dims.x == w && dims.y == h) {{
+        let inv = vec2<f32>(1.0 / f32(w), 1.0 / f32(h));
+        let cc = select(c.xy, vec2<f32>(0.0, 0.0), is_nan2(c.xy));
+        let gdx = clean_grad(ddx) * inv;
+        let gdy = clean_grad(ddy) * inv;
+        let az = filter_axis(c.z, d, false);
+        let a = textureSampleGrad(in{index}, {samp}, cc * inv, i32(az.lo), gdx, gdy){swizzle};
+        if (az.lo == az.hi || az.f <= 0.0) {{ return a; }}
+        let b = textureSampleGrad(in{index}, {samp}, cc * inv, i32(az.hi), gdx, gdy){swizzle};
+        return mix(a, b, az.f);
+    }}
+    return soft_aniso_in{index}(c, ddx, ddy, {repeat_lit});
+}}"
+                    );
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "fn {name}_in{index}(c: vec3<f32>, ddx: vec2<f32>, ddy: vec2<f32>) -> {ty} {{
+    return soft_aniso_in{index}(c, ddx, ddy, {repeat_lit});
+}}"
+                    );
+                }
+            }
+        }
+        Shape::Volume => {
+            // True 3D `texture_3d<f32>` mipmap chain (`lod` only; `grad` volumes are always `D2Array`).
+            if !filterable {
+                let _ = writeln!(
+                    out,
+                    "fn soft_level_in{index}(uv: vec3<f32>, level: u32, repeat_xy: bool) -> {ty} {{
+    let w0 = bitcast<u32>(ctx[{slot}].x);
+    let h0 = bitcast<u32>(ctx[{slot}].y);
+    let d0 = bitcast<u32>(ctx[{slot}].z);
+    let mw = max(w0 >> level, 1u);
+    let mh = max(h0 >> level, 1u);
+    let md = max(d0 >> level, 1u);
+    let ax = filter_axis(uv.x * f32(mw), mw, repeat_xy);
+    let ay = filter_axis(uv.y * f32(mh), mh, repeat_xy);
+    let az = filter_axis(uv.z * f32(md), md, false);
+    let lv = i32(level);
+    let n00 = textureLoad(in{index}, vec3<i32>(i32(ax.lo), i32(ay.lo), i32(az.lo)), lv){swizzle};
+    let n10 = textureLoad(in{index}, vec3<i32>(i32(ax.hi), i32(ay.lo), i32(az.lo)), lv){swizzle};
+    let n01 = textureLoad(in{index}, vec3<i32>(i32(ax.lo), i32(ay.hi), i32(az.lo)), lv){swizzle};
+    let n11 = textureLoad(in{index}, vec3<i32>(i32(ax.hi), i32(ay.hi), i32(az.lo)), lv){swizzle};
+    let near = mix(mix(n00, n10, ax.f), mix(n01, n11, ax.f), ay.f);
+    if (az.lo == az.hi || az.f <= 0.0) {{ return near; }}
+    let f00 = textureLoad(in{index}, vec3<i32>(i32(ax.lo), i32(ay.lo), i32(az.hi)), lv){swizzle};
+    let f10 = textureLoad(in{index}, vec3<i32>(i32(ax.hi), i32(ay.lo), i32(az.hi)), lv){swizzle};
+    let f01 = textureLoad(in{index}, vec3<i32>(i32(ax.lo), i32(ay.hi), i32(az.hi)), lv){swizzle};
+    let f11 = textureLoad(in{index}, vec3<i32>(i32(ax.hi), i32(ay.hi), i32(az.hi)), lv){swizzle};
+    let far = mix(mix(f00, f10, ax.f), mix(f01, f11, ax.f), ay.f);
+    return mix(near, far, az.f);
+}}
+fn soft_lod_in{index}(c: vec3<f32>, lod: f32, repeat_xy: bool) -> {ty} {{
+    let w0 = bitcast<u32>(ctx[{slot}].x);
+    let h0 = bitcast<u32>(ctx[{slot}].y);
+    let d0 = bitcast<u32>(ctx[{slot}].z);
+    let max_l = textureNumLevels(in{index}) - 1u;
+    let clod = clamp(select(lod, 0.0, is_nan(lod)), 0.0, f32(max_l));
+    let l0 = min(u32(floor(clod)), max_l);
+    let l1 = min(l0 + 1u, max_l);
+    let frac = clod - f32(l0);
+    let cc = select(c, vec3<f32>(0.0, 0.0, 0.0), is_nan3(c));
+    let uv = cc / vec3<f32>(f32(w0), f32(h0), f32(d0));
+    let a = soft_level_in{index}(uv, l0, repeat_xy);
+    if (l0 == l1 || frac <= 0.0) {{ return a; }}
+    return mix(a, soft_level_in{index}(uv, l1, repeat_xy), frac);
+}}"
+                );
+            }
+            for (needed, name, samp, repeat_lit) in [
+                (need_clamp_lod, "lod_clamp", "samp_clamp", "false"),
+                (need_repeat_lod, "lod_repeat", "samp_repeat", "true"),
+            ] {
+                if !needed {
+                    continue;
+                }
+                if filterable {
+                    let _ = writeln!(
+                        out,
+                        "fn {name}_in{index}(c: vec3<f32>, lod: f32) -> {ty} {{
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = bitcast<u32>(ctx[{slot}].y);
+    let d = bitcast<u32>(ctx[{slot}].z);
+    let cc = select(c, vec3<f32>(0.0, 0.0, 0.0), is_nan3(c));
+    let uv = cc / vec3<f32>(f32(w), f32(h), f32(d));
+    let clod = select(max(lod, 0.0), 0.0, is_nan(lod));
+    return textureSampleLevel(in{index}, {samp}, uv, clod){swizzle};
+}}"
+                    );
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "fn {name}_in{index}(c: vec3<f32>, lod: f32) -> {ty} {{
+    return soft_lod_in{index}(c, lod, {repeat_lit});
+}}"
+                    );
+                }
+            }
+        }
+        Shape::Rows => unreachable!("rows inputs never use mipmaps"),
     }
 }

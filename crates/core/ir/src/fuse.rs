@@ -71,7 +71,12 @@ fn use_in(instructions: &[Instruction], input: u32, use_: &mut InputUse) {
                 input: i, at: None, ..
             } if *i == input => use_.sampled = true,
             Op::Count(i) | Op::Size(i) if *i == input => use_.counted = true,
-            Op::At(i, _) | Op::AtLinear(i, _) | Op::Part { input: i, .. } if *i == input => {
+            Op::At(i, _)
+            | Op::AtLinear(i, _)
+            | Op::AtFiltered { input: i, .. }
+            | Op::Part { input: i, .. }
+                if *i == input =>
+            {
                 use_.addressed = true
             }
             op => {
@@ -203,6 +208,7 @@ impl<'a> Reads<'a> {
             match op {
                 Op::Sample(i)
                 | Op::AtLinear(i, _)
+                | Op::AtFiltered { input: i, .. }
                 | Op::Part {
                     input: i, at: None, ..
                 } if *i == self.input => self.refused = true,
@@ -406,6 +412,19 @@ fn shift_inputs(op: &Op, index: impl Fn(u32) -> u32) -> Op {
         Op::Sample(i) => Op::Sample(index(*i)),
         Op::At(i, c) => Op::At(index(*i), *c),
         Op::AtLinear(i, c) => Op::AtLinear(index(*i), *c),
+        Op::AtFiltered {
+            input: i,
+            at,
+            repeat,
+            lod,
+            grad,
+        } => Op::AtFiltered {
+            input: index(*i),
+            at: *at,
+            repeat: *repeat,
+            lod: *lod,
+            grad: *grad,
+        },
         Op::Count(i) => Op::Count(index(*i)),
         Op::Size(i) => Op::Size(index(*i)),
         Op::Part { input: i, at, path } => Op::Part {
@@ -1180,6 +1199,16 @@ impl<'a> Renumber<'a> {
                 }
             }
             Op::At(_, coord) | Op::AtLinear(_, coord) => *coord = self.map(*coord),
+            Op::AtFiltered { at, lod, grad, .. } => {
+                *at = self.map(*at);
+                if let Some(lod) = lod {
+                    *lod = self.map(*lod);
+                }
+                if let Some((dx, dy)) = grad {
+                    *dx = self.map(*dx);
+                    *dy = self.map(*dy);
+                }
+            }
             Op::Part { at, path, .. } => {
                 if let Some(at) = at {
                     *at = self.map(*at);
