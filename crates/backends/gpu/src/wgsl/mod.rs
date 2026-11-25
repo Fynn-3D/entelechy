@@ -245,9 +245,176 @@ pub fn bindings(module: &Module) -> (usize, usize) {
     (2, storage)
 }
 
-fn packing_candidates(module: &Module) -> (Vec<usize>, usize) {
+/// Read-only `Grid` and `Volume` inputs eligible for hardware 2D/3D texture
+/// mirroring (`texture_2d<f32>` / `texture_3d<f32>`), capped at `max_textures`.
+///
+/// Selects read-only non-memory `Float`/`Vec2`/`Vec4` inputs stored in a
+/// hardware-native float/normalized encoding (`Word`, `F16`, `Unorm8`, `Snorm8`)
+/// that are never read via `Op::Part`, prioritizing workloads where hardware
+/// Morton tiling and 1-cycle unpack outweigh buffer-to-texture mirroring:
+/// - Any 3D `Volume` read via `Op::AtLinear` or `Op::At`.
+/// - Any narrow-encoded (`F16`, `Unorm8`, `Snorm8`) 2D `Grid` read via
+///   `Op::AtLinear` or inside a loop via `Op::At`.
+/// - Any wide (`Word`) 2D `Grid` sampled via `Op::AtLinear` inside a loop
+///   (including through helper calls).
+pub fn textured_inputs(module: &Module, max_textures: usize) -> Vec<usize> {
+    textured_inputs_for_limits(module, max_textures, usize::MAX, usize::MAX)
+}
+
+/// Like [`textured_inputs`], also promoting non-loop wide 2D `Grid` `AtLinear`
+/// inputs into free texture slots whenever doing so keeps storage bindings
+/// within `(max_buffers, max_storage)` without packing copies.
+pub fn textured_inputs_for_limits(
+    module: &Module,
+    max_textures: usize,
+    max_buffers: usize,
+    max_storage: usize,
+) -> Vec<usize> {
+    if max_textures == 0 || !matches!(module.manifest.mode, Mode::Map | Mode::Group { .. }) {
+        return Vec::new();
+    }
+    #[derive(Default)]
+    struct FuncReads {
+        linear: std::collections::BTreeSet<usize>,
+        at: std::collections::BTreeSet<usize>,
+        loop_linear: std::collections::BTreeSet<usize>,
+        loop_at: std::collections::BTreeSet<usize>,
+        part: std::collections::BTreeSet<usize>,
+        calls: std::collections::BTreeSet<usize>,
+        loop_calls: std::collections::BTreeSet<usize>,
+    }
+    fn walk(body: &[Instruction], in_loop: bool, out: &mut FuncReads) {
+        for instr in body {
+            match &instr.op {
+                Op::AtLinear(idx, _) => {
+                    out.linear.insert(*idx as usize);
+                    if in_loop {
+                        out.loop_linear.insert(*idx as usize);
+                    }
+                }
+                Op::At(idx, _) => {
+                    out.at.insert(*idx as usize);
+                    if in_loop {
+                        out.loop_at.insert(*idx as usize);
+                    }
+                }
+                Op::Part { input, .. } => {
+                    out.part.insert(*input as usize);
+                }
+                Op::Call(callee, _) => {
+                    out.calls.insert(*callee as usize);
+                    if in_loop {
+                        out.loop_calls.insert(*callee as usize);
+                    }
+                }
+                _ => {}
+            }
+            let child_loop = in_loop || matches!(instr.op, Op::Loop { .. } | Op::Each { .. });
+            for block in instr.op.blocks() {
+                walk(&block.body, child_loop, out);
+            }
+        }
+    }
+    let fn_count = module.functions.len();
+    let mut funcs: Vec<FuncReads> = (0..=fn_count).map(|_| FuncReads::default()).collect();
+    for (idx, func) in module.functions.iter().enumerate() {
+        walk(&func.body, false, &mut funcs[idx]);
+    }
+    walk(&module.entry.body, false, &mut funcs[fn_count]);
+
+    // Propagate loop context through helper calls.
+    let mut in_loop_fn = vec![false; fn_count];
+    let mut stack: Vec<usize> = funcs
+        .iter()
+        .flat_map(|f| f.loop_calls.iter().copied())
+        .filter(|&c| c < fn_count)
+        .collect();
+    while let Some(c) = stack.pop() {
+        if !in_loop_fn[c] {
+            in_loop_fn[c] = true;
+            for &next in &funcs[c].calls {
+                if next < fn_count && !in_loop_fn[next] {
+                    stack.push(next);
+                }
+            }
+        }
+    }
+
+    let mut linear_used: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    let mut at_used: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    let mut loop_linear: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    let mut loop_at: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    let mut part_used: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    for (idx, f) in funcs.iter().enumerate() {
+        linear_used.extend(f.linear.iter().copied());
+        at_used.extend(f.at.iter().copied());
+        loop_linear.extend(f.loop_linear.iter().copied());
+        loop_at.extend(f.loop_at.iter().copied());
+        part_used.extend(f.part.iter().copied());
+        if idx < fn_count && in_loop_fn[idx] {
+            loop_linear.extend(f.linear.iter().copied());
+            loop_at.extend(f.at.iter().copied());
+        }
+    }
+
+    let mut volumes = Vec::new();
+    let mut primary_grids = Vec::new();
+    let mut spill_grids = Vec::new();
+    for (index, port) in module.manifest.inputs.iter().enumerate() {
+        if module.manifest.memories.contains(&port.name) || part_used.contains(&index) {
+            continue;
+        }
+        if !matches!(port.element(), Type::Float | Type::Vec2 | Type::Vec4) {
+            continue;
+        }
+        let enc = input_encoding(module, index);
+        if !matches!(
+            enc,
+            Encoding::Word | Encoding::F16 | Encoding::Unorm8 | Encoding::Snorm8
+        ) {
+            continue;
+        }
+        let narrow = enc != Encoding::Word;
+        match port.shape() {
+            Shape::Volume if linear_used.contains(&index) || at_used.contains(&index) => {
+                volumes.push(index);
+            }
+            Shape::Grid
+                if (narrow && (linear_used.contains(&index) || loop_at.contains(&index)))
+                    || loop_linear.contains(&index) =>
+            {
+                primary_grids.push(index);
+            }
+            Shape::Grid if linear_used.contains(&index) => {
+                spill_grids.push(index);
+            }
+            _ => {}
+        }
+    }
+    let mut chosen: Vec<usize> = volumes
+        .into_iter()
+        .chain(primary_grids)
+        .take(max_textures)
+        .collect();
+    if chosen.len() < max_textures && !spill_grids.is_empty() {
+        let (uniforms, total_storage) = bindings(module);
+        let remaining_storage = total_storage.saturating_sub(chosen.len());
+        let over = (uniforms + remaining_storage)
+            .saturating_sub(max_buffers)
+            .max(remaining_storage.saturating_sub(max_storage));
+        if over > 0 {
+            let room = (max_textures - chosen.len()).min(over);
+            chosen.extend(spill_grids.into_iter().take(room));
+        }
+    }
+    chosen.sort_unstable();
+    chosen
+}
+
+fn packing_candidates(module: &Module, textured: &[usize]) -> (Vec<usize>, usize) {
     let inputs = &module.manifest.inputs;
-    let read_only = |k: &usize| !module.manifest.memories.contains(&inputs[*k].name);
+    let read_only =
+        |k: &usize| !module.manifest.memories.contains(&inputs[*k].name) && !textured.contains(k);
     let rows = |k: &usize| inputs[*k].shape() == Shape::Rows;
     let rows_cands: Vec<usize> = (0..inputs.len())
         .rev()
@@ -280,7 +447,7 @@ pub fn packed_inputs(module: &Module, most: usize, most_storage: usize) -> Vec<u
     if over == 0 {
         return Vec::new();
     }
-    let (candidates, _) = packing_candidates(module);
+    let (candidates, _) = packing_candidates(module, &[]);
     if candidates.len() < over + 1 {
         return Vec::new();
     }
@@ -293,7 +460,19 @@ pub fn packed_inputs(module: &Module, most: usize, most_storage: usize) -> Vec<u
 /// fits within `(most, most_storage)` while spreading packed grids and volumes
 /// across multiple buffers to stay under WebGPU's `128 MiB` per-binding limit.
 pub fn packed_input_groups(module: &Module, most: usize, most_storage: usize) -> Vec<Vec<usize>> {
-    let (uniforms, storage) = bindings(module);
+    packed_input_groups_with_textures(module, most, most_storage, &[])
+}
+
+/// Like [`packed_input_groups`], excluding inputs bound as hardware textures
+/// (`textured`) from storage-buffer counts and pack candidates.
+pub fn packed_input_groups_with_textures(
+    module: &Module,
+    most: usize,
+    most_storage: usize,
+    textured: &[usize],
+) -> Vec<Vec<usize>> {
+    let (uniforms, total_storage) = bindings(module);
+    let storage = total_storage.saturating_sub(textured.len());
     let over = (uniforms + storage)
         .saturating_sub(most)
         .max(storage.saturating_sub(most_storage));
@@ -301,11 +480,12 @@ pub fn packed_input_groups(module: &Module, most: usize, most_storage: usize) ->
         return Vec::new();
     }
     let inputs = &module.manifest.inputs;
-    let (candidates, rows_count) = packing_candidates(module);
+    let (candidates, rows_count) = packing_candidates(module, textured);
     if candidates.len() < over + 1 {
         return Vec::new();
     }
-    let fixed_storage = storage.saturating_sub(inputs.len());
+    let buffer_inputs = inputs.len().saturating_sub(textured.len());
+    let fixed_storage = storage.saturating_sub(buffer_inputs);
     let avail_slots = most_storage
         .saturating_sub(fixed_storage)
         .min(most.saturating_sub(uniforms + fixed_storage));

@@ -2,6 +2,7 @@
 
 use super::*;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_function(
     out: &mut String,
     module: &Module,
@@ -9,6 +10,7 @@ pub(crate) fn emit_function(
     name: &str,
     entry: bool,
     packed: &[Vec<usize>],
+    textured: &[usize],
     longs: Longs,
 ) {
     let args = if entry && module.manifest.mode == Mode::Scan {
@@ -46,6 +48,7 @@ pub(crate) fn emit_function(
         module,
         function,
         packed,
+        textured,
         loops: Vec::new(),
         pairs: longs == Longs::Pairs,
         group_look: false,
@@ -117,6 +120,8 @@ pub(crate) struct Emitter<'a> {
     function: &'a Function,
     /// The input groups read from packed storage buffers.
     packed: &'a [Vec<usize>],
+    /// Inputs bound as hardware 2D/3D textures.
+    textured: &'a [usize],
     /// The enclosing loops and eaches, innermost last: each its id and
     /// whether it carries a value (an each does not).
     loops: Vec<(ValueId, bool)>,
@@ -744,9 +749,19 @@ impl Emitter<'_> {
                     Shape::Grid => "coord.xy",
                     Shape::Volume => "coord",
                 };
-                format!("load_in{input}(index_in{input}({own}))")
+                if self.textured.contains(&(*input as usize)) {
+                    format!("at_in{input}({own})")
+                } else {
+                    format!("load_in{input}(index_in{input}({own}))")
+                }
             }
-            Op::At(input, index) => format!("load_in{input}(index_in{input}({}))", v(index)),
+            Op::At(input, index) => {
+                if self.textured.contains(&(*input as usize)) {
+                    format!("at_in{input}({})", v(index))
+                } else {
+                    format!("load_in{input}(index_in{input}({}))", v(index))
+                }
+            }
             Op::Part { input, at, path } => {
                 // Only the part's words, at the path's offset, clamped
                 // inside the element.

@@ -86,6 +86,7 @@ pub(crate) struct BatchHub {
     spent: Spent,
     spare: Spare,
     targets: SpareTextures,
+    mirrors: crate::texture::SpareMirrors,
     page_queue: PageQueue,
     pending_checks: Arc<Mutex<Vec<Box<dyn Check>>>>,
     uniform_align: usize,
@@ -101,6 +102,7 @@ impl BatchHub {
         spent: Spent,
         spare: Spare,
         targets: SpareTextures,
+        mirrors: crate::texture::SpareMirrors,
         page_queue: PageQueue,
         pending_checks: Arc<Mutex<Vec<Box<dyn Check>>>>,
     ) -> Self {
@@ -112,6 +114,7 @@ impl BatchHub {
             spent,
             spare,
             targets,
+            mirrors,
             page_queue,
             pending_checks,
             uniform_align,
@@ -174,27 +177,30 @@ impl BatchHub {
         })
     }
 
-    /// Allocates two aligned uniform slices (`context` and `params`) atomically
-    /// inside the same uniform slab so neither can be split across a flush.
-    pub(crate) fn alloc_uniform_pair(
+    /// Allocates all uniform slices for one node atomically inside the same
+    /// uniform slab so no slice can be split across a flush.
+    pub(crate) fn alloc_uniforms(
         &self,
-        first: &[u8],
-        second: &[u8],
-    ) -> Result<(UniformSlice, UniformSlice), ExecutionError> {
-        let pad_a = first.len().max(16).div_ceil(16) * 16;
-        let pad_b = second.len().max(16).div_ceil(16) * 16;
+        slices: &[&[u8]],
+    ) -> Result<Vec<UniformSlice>, ExecutionError> {
         let align = self.uniform_align;
+        let padded_sizes: Vec<usize> = slices
+            .iter()
+            .map(|b| b.len().max(16).div_ceil(16) * 16)
+            .collect();
         let needs_flush = {
             let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
             if state.encoder.is_none() {
                 false
             } else {
-                let off_a = state.uniform_bytes.len().div_ceil(align) * align;
-                let off_b = (off_a + pad_a).div_ceil(align) * align;
+                let mut off = state.uniform_bytes.len();
+                for &pad in &padded_sizes {
+                    off = off.div_ceil(align) * align + pad;
+                }
                 state
                     .uniform_slab
                     .as_ref()
-                    .is_some_and(|slab| (off_b + pad_b) as u64 > slab.size())
+                    .is_some_and(|slab| off as u64 > slab.size())
             }
         };
         if needs_flush {
@@ -204,30 +210,33 @@ impl BatchHub {
         if state.encoder.is_none() {
             state.uniform_bytes.clear();
         }
-        let off_a = state.uniform_bytes.len().div_ceil(align) * align;
-        let off_b = (off_a + pad_a).div_ceil(align) * align;
-        let needed = (off_b + pad_b) as u64;
-        self.ensure_uniform_slab(&mut state, needed);
-        state.uniform_bytes.resize(off_b + pad_b, 0);
-        state.uniform_bytes[off_a..off_a + first.len()].copy_from_slice(first);
-        state.uniform_bytes[off_b..off_b + second.len()].copy_from_slice(second);
+        let mut offsets = Vec::with_capacity(slices.len());
+        let mut cursor = state.uniform_bytes.len();
+        for &pad in &padded_sizes {
+            cursor = cursor.div_ceil(align) * align;
+            offsets.push(cursor);
+            cursor += pad;
+        }
+        self.ensure_uniform_slab(&mut state, cursor as u64);
+        state.uniform_bytes.resize(cursor, 0);
+        for ((&off, &bytes), &pad) in offsets.iter().zip(slices).zip(&padded_sizes) {
+            state.uniform_bytes[off..off + bytes.len()].copy_from_slice(bytes);
+            let _ = pad;
+        }
         let buffer = state
             .uniform_slab
             .as_ref()
             .expect("uniform slab initialized")
             .clone();
-        Ok((
-            UniformSlice {
+        Ok(offsets
+            .into_iter()
+            .zip(padded_sizes)
+            .map(|(off, pad)| UniformSlice {
                 buffer: buffer.clone(),
-                offset: off_a as u64,
-                size: pad_a as u64,
-            },
-            UniformSlice {
-                buffer,
-                offset: off_b as u64,
-                size: pad_b as u64,
-            },
-        ))
+                offset: off as u64,
+                size: pad as u64,
+            })
+            .collect())
     }
 
     fn ensure_uniform_slab(&self, state: &mut BatchState, needed: u64) {
@@ -428,6 +437,7 @@ impl BatchHub {
         let submission = self.queue.submit(Some(encoder.finish()));
         self.spare.bury();
         self.targets.bury();
+        self.mirrors.bury();
         for buffer in keep_buffers {
             self.spare.keep(buffer, None);
         }

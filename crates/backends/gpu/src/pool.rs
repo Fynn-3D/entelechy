@@ -4,7 +4,8 @@
 use super::*;
 use std::ops::Range;
 
-/// A resident image: its pixels as a storage buffer of `vec4<f32>`.
+/// A resident image: its pixels as a storage buffer of `vec4<f32>`, with an
+/// optional lazily-populated 2D/3D hardware texture mirror for TMU-cached reads.
 pub(crate) struct DeviceImage {
     pub(crate) buffer: wgpu::Buffer,
     /// Where the buffer goes when its Field is released, for the next output
@@ -13,6 +14,19 @@ pub(crate) struct DeviceImage {
     /// The words the buffer holds when it was uploaded from the Host,
     /// which it is kept marked with when its Field is released.
     pub(crate) holds: Option<Held>,
+    /// Lazily populated hardware 2D/3D texture mirror (`TYPED-FIELD-ARCHITECTURE.md` §2).
+    pub(crate) mirror: Mutex<Option<crate::texture::TextureMirror>>,
+}
+
+impl DeviceImage {
+    pub(crate) fn new(buffer: wgpu::Buffer, spare: Option<Spare>, holds: Option<Held>) -> Self {
+        Self {
+            buffer,
+            spare,
+            holds,
+            mirror: Mutex::new(None),
+        }
+    }
 }
 
 /// A buffer on the pile, what it holds where that is known, and the

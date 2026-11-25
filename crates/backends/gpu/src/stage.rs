@@ -90,6 +90,10 @@ pub(crate) struct Staged {
     /// What the passes bind for the inputs, by binding: the inputs' own
     /// buffers, and the pack where some are packed.
     pub(crate) bound_inputs: Vec<(u32, wgpu::Buffer)>,
+    /// Hardware 2D/3D texture views bound for textured inputs.
+    pub(crate) bound_textures: Vec<(u32, wgpu::TextureView)>,
+    /// Scratch buffers (e.g. 256-aligned row-padding staging) recycled after submit.
+    pub(crate) temp_buffers: Vec<wgpu::Buffer>,
     /// A memory's copy, written by the steps, to adopt as that output.
     pub(crate) memory_outputs: Vec<(usize, wgpu::Buffer, entelechy_abi::Domain)>,
     pub(crate) output_buffer: wgpu::Buffer,
@@ -160,11 +164,7 @@ pub(crate) fn adopt_outputs(
     spare: Option<Spare>,
 ) -> Result<Vec<Handle>, ExecutionError> {
     let output_port = &module.manifest.outputs[0];
-    let device = Box::new(DeviceImage {
-        buffer: final_buffer,
-        spare: spare.clone(),
-        holds: None,
-    });
+    let device = Box::new(DeviceImage::new(final_buffer, spare.clone(), None));
     let output = scope.adopt_resident(output_port.ty.schema.clone(), output_domain, device)?;
     let mut outputs = vec![output];
     // A map's further outputs over the same domain, then the memories,
@@ -187,11 +187,7 @@ pub(crate) fn adopt_outputs(
         let adopted = scope.adopt_resident(
             schema,
             extent,
-            Box::new(DeviceImage {
-                buffer,
-                spare: spare.clone(),
-                holds: None,
-            }),
+            Box::new(DeviceImage::new(buffer, spare.clone(), None)),
         );
         match adopted {
             Ok(handle) => outputs.push(handle),
@@ -261,11 +257,11 @@ impl WgpuBackend {
         };
         scope.make_resident(
             handle,
-            Box::new(DeviceImage {
-                buffer: buffer.clone(),
-                spare: Some(self.spare.clone()),
-                holds: Some(holds),
-            }),
+            Box::new(DeviceImage::new(
+                buffer.clone(),
+                Some(self.spare.clone()),
+                Some(holds),
+            )),
         )?;
         Ok(buffer)
     }
@@ -428,14 +424,47 @@ impl WgpuBackend {
                 input_buffers.push(bound);
             }
         }
-        // What the pass binds for its inputs: each its own, except packed ones,
-        // copied into their assigned pack buffers before it runs, each at the
-        // word offset the parameters carry after their own.
+        // What the pass binds for its inputs: each its own, except packed ones
+        // (copied into pack buffers) and textured ones (mirrored to hardware
+        // 2D/3D textures).
         let mut bound_inputs: Vec<(u32, wgpu::Buffer)> =
             Vec::with_capacity(input_buffers.len() + pipeline.packed.len());
         for (index, buffer) in input_buffers.iter().enumerate() {
-            if !pipeline.packed.iter().any(|group| group.contains(&index)) {
+            if !pipeline.packed.iter().any(|group| group.contains(&index))
+                && !pipeline.textured.contains(&index)
+            {
                 bound_inputs.push((wgsl::INPUT_BINDING + index as u32, buffer.clone()));
+            }
+        }
+        let mut bound_textures: Vec<(u32, wgpu::TextureView)> =
+            Vec::with_capacity(pipeline.textured.len());
+        let mut mirror_plans: Vec<texture::MirrorPlan> = Vec::new();
+        let mut planned_views: std::collections::HashMap<Handle, wgpu::TextureView> =
+            std::collections::HashMap::new();
+        for &index in &pipeline.textured {
+            let handle = invocation.inputs[index];
+            let binding = wgsl::INPUT_BINDING + index as u32;
+            if let Some(view) = planned_views.get(&handle) {
+                bound_textures.push((binding, view.clone()));
+                continue;
+            }
+            let image = scope
+                .resident(handle)?
+                .and_then(|dev| dev.downcast_ref::<DeviceImage>())
+                .ok_or_else(|| {
+                    ExecutionError::Device("textured input is not resident on the GPU".to_owned())
+                })?;
+            let (view, plan) = self.plan_texture_mirror(
+                image,
+                handle,
+                &module.manifest.inputs[index],
+                input_extents[index],
+                index,
+            )?;
+            planned_views.insert(handle, view.clone());
+            bound_textures.push((binding, view));
+            if let Some(plan) = plan {
+                mirror_plans.push(plan);
             }
         }
         type PackSliceCopy = (wgpu::Buffer, u64, u64);
@@ -484,7 +513,8 @@ impl WgpuBackend {
         // Context head (see `wgsl::CONTEXT_HEAD`), then one [w, h, d, 0] per
         // input; extents and the fold are the bits of `u32`s. Built after
         // `bind_input` so `write_words` is done with `self.staging`.
-        let (context_slice, params_slice) = {
+        let mut temp_buffers: Vec<wgpu::Buffer> = Vec::new();
+        let (context_slice, params_slice, pad_slices) = {
             let mut scratch = self
                 .staging
                 .lock()
@@ -554,15 +584,72 @@ impl WgpuBackend {
                 params.resize(params.len().div_ceil(16) * 16, 0);
             }
             if batched {
-                self.batch.alloc_uniform_pair(context, params)?
+                let mut all_slices: Vec<&[u8]> = Vec::with_capacity(2 + mirror_plans.len());
+                all_slices.push(context.as_slice());
+                all_slices.push(params.as_slice());
+                for plan in &mirror_plans {
+                    if let Some(pad) = &plan.pad_params {
+                        all_slices.push(pad.as_slice());
+                    }
+                }
+                let mut allocated = self.batch.alloc_uniforms(&all_slices)?;
+                let mut iter = allocated.drain(..);
+                let ctx_slice = iter.next().expect("context slice");
+                let par_slice = iter.next().expect("params slice");
+                let pad_slices: Vec<crate::batch::UniformSlice> = iter.collect();
+                (ctx_slice, par_slice, pad_slices)
             } else {
                 let (c, p) = self.uniform_buffers(context, params);
+                let mut pad_slices = Vec::new();
+                for plan in &mirror_plans {
+                    if let Some(pad) = &plan.pad_params {
+                        let buf = self.take_uniform(pad);
+                        temp_buffers.push(buf.clone());
+                        pad_slices.push(crate::batch::UniformSlice::entire(buf));
+                    }
+                }
                 (
                     crate::batch::UniformSlice::entire(c),
                     crate::batch::UniformSlice::entire(p),
+                    pad_slices,
                 )
             }
         };
+        let mut pad_iter = pad_slices.into_iter();
+        let mut pending_mirrors: Vec<texture::PendingMirrorCopy> =
+            Vec::with_capacity(mirror_plans.len());
+        let mut commit_mirrors: Vec<(Handle, texture::TextureMirror)> =
+            Vec::with_capacity(mirror_plans.len());
+        for plan in mirror_plans {
+            let padded = if plan.pad_params.is_some() {
+                let pad_slice = pad_iter.next().expect("pad uniform slice");
+                let byte_size = (u64::from(plan.padded_row_bytes)
+                    * u64::from(plan.height)
+                    * u64::from(plan.depth))
+                .max(16)
+                .div_ceil(16)
+                    * 16;
+                let scratch_buf = self.spare.take(
+                    &self.device,
+                    byte_size,
+                    wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                );
+                temp_buffers.push(scratch_buf.clone());
+                Some((scratch_buf, pad_slice, plan.padded_row_bytes, plan.fold_x))
+            } else {
+                None
+            };
+            pending_mirrors.push(texture::PendingMirrorCopy {
+                src: input_buffers[plan.input_index].clone(),
+                dst: plan.mirror.texture.clone(),
+                width: plan.width,
+                height: plan.height,
+                depth: plan.depth,
+                row_bytes: plan.row_bytes,
+                padded,
+            });
+            commit_mirrors.push((plan.handle, plan.mirror));
+        }
         let context_buffer = context_slice.buffer.clone();
         let params_buffer = params_slice.buffer.clone();
         let output_schema = &module.manifest.outputs[0].ty.schema;
@@ -603,6 +690,12 @@ impl WgpuBackend {
             entries.push(wgpu::BindGroupEntry {
                 binding: *binding,
                 resource: buffer.as_entire_binding(),
+            });
+        }
+        for (binding, view) in &bound_textures {
+            entries.push(wgpu::BindGroupEntry {
+                binding: *binding,
+                resource: wgpu::BindingResource::TextureView(view),
             });
         }
         // The failure word and its readback, from the pile, cleared below
@@ -684,6 +777,16 @@ impl WgpuBackend {
                 if *size > 0 {
                     encoder.copy_buffer_to_buffer(from, 0, pack, *at, *size);
                 }
+            }
+        }
+        for copy in &pending_mirrors {
+            self.encode_mirror_copy(&mut encoder, copy)?;
+        }
+        for (handle, mirror) in commit_mirrors {
+            if let Ok(Some(dev)) = scope.resident(handle)
+                && let Some(image) = dev.downcast_ref::<DeviceImage>()
+            {
+                *image.mirror.lock().unwrap_or_else(|p| p.into_inner()) = Some(mirror);
             }
         }
         if let (Some((base, count, buffer)), Some(scatter)) = (&target, &pipeline.scatter) {
@@ -804,6 +907,8 @@ impl WgpuBackend {
             params_slice,
             input_buffers,
             bound_inputs,
+            bound_textures,
+            temp_buffers,
             memory_outputs,
             output_buffer,
             further_outputs,

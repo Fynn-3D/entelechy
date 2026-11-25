@@ -42,9 +42,21 @@ pub fn emit_packed_groups_half(
     longs: Longs,
     half: Half,
 ) -> String {
+    emit_full(module, packs, &[], longs, half)
+}
+
+/// Emits the module's compute shader with packed input groups, hardware
+/// `textured` inputs, `longs` mode, and scatter `half`.
+pub fn emit_full(
+    module: &Module,
+    packs: &[Vec<usize>],
+    textured: &[usize],
+    longs: Longs,
+    half: Half,
+) -> String {
     let manifest = &module.manifest;
     let mut out = String::new();
-    emit_preamble(&mut out, module, true, packs, longs);
+    emit_preamble(&mut out, module, true, packs, textured, longs);
     // One store per written output; a scatter stores the entry's pairs.
     let scattering = matches!(manifest.mode, Mode::Scatter { .. });
     for (k, port) in manifest
@@ -84,16 +96,30 @@ pub fn emit_packed_groups_half(
             &function_name(index),
             false,
             packs,
+            textured,
             longs,
         );
         out.push('\n');
     }
-    emit_function(&mut out, module, &module.entry, "entry", true, packs, longs);
+    emit_function(
+        &mut out,
+        module,
+        &module.entry,
+        "entry",
+        true,
+        packs,
+        textured,
+        longs,
+    );
     if let Some(merge) = &module.merge {
-        emit_function(&mut out, module, merge, "merge", false, packs, longs);
+        emit_function(
+            &mut out, module, merge, "merge", false, packs, textured, longs,
+        );
     }
     if let Some(init) = &module.init {
-        emit_function(&mut out, module, init, "init", false, packs, longs);
+        emit_function(
+            &mut out, module, init, "init", false, packs, textured, longs,
+        );
         // Ordered work: one invocation walks the rows, carrying the value.
         let _ = writeln!(
             out,

@@ -24,6 +24,9 @@ pub(crate) struct Pipeline<P = Pass> {
     /// there before they run, where binding each would exceed the device's
     /// limit; see [`wgsl::packed_input_groups`].
     pub(crate) packed: Vec<Vec<usize>>,
+    /// The read-only `Grid`/`Volume` input indices bound as hardware 2D/3D
+    /// sampled textures (`texture_2d<f32>` / `texture_3d<f32>`).
+    pub(crate) textured: Vec<usize>,
 }
 
 /// A prefix fold's three passes: a block a walk, the blocks' totals
@@ -341,6 +344,7 @@ impl<P> Pipeline<P> {
             fails: self.fails,
             emits: self.emits,
             packed: self.packed,
+            textured: self.textured,
         })
     }
 }
@@ -421,6 +425,8 @@ pub(crate) struct Lazy {
     module: Validated,
     /// Its input groups packed into storage buffers, known before it is built.
     pub(crate) packed: Vec<Vec<usize>>,
+    /// Its inputs mirrored into hardware 2D/3D textures, known before it is built.
+    pub(crate) textured: Vec<usize>,
     device: wgpu::Device,
     wait: Wait,
     passes: Arc<PassCache>,
@@ -429,6 +435,9 @@ pub(crate) struct Lazy {
     device_lost: Arc<std::sync::atomic::AtomicBool>,
     shaders: Mutex<Option<Pipeline<Shader>>>,
     built: OnceLock<Result<BuiltPipeline, String>>,
+    /// Lazily built storage-buffer fallback used only when a runtime input's
+    /// extent exceeds the device's `max_texture_dimension_2d` / `3d`.
+    untextured: OnceLock<Result<BuiltPipeline, String>>,
 }
 
 impl Lazy {
@@ -527,16 +536,75 @@ impl Lazy {
             .map(|(pipeline, _)| pipeline)
             .map_err(|error| ExecutionError::Device(error.clone()))
     }
+
+    /// Lazily builds the storage-buffer variant (no hardware textures) for the
+    /// rare runtime invocation whose input extent exceeds hardware texture
+    /// dimension limits.
+    pub(crate) fn built_untextured(
+        &self,
+        backend: &WgpuBackend,
+    ) -> Result<&Pipeline, ExecutionError> {
+        self.untextured
+            .get_or_init(|| {
+                let shaders = backend
+                    .shaders_with_textures(&self.module, Vec::new())
+                    .map_err(Unbuilt::said)?;
+                let mut kept = Vec::new();
+                shaders
+                    .made(&mut |shader: Shader| {
+                        shader.built(&self.device, self.wait, &self.passes, &mut kept)
+                    })
+                    .map(|pipeline| (pipeline, kept))
+                    .map_err(|error| crate::told(&self.heard, error.said()))
+            })
+            .as_ref()
+            .map(|(pipeline, _)| pipeline)
+            .map_err(|error| ExecutionError::Device(error.clone()))
+    }
 }
 
-/// The pipelines of a Kernel this device prepared, built now if they are
-/// not yet.
-pub(crate) fn built(prepared: &dyn Prepared) -> Result<&Pipeline, ExecutionError> {
-    prepared
-        .as_any()
-        .downcast_ref::<Lazy>()
-        .ok_or_else(|| ExecutionError::Device("kernel was prepared by a different backend".into()))?
-        .built()
+impl WgpuBackend {
+    /// Returns the built pipeline for `invocation`: the hardware-textured
+    /// pipeline whenever all textured input extents fit the device's 2D/3D
+    /// texture dimension limits, else a lazily compiled storage-buffer fallback.
+    pub(crate) fn built_for<'a>(
+        &self,
+        prepared: &'a dyn Prepared,
+        module: &Validated,
+        invocation: &Invocation,
+        scope: &Scope<'_>,
+    ) -> Result<&'a Pipeline, ExecutionError> {
+        let lazy = prepared.as_any().downcast_ref::<Lazy>().ok_or_else(|| {
+            ExecutionError::Device("kernel was prepared by a different backend".into())
+        })?;
+        if !lazy.textured.is_empty() {
+            let limits = self.device.limits();
+            let mut fits = true;
+            for &index in &lazy.textured {
+                let extent = scope.size(invocation.inputs[index])?;
+                let ok = match module.manifest.inputs[index].shape() {
+                    entelechy_ir::Shape::Grid => {
+                        extent.width() <= limits.max_texture_dimension_2d
+                            && extent.height() <= limits.max_texture_dimension_2d
+                    }
+                    entelechy_ir::Shape::Volume => {
+                        extent.width() <= limits.max_texture_dimension_3d
+                            && extent.height() <= limits.max_texture_dimension_3d
+                            && extent.depth() <= limits.max_texture_dimension_3d
+                    }
+                    entelechy_ir::Shape::Rows => false,
+                };
+                if !ok {
+                    fits = false;
+                    break;
+                }
+            }
+            if !fits {
+                return lazy.built_untextured(self);
+            }
+        }
+        lazy.built()
+    }
 }
 
 impl Prepared for Lazy {
@@ -580,6 +648,22 @@ pub(crate) fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLay
             ty: wgpu::BufferBindingType::Storage { read_only },
             has_dynamic_offset: false,
             min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+pub(crate) fn texture_entry(
+    binding: u32,
+    view_dimension: wgpu::TextureViewDimension,
+) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            view_dimension,
+            multisampled: false,
         },
         count: None,
     }
@@ -635,30 +719,45 @@ impl WgpuBackend {
         }
     }
 
-    /// The input groups `module` packs into storage buffers on this device.
-    pub(crate) fn packing(&self, module: &Validated) -> Vec<Vec<usize>> {
+    /// The read-only `Grid`/`Volume` inputs mirrored as hardware textures on
+    /// this device.
+    pub(crate) fn textured_inputs(&self, module: &Validated) -> Vec<usize> {
         let limits = self.device.limits();
-        wgsl::packed_input_groups(
+        wgsl::textured_inputs_for_limits(
             module,
+            limits.max_sampled_textures_per_shader_stage as usize,
             limits.max_buffers_and_acceleration_structures_per_shader_stage as usize,
             limits.max_storage_buffers_per_shader_stage as usize,
         )
     }
 
+    /// The input groups `module` packs into storage buffers on this device.
+    pub(crate) fn packing(&self, module: &Validated, textured: &[usize]) -> Vec<Vec<usize>> {
+        let limits = self.device.limits();
+        wgsl::packed_input_groups_with_textures(
+            module,
+            limits.max_buffers_and_acceleration_structures_per_shader_stage as usize,
+            limits.max_storage_buffers_per_shader_stage as usize,
+            textured,
+        )
+    }
+
     /// Why `module`'s widest pass binds more buffers than this device does at
     /// once, if it does. Counted: its uniforms (context and parameters) and
-    /// storage (every input, every output it writes, the failure record where
-    /// it can fail, an emitting scatter's target), against the device's
+    /// storage (every buffer input, every output it writes, the failure record
+    /// where it can fail, an emitting scatter's target), against the device's
     /// storage, uniform and total buffer limits. Such a module runs on the
     /// ordered backend.
     pub(crate) fn wider_than_device(&self, module: &Validated) -> Option<String> {
-        let (uniforms, unpacked) = wgsl::bindings(module);
+        let (uniforms, unpacked_total) = wgsl::bindings(module);
+        let textured = self.textured_inputs(module);
+        let unpacked = unpacked_total.saturating_sub(textured.len());
         let inputs = module.manifest.inputs.len();
         let written = wgsl::written_outputs(module);
         let failure = usize::from(wgsl::can_fail(module));
         let emitting = usize::from(!wgsl::emitted_pairs(module).is_empty())
             * (1 + usize::from(wgsl::highs_beside(module)));
-        let groups = self.packing(module);
+        let groups = self.packing(module, &textured);
         let packed_count: usize = groups.iter().map(Vec::len).sum();
         let storage = unpacked - packed_count + groups.len();
         let limits = self.device.limits();
@@ -759,6 +858,7 @@ impl WgpuBackend {
             id: module.manifest.id.to_string(),
             module: module.clone(),
             packed: shaders.packed.clone(),
+            textured: shaders.textured.clone(),
             device: self.device.clone(),
             wait: self.wait,
             passes: Arc::clone(&self.passes),
@@ -767,11 +867,22 @@ impl WgpuBackend {
             device_lost: Arc::clone(&self.device_lost),
             shaders: Mutex::new(Some(shaders)),
             built: OnceLock::new(),
+            untextured: OnceLock::new(),
         })
     }
 
     /// `module`'s passes, validated.
     fn shaders(&self, module: &Validated) -> Result<Pipeline<Shader>, Unbuilt> {
+        let textured = self.textured_inputs(module);
+        self.shaders_with_textures(module, textured)
+    }
+
+    /// `module`'s passes, validated with the given `textured` input indices.
+    pub(crate) fn shaders_with_textures(
+        &self,
+        module: &Validated,
+        textured: Vec<usize>,
+    ) -> Result<Pipeline<Shader>, Unbuilt> {
         if let Some(reason) = self.refusal(module) {
             return Err((format!(
                 "`{}`: {reason}; a session with an ordered backend runs it there",
@@ -818,10 +929,16 @@ impl WgpuBackend {
             .into());
         }
         let written = wgsl::written_outputs(module);
-        let packed = self.packing(module);
+        let packed = self.packing(module, &textured);
         let is_packed = |index: usize| packed.iter().any(|group| group.contains(&index));
         let longs = self.longs(module);
-        let source = wgsl::emit_packed_groups_longs(module, &packed, longs);
+        let source = wgsl::emit_full(
+            module,
+            &packed,
+            &textured,
+            longs,
+            wgsl::first_half(module, longs),
+        );
         let mut entries = vec![
             uniform_entry(wgsl::CONTEXT_BINDING),
             uniform_entry(wgsl::PARAMS_BINDING),
@@ -829,6 +946,12 @@ impl WgpuBackend {
         ];
         for (index, port) in module.manifest.inputs.iter().enumerate() {
             if is_packed(index) {
+                continue;
+            }
+            if textured.contains(&index) {
+                let (_, view_dim, _) = crate::texture::format_for(port)
+                    .expect("textured input has a hardware texture format");
+                entries.push(texture_entry(wgsl::INPUT_BINDING + index as u32, view_dim));
                 continue;
             }
             let memory = module.manifest.memories.contains(&port.name);
@@ -1087,6 +1210,7 @@ impl WgpuBackend {
             fails,
             emits,
             packed,
+            textured,
         })
     }
 }

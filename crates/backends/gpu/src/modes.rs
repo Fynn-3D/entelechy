@@ -15,8 +15,8 @@ impl WgpuBackend {
         repeat: u32,
         chain: usize,
     ) -> Result<Vec<Handle>, ExecutionError> {
-        let pipeline = built(prepared)?;
         check_invocation(module, invocation, scope)?;
+        let pipeline = self.built_for(prepared, module, invocation, scope)?;
         let _guard = self
             .lock
             .lock()
@@ -55,6 +55,8 @@ impl WgpuBackend {
             target: _,
             highs: _,
             bound_inputs: _,
+            bound_textures,
+            temp_buffers,
         } = staged;
         let scopes = (!batched).then(|| Scopes::push(&self.device));
         // The first time reads the input it was given and writes the
@@ -100,10 +102,18 @@ impl WgpuBackend {
                 },
             ];
             for (index, buffer) in input_buffers.iter().enumerate() {
-                entries.push(wgpu::BindGroupEntry {
-                    binding: wgsl::INPUT_BINDING + index as u32,
-                    resource: buffer.as_entire_binding(),
-                });
+                let binding = wgsl::INPUT_BINDING + index as u32;
+                if let Some((_, view)) = bound_textures.iter().find(|(b, _)| *b == binding) {
+                    entries.push(wgpu::BindGroupEntry {
+                        binding,
+                        resource: wgpu::BindingResource::TextureView(view),
+                    });
+                } else {
+                    entries.push(wgpu::BindGroupEntry {
+                        binding,
+                        resource: buffer.as_entire_binding(),
+                    });
+                }
             }
             let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("entelechy repeat"),
@@ -152,12 +162,17 @@ impl WgpuBackend {
                 .then(|| self.page_pace_ops_budget());
             let elems = (domain.count() as u64).saturating_mul(u64::from(repeat));
             let ops = elems.saturating_mul(effective_page_unit_ops(module, &invocation.params));
+            let mut keep = temp_buffers;
+            keep.push(other);
             self.batch
-                .finish_node(encoder, ops, vec![other], Vec::new(), page_budget)?;
+                .finish_node(encoder, ops, keep, Vec::new(), page_budget)?;
         } else {
             self.submit(encoder.finish());
             // The other of the two goes to the pile for a later output.
             self.spare.keep(other, None);
+            for buffer in temp_buffers {
+                self.spare.keep(buffer, None);
+            }
             if self._waiter.is_none() {
                 let _ = self.device.poll(wgpu::PollType::Poll);
             }

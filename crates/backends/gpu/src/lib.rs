@@ -22,6 +22,7 @@ pub mod present;
 mod raster;
 mod same;
 mod stage;
+mod texture;
 mod timing;
 mod wait;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
@@ -88,10 +89,14 @@ pub(crate) struct WgpuBackend {
     raster: OnceLock<Result<raster::RasterPipelines, String>>,
     /// The pass that compares two Fields, built on first use.
     same: OnceLock<Result<same::SamePipeline, String>>,
+    /// The pass that pads unaligned rows for `copy_buffer_to_texture`, built on first use.
+    row_pad: OnceLock<Result<texture::RowPadPipeline, String>>,
     /// Buffers released Fields left behind; see [`Spare`].
     spare: Spare,
     /// The rasterizer's own targets, kept by shape; see [`SpareTextures`].
     targets: SpareTextures,
+    /// Recycled 2D/3D hardware texture mirrors; see [`texture::SpareMirrors`].
+    mirrors: texture::SpareMirrors,
     /// The context and parameter buffers of the execution being staged,
     /// written again per node: one execution runs at a time, and a queue's
     /// writes are ordered with its submissions.
@@ -299,6 +304,7 @@ impl WgpuBackend {
         let submission = self.frames.submit(&self.queue, commands);
         self.spare.bury();
         self.targets.bury();
+        self.mirrors.bury();
         submission
     }
 
@@ -332,6 +338,11 @@ impl WgpuBackend {
             // A group's exchanges, in its workgroup's memory: all the
             // adapter offers.
             max_compute_workgroup_storage_size: adapter_limits.max_compute_workgroup_storage_size,
+            // Hardware 2D/3D texture mirror bounds: all the adapter offers.
+            max_texture_dimension_2d: adapter_limits.max_texture_dimension_2d,
+            max_texture_dimension_3d: adapter_limits.max_texture_dimension_3d,
+            max_sampled_textures_per_shader_stage: adapter_limits
+                .max_sampled_textures_per_shader_stage,
             ..wgpu::Limits::default()
         };
         // Timestamps at a pass's edges, when offered: what a profile reads.
@@ -401,6 +412,7 @@ impl WgpuBackend {
         let spent = Spent::default();
         let spare = Spare::default();
         let targets = SpareTextures::default();
+        let mirrors = texture::SpareMirrors::default();
         let pending_checks: Arc<Mutex<Vec<Box<dyn Check>>>> = Arc::default();
         let page_queue = PageQueue::default();
         let batch = Arc::new(batch::BatchHub::new(
@@ -410,6 +422,7 @@ impl WgpuBackend {
             spent.clone(),
             spare.clone(),
             targets.clone(),
+            mirrors.clone(),
             page_queue.clone(),
             Arc::clone(&pending_checks),
         ));
@@ -428,8 +441,10 @@ impl WgpuBackend {
             staging: Mutex::new(StageScratch::default()),
             raster: OnceLock::new(),
             same: OnceLock::new(),
+            row_pad: OnceLock::new(),
             spare,
             targets,
+            mirrors,
             measured: std::sync::atomic::AtomicBool::new(false),
             unbuilt: Arc::new(Mutex::new(Vec::new())),
             timestamps,
@@ -624,6 +639,7 @@ impl Backend for WgpuBackend {
 
     fn evaluation_begun(&self) {
         self.spare.evaluation_begun();
+        self.mirrors.evaluation_begun();
     }
 
     fn memory(&self) -> Vec<(&'static str, u64)> {
@@ -634,6 +650,7 @@ impl Backend for WgpuBackend {
         vec![
             ("spare buffers", self.spare.bytes()),
             ("spare targets", self.targets.bytes()),
+            ("spare mirrors", self.mirrors.bytes()),
             ("failure words", failures),
         ]
     }
@@ -788,11 +805,7 @@ impl Backend for WgpuBackend {
         } else {
             self.submit(encoder.finish());
         }
-        let device = Box::new(DeviceImage {
-            buffer,
-            spare: Some(self.spare.clone()),
-            holds: None,
-        });
+        let device = Box::new(DeviceImage::new(buffer, Some(self.spare.clone()), None));
         Ok(Some(scope.adopt_resident(
             schema.clone(),
             domain,
@@ -861,7 +874,7 @@ impl Backend for WgpuBackend {
         scope: &mut Scope<'_>,
     ) -> Result<entelechy_rules::backend::Checked, ExecutionError> {
         check_invocation(module, invocation, scope)?;
-        let pipeline = built(prepared)?;
+        let pipeline = self.built_for(prepared, module, invocation, scope)?;
         let _guard = self
             .lock
             .lock()
@@ -912,6 +925,8 @@ impl Backend for WgpuBackend {
             params_slice: _,
             input_buffers,
             bound_inputs,
+            bound_textures: _,
+            temp_buffers,
             memory_outputs,
             output_buffer,
             further_outputs,
@@ -973,11 +988,12 @@ impl Backend for WgpuBackend {
             }
             let _ = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
             self.frames.note_batched_run();
-            let keep_buffers: Vec<wgpu::Buffer> = bound_inputs
+            let mut keep_buffers: Vec<wgpu::Buffer> = bound_inputs
                 .iter()
                 .filter(|(binding, _)| wgsl::is_packed_binding(*binding))
                 .map(|(_, buffer)| buffer.clone())
                 .collect();
+            keep_buffers.extend(temp_buffers);
             let page_budget = self
                 .wait
                 .parks_with_host()
@@ -1074,6 +1090,9 @@ impl Backend for WgpuBackend {
                     self.spare.keep(buffer.clone(), None);
                 }
             }
+            for buffer in temp_buffers {
+                self.spare.keep(buffer, None);
+            }
             // A page answers a scope by a round trip: there what it caught is
             // answered with the run's check, not before the next run.
             let scoped = if self.wait.parks_with_host() && !self.measured() {
@@ -1141,12 +1160,12 @@ impl Backend for WgpuBackend {
         chain: (usize, usize),
     ) -> Option<Result<Vec<Handle>, ExecutionError>> {
         let (input, output) = chain;
-        // A pack is copied before each run and the times would read the chain
-        // through it, so they go one by one.
+        // A pack is copied before each run and a textured chain input would
+        // need a texture mirror refresh between iterations, so they go one by one.
         if prepared
             .as_any()
             .downcast_ref::<Lazy>()
-            .is_some_and(|lazy| !lazy.packed.is_empty())
+            .is_some_and(|lazy| !lazy.packed.is_empty() || lazy.textured.contains(&input))
         {
             return None;
         }

@@ -1219,11 +1219,7 @@ pub(crate) fn rasterize(
     let output = scope.adopt_resident(
         schema,
         domain,
-        Box::new(DeviceImage {
-            buffer: output_buffer,
-            spare: Some(gpu.spare()),
-            holds: None,
-        }),
+        Box::new(DeviceImage::new(output_buffer, Some(gpu.spare()), None)),
     )?;
     Ok(vec![output])
 }

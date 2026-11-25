@@ -432,6 +432,7 @@ pub(crate) fn emit_preamble(
     module: &Module,
     with_output: bool,
     packs: &[Vec<usize>],
+    textured: &[usize],
     longs: Longs,
 ) {
     let manifest = &module.manifest;
@@ -475,6 +476,19 @@ pub(crate) fn emit_preamble(
     }
     for (index, port) in manifest.inputs.iter().enumerate() {
         if packs.iter().any(|group| group.contains(&index)) {
+            continue;
+        }
+        if textured.contains(&index) {
+            let tex_ty = match port.shape() {
+                Shape::Grid => "texture_2d<f32>",
+                Shape::Volume => "texture_3d<f32>",
+                Shape::Rows => unreachable!("rows inputs are never textured"),
+            };
+            let _ = writeln!(
+                out,
+                "@group(0) @binding({}) var in{index}: {tex_ty};",
+                INPUT_BINDING + index as u32,
+            );
             continue;
         }
         // A memory's binding is read-write.
@@ -786,6 +800,78 @@ fn settle_left() {{
     }
     for (index, port) in manifest.inputs.iter().enumerate() {
         let element = port.element();
+        let slot = CONTEXT_HEAD + index;
+        if textured.contains(&index) {
+            let swizzle = match element {
+                Type::Float => ".x",
+                Type::Vec2 => ".xy",
+                Type::Vec4 => "",
+                other => unreachable!("unexpected textured element {other:?}"),
+            };
+            let ty = wgsl_type(element);
+            match port.shape() {
+                Shape::Grid => {
+                    let _ = writeln!(
+                        out,
+                        "fn texel_in{index}(x: u32, y: u32) -> {ty} {{
+    return textureLoad(in{index}, vec2<i32>(i32(x), i32(y)), 0){swizzle};
+}}
+fn at_in{index}(c: vec2<f32>) -> {ty} {{
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = bitcast<u32>(ctx[{slot}].y);
+    let x = min(u32(select(floor(c.x), 0.0, is_nan(c.x))), w - 1u);
+    let y = min(u32(select(floor(c.y), 0.0, is_nan(c.y))), h - 1u);
+    return texel_in{index}(x, y);
+}}
+fn load_in{index}(index: u32) -> {ty} {{
+    let w = bitcast<u32>(ctx[{slot}].x);
+    return texel_in{index}(index % w, index / w);
+}}
+fn index_in{index}(c: vec2<f32>) -> u32 {{
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = bitcast<u32>(ctx[{slot}].y);
+    let x = min(u32(select(floor(c.x), 0.0, is_nan(c.x))), w - 1u);
+    let y = min(u32(select(floor(c.y), 0.0, is_nan(c.y))), h - 1u);
+    return y * w + x;
+}}"
+                    );
+                }
+                Shape::Volume => {
+                    let _ = writeln!(
+                        out,
+                        "fn texel_in{index}(x: u32, y: u32, z: u32) -> {ty} {{
+    return textureLoad(in{index}, vec3<i32>(i32(x), i32(y), i32(z)), 0){swizzle};
+}}
+fn at_in{index}(c: vec3<f32>) -> {ty} {{
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = bitcast<u32>(ctx[{slot}].y);
+    let d = bitcast<u32>(ctx[{slot}].z);
+    let x = min(u32(select(floor(c.x), 0.0, is_nan(c.x))), w - 1u);
+    let y = min(u32(select(floor(c.y), 0.0, is_nan(c.y))), h - 1u);
+    let z = min(u32(select(floor(c.z), 0.0, is_nan(c.z))), d - 1u);
+    return texel_in{index}(x, y, z);
+}}
+fn load_in{index}(index: u32) -> {ty} {{
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = bitcast<u32>(ctx[{slot}].y);
+    let row = index / w;
+    return texel_in{index}(index % w, row % h, row / h);
+}}
+fn index_in{index}(c: vec3<f32>) -> u32 {{
+    let w = bitcast<u32>(ctx[{slot}].x);
+    let h = bitcast<u32>(ctx[{slot}].y);
+    let d = bitcast<u32>(ctx[{slot}].z);
+    let x = min(u32(select(floor(c.x), 0.0, is_nan(c.x))), w - 1u);
+    let y = min(u32(select(floor(c.y), 0.0, is_nan(c.y))), h - 1u);
+    let z = min(u32(select(floor(c.z), 0.0, is_nan(c.z))), d - 1u);
+    return (z * h + y) * w + x;
+}}"
+                    );
+                }
+                Shape::Rows => unreachable!("rows inputs are never textured"),
+            }
+            continue;
+        }
         // Words per element, or bytes for a narrow input.
         let encoding = input_encoding(module, index);
         let stride = if encoding == Encoding::Word {
@@ -813,7 +899,6 @@ fn settle_left() {{
         // The linear index of an address, each axis floored (NaN counts as
         // zero) and clamped into the input's extent as an integer: `u32()`
         // saturates, and `min` keeps the last element.
-        let slot = CONTEXT_HEAD + index;
         let _ = match port.shape() {
             Shape::Rows => writeln!(
                 out,
@@ -916,7 +1001,7 @@ fn urem_u32(a: u32, b: u32) -> u32 {{
     }
     emit_mixers(out, module);
     for (index, port) in manifest.inputs.iter().enumerate() {
-        emit_linear(out, module, index, port);
+        emit_linear(out, module, index, port, textured.contains(&index));
         if manifest.memories.contains(&port.name) {
             emit_memory_writer(out, module, index, port);
         }
@@ -1062,6 +1147,7 @@ pub(crate) fn emit_linear(
     module: &Module,
     index: usize,
     port: &entelechy_ir::Port,
+    is_textured: bool,
 ) {
     let element = port.element();
     if !all_floats(module, element) {
@@ -1070,7 +1156,15 @@ pub(crate) fn emit_linear(
     let slot = CONTEXT_HEAD + index;
     let ty = wgsl_type(element);
     let load = |x: &str, y: &str, z: &str| {
-        format!("load_in{index}((({z}) * u32(h) + ({y})) * u32(w) + ({x}))")
+        if is_textured {
+            match port.shape() {
+                Shape::Grid => format!("texel_in{index}({x}, {y})"),
+                Shape::Volume => format!("texel_in{index}({x}, {y}, {z})"),
+                Shape::Rows => unreachable!("rows inputs are never textured"),
+            }
+        } else {
+            format!("load_in{index}((({z}) * u32(h) + ({y})) * u32(w) + ({x}))")
+        }
     };
     let mix = |a: String, b: String, t: &str| mix_call(module, element, &a, &b, t);
     match port.shape() {

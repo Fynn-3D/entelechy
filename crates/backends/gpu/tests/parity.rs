@@ -3614,3 +3614,222 @@ fn batched_frame_chains_maps_small_uploads_and_deferred_checks() {
         }
     }
 }
+
+#[test]
+fn hardware_texture_mirroring_matches_cpu_across_2d_3d_aligned_unaligned_and_narrow_formats() {
+    let Some(gpu) = gpu() else { return };
+    // Covers:
+    // - 2D odd-width Unorm8 Float (row_bytes = 17, tests byte-level row padding!)
+    // - 2D odd-width Snorm8 Vec2 (row_bytes = 38, tests odd-word-aligned padding)
+    // - 2D unaligned F16 Vec4 (row_bytes = 120)
+    // - 3D unaligned F16 Float Volume (at_linear + at)
+    // - 3D aligned Unorm8 Vec4 Volume (direct zero-shader copy_buffer_to_texture DMA!)
+    let source = "kernel test.tex_mirror@1 {
+        requires { field.read; field.write; }
+        input g_u8: Grid<Float as unorm8>;
+        input g_s8: Grid<Vec2 as snorm8>;
+        input g_f16: Grid<Vec4 as f16>;
+        input v_f16: Volume<Float as f16>;
+        input v_u8: Volume<Vec4 as unorm8>;
+        output out: Grid<Vec4>;
+        compute {
+            let uv = (coord() + vec2(0.5, 0.5)) / domain();
+            let a = at_linear(g_u8, uv * size(g_u8));
+            let b = at_linear(g_s8, uv * size(g_s8));
+            let c = at_linear(g_f16, uv * size(g_f16));
+            let p3 = vec3(uv.x, uv.y, fract(uv.x * 1.7 + uv.y * 0.9));
+            let d = at_linear(v_f16, p3 * size(v_f16)) + at(v_f16, p3 * size(v_f16));
+            let e = at_linear(v_u8, p3 * size(v_u8));
+            return vec4(a + b.x + c.x, b.y + c.y + d, c.z + e.x + e.y, c.w + e.z + e.w);
+        }
+    }";
+    let module = compile(source).unwrap_or_else(|e| panic!("{e}"));
+    let textured = entelechy_gpu::wgsl::textured_inputs(&module, 16);
+    assert_eq!(
+        textured,
+        vec![0, 1, 2, 3, 4],
+        "all 5 inputs should mirror as textures"
+    );
+    let wgsl = entelechy_gpu::wgsl::emit_full(
+        &module,
+        &[],
+        &textured,
+        entelechy_gpu::wgsl::Longs::Native,
+        entelechy_gpu::wgsl::Half::Whole,
+    );
+    assert!(wgsl.contains("var in0: texture_2d<f32>;"), "{wgsl}");
+    assert!(wgsl.contains("var in3: texture_3d<f32>;"), "{wgsl}");
+    assert!(wgsl.contains("var in4: texture_3d<f32>;"), "{wgsl}");
+    assert!(wgsl.contains("textureLoad("), "{wgsl}");
+
+    // Verify textured inputs free storage buffer bindings when packing under a tight limit.
+    let groups_without_tex = entelechy_gpu::wgsl::packed_input_groups(&module, 16, 4);
+    let groups_with_tex =
+        entelechy_gpu::wgsl::packed_input_groups_with_textures(&module, 16, 4, &textured);
+    assert!(!groups_without_tex.is_empty());
+    assert!(
+        groups_with_tex.is_empty(),
+        "textured inputs should avoid storage packing: {groups_with_tex:?}"
+    );
+
+    let mut host = Host::new(8 << 20);
+    let make_field = |host: &mut Host,
+                      schema: entelechy_abi::Schema,
+                      domain: Domain,
+                      f: &dyn Fn(usize) -> Vec<f32>| {
+        let count = domain.count();
+        let mut values = Vec::with_capacity(count * schema.value_words());
+        for i in 0..count {
+            for v in f(i) {
+                values.push(v.to_bits());
+            }
+        }
+        host.adopt(entelechy_abi::FieldData::from_values(schema, domain, &values).unwrap())
+            .unwrap()
+    };
+    let s_u8 = module.manifest.inputs[0].ty.schema.clone();
+    let s_s8 = module.manifest.inputs[1].ty.schema.clone();
+    let s_f16 = module.manifest.inputs[2].ty.schema.clone();
+    let s_vf16 = module.manifest.inputs[3].ty.schema.clone();
+    let s_vu8 = module.manifest.inputs[4].ty.schema.clone();
+
+    let h0 = make_field(&mut host, s_u8, Domain::Grid(17, 13), &|i| {
+        vec![((i * 37) % 256) as f32 / 255.0]
+    });
+    let h1 = make_field(&mut host, s_s8, Domain::Grid(19, 11), &|i| {
+        vec![
+            (((i * 29) % 255) as f32 / 127.0) - 1.0,
+            (((i * 53) % 255) as f32 / 127.0) - 1.0,
+        ]
+    });
+    let h2 = make_field(&mut host, s_f16, Domain::Grid(15, 9), &|i| {
+        vec![
+            (i as f32 * 0.03).sin(),
+            (i as f32 * 0.07).cos(),
+            (i as f32 * 0.11).sin() * 2.0,
+            0.5 + (i % 7) as f32 * 0.125,
+        ]
+    });
+    let h3 = make_field(&mut host, s_vf16, Domain::Volume(13, 9, 7), &|i| {
+        vec![((i * 19) % 97) as f32 * 0.025 - 1.0]
+    });
+    // Width 64 * 4 bytes = 256 bytes/row -> direct zero-shader DMA path!
+    let h4 = make_field(&mut host, s_vu8, Domain::Volume(64, 4, 4), &|i| {
+        vec![
+            ((i * 11) % 256) as f32 / 255.0,
+            ((i * 23) % 256) as f32 / 255.0,
+            ((i * 41) % 256) as f32 / 255.0,
+            ((i * 71) % 256) as f32 / 255.0,
+        ]
+    });
+    let handles = vec![h0, h1, h2, h3, h4];
+    let domain = Domain::Grid(24, 16);
+    let (cpu, device) = on_both_inputs(&gpu, &mut host, &module, handles.clone(), domain);
+    for (idx, (&c, &d)) in cpu.iter().zip(device.iter()).enumerate() {
+        let cf = f32::from_bits(c);
+        let df = f32::from_bits(d);
+        assert!(
+            (cf - df).abs() <= 1e-5,
+            "word {idx}: cpu={cf} vs gpu={df} (diff={})",
+            (cf - df).abs()
+        );
+    }
+    // Run a second time on the SAME resident handles to exercise the cached
+    // zero-copy `DeviceImage::mirror` hit path and verify identical output.
+    let prepared = gpu.prepare(&module).unwrap();
+    let mut scope = Scope::new(&mut host, all());
+    let out2 = Backend::execute(
+        &gpu,
+        prepared.as_ref(),
+        &module,
+        &Invocation {
+            inputs: handles.clone(),
+            params: vec![],
+            domain,
+            context: Context {
+                time: 1.25,
+                ..Context::default()
+            },
+        },
+        &mut scope,
+    )
+    .unwrap()[0];
+    let resident2 = host.resident(out2).unwrap().unwrap();
+    let device2 = gpu.download(resident2, domain.count() * 16).unwrap();
+    assert_eq!(
+        device, device2,
+        "cached texture mirror must repeat bit-identically"
+    );
+    // Release inputs and verify `SpareMirrors` recycles and ages them out cleanly.
+    gpu.evaluation_begun();
+    for h in handles {
+        let _ = host.release(h);
+    }
+    let _ = host.release(out2);
+    let mirror_bytes = || {
+        gpu.memory()
+            .into_iter()
+            .find(|(k, _)| *k == "spare mirrors")
+            .map_or(0, |(_, b)| b)
+    };
+    assert!(
+        mirror_bytes() > 0,
+        "released mirrors should enter SpareMirrors"
+    );
+    gpu.evaluation_begun();
+    gpu.evaluation_begun();
+    assert_eq!(
+        mirror_bytes(),
+        0,
+        "unused mirrors should age out after an evaluation"
+    );
+
+    // Verify cost-model selection for wide (`Word`) 2D Grids:
+    // - single non-loop AtLinear stays storage buffer when slots allow
+    // - loop AtLinear mirrors as hardware texture
+    // - single non-loop AtLinear spills into free texture slots under tight storage limits
+    let wide_single = compile(
+        "kernel test.wide_single@1 {
+            requires { field.read; field.write; }
+            input a: Grid<Vec4>;
+            input b: Grid<Vec4>;
+            input c: Grid<Vec4>;
+            input d: Grid<Vec4>;
+            output out: Grid<Vec4>;
+            compute {
+                let p = (coord() + vec2(0.5, 0.5)) / domain() * size(a);
+                return at_linear(a, p) + at_linear(b, p) + at_linear(c, p) + at_linear(d, p);
+            }
+        }",
+    )
+    .unwrap();
+    assert!(
+        entelechy_gpu::wgsl::textured_inputs(&wide_single, 16).is_empty(),
+        "single non-loop wide 2D reads stay storage buffers when slots allow"
+    );
+    let spilled = entelechy_gpu::wgsl::textured_inputs_for_limits(&wide_single, 16, 16, 3);
+    assert_eq!(
+        spilled.len(),
+        2,
+        "tight storage limit (3 slots for 4 inputs + 1 output) should spill 2 wide grids to textures: {spilled:?}"
+    );
+    let wide_loop = compile(
+        "kernel test.wide_loop@1 {
+            requires { field.read; field.write; }
+            input a: Grid<Vec4>;
+            output out: Grid<Vec4>;
+            compute {
+                let p = coord() + vec2(0.5, 0.5);
+                return loop 8 with acc = vec4(0.0, 0.0, 0.0, 0.0) {
+                    acc + at_linear(a, p + vec2(float(index()), 0.0))
+                };
+            }
+        }",
+    )
+    .unwrap();
+    assert_eq!(
+        entelechy_gpu::wgsl::textured_inputs(&wide_loop, 16),
+        vec![0],
+        "loop AtLinear on a wide 2D grid should mirror as a hardware texture"
+    );
+}
