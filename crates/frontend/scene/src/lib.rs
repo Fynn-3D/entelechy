@@ -2102,11 +2102,11 @@ impl Lowering<'_, '_> {
                         ));
                     }
                     let resolved_ty = resolved(&ty.value, &self.aliases);
-                    if !resolved_ty.starts_with("Rows<") {
+                    if !resolved_ty.starts_with("Rows<") && !resolved_ty.starts_with("Volume<") {
                         return Err(error(
                             ty.span,
                             format!(
-                                "a fields node's files follow one another in its result: a `Rows` of their element, not `{resolved_ty}`"
+                                "a fields node's files follow one another in its result: a `Rows` of their element (or a `Volume` of 2D texture layers), not `{resolved_ty}`"
                             ),
                         ));
                     }

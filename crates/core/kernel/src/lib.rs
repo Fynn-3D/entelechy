@@ -20,9 +20,9 @@ use std::sync::{Arc, Mutex};
 
 pub use entelechy_abi::pad;
 pub use entelechy_abi::{
-    ABI_VERSION, Capabilities, Capability, Census, Context, Domain, Encoding, FieldBytes,
-    FieldData, Handle, Host, HostError, Image, InputState, Invocation, Number, Pixel, Scalar,
-    Schema, Scope, Shape, Value,
+    ABI_VERSION, BlockFormat, Capabilities, Capability, Census, CompressedBlocks, Context, Domain,
+    Encoding, FieldBytes, FieldData, Handle, Host, HostError, Image, InputState, Invocation,
+    Number, Pixel, Scalar, Schema, Scope, Shape, Value,
 };
 pub use entelechy_abi::{DEFAULT_WORK, MAX_WORK, TYPED, encoding};
 pub use entelechy_ir::{KernelId, Manifest, Validated};
@@ -1209,6 +1209,25 @@ impl Runtime {
         parts: &[(Handle, std::ops::Range<usize>)],
         schema: &Schema,
     ) -> Result<Handle, ExecutionError> {
+        let count: usize = parts.iter().map(|(_, range)| range.len()).sum();
+        // More rows than a `Rows` counts are more than any budget holds.
+        let domain = Domain::Rows(u32::try_from(count).unwrap_or(u32::MAX));
+        self.join_domain(parts, schema, domain)
+    }
+
+    /// Like [`Runtime::join`], joining `parts` into a Field over an explicit
+    /// `domain` (`Rows` or `Volume` of 2D texture layers).
+    ///
+    /// When joining whole layers of identical block-compressed textures into a
+    /// `Volume`, concatenates compressed blocks directly (GPU-to-GPU via
+    /// `copy_texture_to_texture` on a GPU backend, or raw compressed blocks on
+    /// CPU/JIT) without decompressing pixels.
+    pub fn join_domain(
+        &mut self,
+        parts: &[(Handle, std::ops::Range<usize>)],
+        schema: &Schema,
+        domain: Domain,
+    ) -> Result<Handle, ExecutionError> {
         let abi = |e: HostError| ExecutionError::Abi(e.into());
         let mut count = 0usize;
         for (part, range) in parts {
@@ -1225,10 +1244,17 @@ impl Runtime {
             }
             count += range.len();
         }
-        // More rows than a `Rows` counts are more than any budget holds.
-        let domain = Domain::Rows(u32::try_from(count).unwrap_or(u32::MAX));
+        if count != domain.count() {
+            return Err(ExecutionError::Device(format!(
+                "the parts joined hold {count} elements, where {domain} takes {}",
+                domain.count()
+            )));
+        }
         let whole_words = schema.element_bytes().is_multiple_of(4);
-        if whole_words && !parts.is_empty() && self.backend.has_device() {
+        if (whole_words || domain.shape() == Shape::Volume)
+            && !parts.is_empty()
+            && self.backend.has_device()
+        {
             let backend = Arc::clone(&self.backend);
             let before = backend.uploaded();
             let granted = [Capability::FieldRead, Capability::FieldWrite]
@@ -1243,6 +1269,70 @@ impl Runtime {
             self.telemetry.carried(backend.as_ref(), before);
             if let Some(handle) = joined? {
                 return Ok(handle);
+            }
+        }
+        // Zero-decompression Host block concatenation when every part holds
+        // whole layers of the same BlockFormat for a Volume array.
+        if let Domain::Volume(w, h, total_layers) = domain
+            && !parts.is_empty()
+            && let Some(layer_elems) = (w as usize).checked_mul(h as usize).filter(|&n| n > 0)
+        {
+            let mut common_format: Option<BlockFormat> = None;
+            let mut all_compressed = true;
+            for (part, range) in parts {
+                if range.is_empty()
+                    || !range.start.is_multiple_of(layer_elems)
+                    || !range.len().is_multiple_of(layer_elems)
+                {
+                    all_compressed = false;
+                    break;
+                }
+                let Ok(data) = self.host.data(*part) else {
+                    all_compressed = false;
+                    break;
+                };
+                let pd = data.domain();
+                let Some(blocks) = data.blocks() else {
+                    all_compressed = false;
+                    break;
+                };
+                if pd.width() != w
+                    || pd.height() != h
+                    || !matches!(pd.shape(), Shape::Grid | Shape::Volume)
+                {
+                    all_compressed = false;
+                    break;
+                }
+                match common_format {
+                    Some(prev) if prev != blocks.format() => {
+                        all_compressed = false;
+                        break;
+                    }
+                    None => common_format = Some(blocks.format()),
+                    _ => {}
+                }
+            }
+            if all_compressed
+                && let Some(format) = common_format
+                && let Some(layer_bytes) = format.byte_len(Domain::Grid(w, h))
+            {
+                let mut joined_bytes = Vec::with_capacity(layer_bytes * total_layers as usize);
+                for (part, range) in parts {
+                    let blocks = self
+                        .host
+                        .data(*part)
+                        .map_err(abi)?
+                        .blocks()
+                        .expect("verified compressed");
+                    let src_layer = range.start / layer_elems;
+                    let layers = range.len() / layer_elems;
+                    let byte_start = src_layer * layer_bytes;
+                    let byte_end = (src_layer + layers) * layer_bytes;
+                    joined_bytes.extend_from_slice(&blocks.bytes()[byte_start..byte_end]);
+                }
+                let blocks = CompressedBlocks::new(format, domain, joined_bytes).map_err(abi)?;
+                let data = FieldData::from_blocks(domain, blocks).map_err(abi)?;
+                return self.host.adopt(data).map_err(abi);
             }
         }
         for (part, _) in parts {

@@ -86,7 +86,7 @@ impl WgpuBackend {
         .into_iter()
         .take((repeat as usize).saturating_sub(1).min(2))
         .map(|(reads, written)| {
-            input_buffers[chain] = reads;
+            input_buffers[chain] = Some(reads);
             let mut entries = vec![
                 wgpu::BindGroupEntry {
                     binding: wgsl::CONTEXT_BINDING,
@@ -108,7 +108,7 @@ impl WgpuBackend {
                         binding,
                         resource: wgpu::BindingResource::TextureView(view),
                     });
-                } else {
+                } else if let Some(buffer) = buffer {
                     entries.push(wgpu::BindGroupEntry {
                         binding,
                         resource: buffer.as_entire_binding(),

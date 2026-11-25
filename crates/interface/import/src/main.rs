@@ -6,16 +6,19 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use entelechy_import::{audio, font, gltf, midi, svg};
+use entelechy_import::{audio, font, gltf, midi, svg, texture};
 
 const USAGE: &str = "\
 usage:
-  entelechy-import <file> [--out <dir>] [--rate <fps>] [--chars <text>]
+  entelechy-import <file> [--out <dir>] [--rate <fps>] [--chars <text>] [--format bc7|bc5|bc4|bc1] [--container ktx2|dds]
       A model (.gltf, .glb) becomes <stem>.vertices.field, <stem>.triangles.field
       and, when it has one in PNG, <stem>.albedo.png. A model with a skin also
       becomes <stem>.weights.field and <stem>.skeleton.field, and one
       <stem>.<name>.clip.field per animation, sampled at --rate frames a second
-      (30 by default), which the `animation` package poses a mesh from; a sound (.mp3, .ogg, .flac,
+      (30 by default), which the `animation` package poses a mesh from; an image
+      (.png, .ppm, .pgm) becomes a hardware block-compressed texture <stem>.ktx2
+      (or --container dds) in --format (bc7/bc5/bc4/bc1, chosen by channel count
+      by default); a sound (.mp3, .ogg, .flac,
       .m4a, .aac, .mka, .wav) becomes <stem>.wav at its own rate; a score (.mid,
       .midi) becomes <stem>.notes.field, a row a note with its seconds, its key,
       how hard it was struck and its channel; a drawing (.svg) becomes
@@ -47,6 +50,8 @@ fn import(args: &[String]) -> Result<(), String> {
     let mut out = None;
     let mut rate = 30.0f32;
     let mut chars = None;
+    let mut format = None;
+    let mut container = "ktx2".to_owned();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -60,6 +65,20 @@ fn import(args: &[String]) -> Result<(), String> {
                     .ok_or_else(|| format!("--rate takes frames a second, found `{text}`"))?;
             }
             "--chars" => chars = Some(iter.next().ok_or("--chars needs the characters")?.clone()),
+            "--format" => {
+                let text = iter
+                    .next()
+                    .ok_or("--format needs one of bc7, bc5, bc4, bc1")?;
+                format = Some(entelechy_host::BlockFormat::parse(text).ok_or_else(|| {
+                    format!("--format takes bc7, bc5, bc4, or bc1, found `{text}`")
+                })?);
+            }
+            "--container" => {
+                container = iter
+                    .next()
+                    .ok_or("--container needs `ktx2` or `dds`")?
+                    .to_ascii_lowercase();
+            }
             other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
             other => {
                 if source.replace(PathBuf::from(other)).is_some() {
@@ -204,9 +223,21 @@ fn import(args: &[String]) -> Result<(), String> {
                 println!("note: {note}");
             }
         }
+        "png" | "ppm" | "pgm" | "ktx2" | "dds" => {
+            let imported = texture::import(&source, &out, format, &container)?;
+            println!(
+                "wrote {}: {}x{} ({} layer(s), {}, {} bytes)",
+                imported.file.display(),
+                imported.width,
+                imported.height,
+                imported.layers,
+                imported.format,
+                imported.bytes
+            );
+        }
         other => {
             return Err(format!(
-                "`.{other}` is not a format import knows; models are .gltf/.glb, sounds .mp3/.ogg/.flac/.m4a/.aac/.mka/.wav, scores .mid, drawings .svg, fonts .ttf/.otf"
+                "`.{other}` is not a format import knows; models are .gltf/.glb, images .png/.ppm/.pgm, sounds .mp3/.ogg/.flac/.m4a/.aac/.mka/.wav, scores .mid, drawings .svg, fonts .ttf/.otf"
             ));
         }
     }

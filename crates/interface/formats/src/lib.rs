@@ -24,14 +24,16 @@ pub mod png;
 pub mod ppm;
 pub mod rig;
 pub mod table;
+pub mod texture;
 pub mod wav;
 
 use std::path::Path;
 
-use entelechy_host::{Domain, FieldData, Scalar, Schema, Shape};
+use entelechy_host::{BlockFormat, Domain, FieldData, Scalar, Schema, Shape};
 
 /// The extensions [`read`] and [`encode`] know, as an error names them.
-const KNOWN: &str = "use .field, .png, .ppm, .pgm, .wav, .mid, or a data table, .csv or .json";
+const KNOWN: &str =
+    "use .field, .png, .ktx2, .dds, .ppm, .pgm, .wav, .mid, or a data table, .csv or .json";
 
 /// The formats a scene's input reads besides those [`encode`] writes.
 const READ_TOO: &str = "or a light's photometry, .ies";
@@ -50,8 +52,8 @@ pub const DEFAULT_RATE: u32 = 48_000;
 pub const DEFAULT_BEATS: f32 = 120.0;
 
 /// The extensions [`encode`] writes.
-pub const WRITTEN: [&str; 9] = [
-    "field", "png", "ppm", "pgm", "wav", "mid", "midi", "csv", "json",
+pub const WRITTEN: [&str; 11] = [
+    "field", "png", "ktx2", "dds", "ppm", "pgm", "wav", "mid", "midi", "csv", "json",
 ];
 
 /// Whether [`encode`] writes a file of `path`'s extension; the error says
@@ -110,17 +112,23 @@ pub fn read(path: &Path, want: Option<&str>) -> Result<(FieldData, String), Stri
 /// the Field it decodes to: always, but for a Field file whose header
 /// runs past them.
 pub fn header_whole(start: &[u8], path: &Path) -> bool {
-    extension(path) != "field" || crate::file::header_whole(start)
+    match extension(path).as_str() {
+        "field" => crate::file::header_whole(start),
+        "ktx2" | "dds" => start.len() >= crate::texture::HEADER_BYTES,
+        _ => true,
+    }
 }
 
 /// Whether the Field in a file `start` begins holds `words` words at
 /// most, where its first bytes say (a `.field`'s whole header,
 /// [`header_whole`]); a reader asks before it reads the rest.
 pub fn fits(start: &[u8], path: &Path, words: usize) -> Result<(), String> {
-    if extension(path) != "field" {
-        return Ok(());
-    }
-    let needed = crate::file::words(start).map_err(|e| e.to_string())?;
+    let ext = extension(path);
+    let needed = match ext.as_str() {
+        "field" => crate::file::words(start).map_err(|e| e.to_string())?,
+        "ktx2" | "dds" => crate::texture::words(start, &ext)?,
+        _ => return Ok(()),
+    };
     if needed > words {
         return Err(entelechy_host::HostError::BudgetExceeded {
             requested: needed,
@@ -162,6 +170,18 @@ pub fn decode(
         "png" => {
             let data = png::decode_field(bytes, gray, words).map_err(|e| e.to_string())?;
             let detail = describe(&data);
+            Ok((data, detail))
+        }
+        "ktx2" => {
+            let data = texture::decode_ktx2(bytes, words)?;
+            let fmt = data.blocks().map(|b| b.format().name()).unwrap_or("bc");
+            let detail = format!("{} ({fmt})", describe(&data));
+            Ok((data, detail))
+        }
+        "dds" => {
+            let data = texture::decode_dds(bytes, words)?;
+            let fmt = data.blocks().map(|b| b.format().name()).unwrap_or("bc");
+            let detail = format!("{} ({fmt})", describe(&data));
             Ok((data, detail))
         }
         "ppm" | "pgm" => {
@@ -293,6 +313,26 @@ pub fn encode(
                 return unfit("neither pixels nor a Grid<Float>");
             };
             Ok(png::encode(domain.width(), domain.height(), &pixels))
+        }
+        "ktx2" | "dds" => {
+            if domain.shape() == Shape::Rows {
+                return unfit("not a grid or volume");
+            }
+            let format = data
+                .blocks()
+                .map(|b| b.format())
+                .or_else(|| BlockFormat::for_channels(data.schema().value_words()))
+                .ok_or(EncodeError::Unfit(
+                    "neither 1-, 2-, nor 4-channel float texels",
+                ))?;
+            let blocks = texture::compress_field(data, format)
+                .map_err(|_| EncodeError::Unfit("not block-compressible"))?;
+            let encoded = if extension == "ktx2" {
+                texture::encode_ktx2(domain, &blocks)
+            } else {
+                texture::encode_dds(domain, &blocks)
+            };
+            encoded.map_err(|_| EncodeError::Unfit("not a valid compressed texture"))
         }
         "wav" => {
             let channels = data.schema().value_words();

@@ -91,6 +91,8 @@ pub(crate) struct WgpuBackend {
     same: OnceLock<Result<same::SamePipeline, String>>,
     /// The pass that pads unaligned rows for `copy_buffer_to_texture`, built on first use.
     row_pad: OnceLock<Result<texture::RowPadPipeline, String>>,
+    /// The pass that unpacks a hardware BCn texture into a storage buffer when needed.
+    decompress_bc: OnceLock<Result<texture::DecompressBcPipelines, String>>,
     /// Buffers released Fields left behind; see [`Spare`].
     spare: Spare,
     /// The rasterizer's own targets, kept by shape; see [`SpareTextures`].
@@ -122,6 +124,9 @@ pub(crate) struct WgpuBackend {
     /// draws its triangles indexed, each vertex shaded once for all of
     /// them; without it, a vertex is pulled a triangle at a time.
     primitive_index: bool,
+    /// Whether the adapter offers hardware BC1/BC4/BC5/BC7 block-compressed
+    /// textures (`TEXTURE_COMPRESSION_BC`).
+    texture_compression_bc: bool,
     /// Failure words and their readback buffers, for reuse: a checked node
     /// takes a pair each run.
     failures: Arc<Mutex<Vec<(wgpu::Buffer, wgpu::Buffer)>>>,
@@ -338,9 +343,10 @@ impl WgpuBackend {
             // A group's exchanges, in its workgroup's memory: all the
             // adapter offers.
             max_compute_workgroup_storage_size: adapter_limits.max_compute_workgroup_storage_size,
-            // Hardware 2D/3D texture mirror bounds: all the adapter offers.
+            // Hardware 2D/3D texture mirror and 2D array bounds: all the adapter offers.
             max_texture_dimension_2d: adapter_limits.max_texture_dimension_2d,
             max_texture_dimension_3d: adapter_limits.max_texture_dimension_3d,
+            max_texture_array_layers: adapter_limits.max_texture_array_layers,
             max_sampled_textures_per_shader_stage: adapter_limits
                 .max_sampled_textures_per_shader_stage,
             ..wgpu::Limits::default()
@@ -369,6 +375,12 @@ impl WgpuBackend {
         let primitive_index = adapter.features().contains(wgpu::Features::PRIMITIVE_INDEX);
         if primitive_index {
             features |= wgpu::Features::PRIMITIVE_INDEX;
+        }
+        let texture_compression_bc = adapter
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+        if texture_compression_bc {
+            features |= wgpu::Features::TEXTURE_COMPRESSION_BC;
         }
         let (device, queue) = wait
             .block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -442,6 +454,7 @@ impl WgpuBackend {
             raster: OnceLock::new(),
             same: OnceLock::new(),
             row_pad: OnceLock::new(),
+            decompress_bc: OnceLock::new(),
             spare,
             targets,
             mirrors,
@@ -451,6 +464,7 @@ impl WgpuBackend {
             int64,
             int64_atomics,
             primitive_index,
+            texture_compression_bc,
             uploaded: std::sync::atomic::AtomicU64::new(0),
             failures: Arc::new(Mutex::new(Vec::new())),
             last_nanos: std::sync::atomic::AtomicU64::new(u64::MAX),
@@ -557,6 +571,18 @@ impl WgpuBackend {
         self.primitive_index = false;
         self.raster = OnceLock::new();
         self
+    }
+
+    /// Disables hardware BCn texture uploads so tests can exercise the software
+    /// decompression fallback on a device that offers `TEXTURE_COMPRESSION_BC`.
+    pub fn without_texture_compression(mut self) -> Self {
+        self.texture_compression_bc = false;
+        self
+    }
+
+    /// Whether the open device has hardware BC1/BC4/BC5/BC7 block compression.
+    pub fn supports_texture_compression_bc(&self) -> bool {
+        self.texture_compression_bc
     }
 
     /// How `module`'s shaders compute a `Long`: as the device's own, unless
@@ -743,6 +769,9 @@ impl Backend for WgpuBackend {
     }
 
     fn upload(&self, handle: Handle, scope: &mut Scope<'_>) -> Result<bool, ExecutionError> {
+        if self.upload_compressed(scope, handle)?.is_some() {
+            return Ok(true);
+        }
         self.bind_input(scope, handle).map(|_| true)
     }
 
@@ -750,6 +779,10 @@ impl Backend for WgpuBackend {
     /// one taken from the pile, in a submission of its own: what was
     /// written to a part before lands first, and a part let go afterwards
     /// is not reused before it.
+    ///
+    /// When joining whole layers of hardware block-compressed textures into a
+    /// `Volume` (2D texture array), copies compressed blocks GPU-to-GPU via
+    /// `copy_texture_to_texture` with zero decompression.
     fn join(
         &self,
         parts: &[(Handle, std::ops::Range<usize>)],
@@ -757,6 +790,16 @@ impl Backend for WgpuBackend {
         domain: entelechy_abi::Domain,
         scope: &mut Scope<'_>,
     ) -> Result<Option<Handle>, ExecutionError> {
+        if domain.shape() == entelechy_abi::Shape::Volume
+            && self.texture_compression_bc
+            && !parts.is_empty()
+            && let Some(joined) = self.try_join_compressed_layers(parts, schema, domain, scope)?
+        {
+            return Ok(Some(joined));
+        }
+        if !schema.element_bytes().is_multiple_of(4) {
+            return Ok(None);
+        }
         let element = schema.element_bytes() as u64;
         let mut pieces = Vec::with_capacity(parts.len());
         for (part, range) in parts {
@@ -972,7 +1015,9 @@ impl Backend for WgpuBackend {
                 scatter,
                 (target, highs),
                 failure.as_ref().map(|(word, _)| word),
-                &input_buffers[base as usize],
+                input_buffers[base as usize]
+                    .as_ref()
+                    .expect("scatter base holds a storage buffer"),
                 &context_buffer,
                 output_buffer,
                 output_domain.count(),
@@ -1225,6 +1270,7 @@ impl Backend for WgpuBackend {
             .lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let src_buffer = self.buffer_of(image).map_err(|error| error.to_string())?;
         self.batch.flush().map_err(|error| error.to_string())?;
         let size = byte_len as u64;
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1238,7 +1284,7 @@ impl Backend for WgpuBackend {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("entelechy download"),
             });
-        encoder.copy_buffer_to_buffer(&image.buffer, 0, &staging, 0, size);
+        encoder.copy_buffer_to_buffer(&src_buffer, 0, &staging, 0, size);
         self.submit(encoder.finish());
         self.spent
             .time(|| {
@@ -1271,6 +1317,7 @@ impl Backend for WgpuBackend {
             .lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let src_buffer = self.buffer_of(image).map_err(|error| error.to_string())?;
         self.batch.flush().map_err(|error| error.to_string())?;
         let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("staging"),
@@ -1283,7 +1330,7 @@ impl Backend for WgpuBackend {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("entelechy download"),
             });
-        encoder.copy_buffer_to_buffer(&image.buffer, 0, &staging, 0, byte_len as u64);
+        encoder.copy_buffer_to_buffer(&src_buffer, 0, &staging, 0, byte_len as u64);
         let after = self.submit(encoder.finish());
         let asked = Some(self.wait.ask_map_now(&self.queue, staging.slice(..)));
         Ok(Box::new(Coming {
@@ -1311,7 +1358,9 @@ impl Backend for WgpuBackend {
         ) else {
             return Err("image is resident on a different backend".into());
         };
-        self.same_buffers(&a.buffer, &b.buffer, byte_len)
+        let buf_a = self.buffer_of(a).map_err(|error| error.to_string())?;
+        let buf_b = self.buffer_of(b).map_err(|error| error.to_string())?;
+        self.same_buffers(&buf_a, &buf_b, byte_len)
     }
 
     fn waited(&self) -> std::time::Duration {
@@ -1422,6 +1471,25 @@ impl GpuBackend {
             Driver::Wgpu(b) => Self(Driver::Wgpu(Box::new((*b).with_slice_limit(limit)))),
             #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
             Driver::WebGl(b) => Self(Driver::WebGl(b)),
+        }
+    }
+
+    /// Disables hardware BCn texture compression so tests can exercise the
+    /// software fallback on a device that offers `TEXTURE_COMPRESSION_BC`.
+    pub fn without_texture_compression(self) -> Self {
+        match self.0 {
+            Driver::Wgpu(b) => Self(Driver::Wgpu(Box::new((*b).without_texture_compression()))),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(b) => Self(Driver::WebGl(b)),
+        }
+    }
+
+    /// Whether the open GPU supports hardware BC1/BC4/BC5/BC7 textures.
+    pub fn supports_texture_compression_bc(&self) -> bool {
+        match &self.0 {
+            Driver::Wgpu(b) => b.supports_texture_compression_bc(),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(_) => false,
         }
     }
 

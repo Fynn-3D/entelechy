@@ -3659,7 +3659,7 @@ fn hardware_texture_mirroring_matches_cpu_across_2d_3d_aligned_unaligned_and_nar
     );
     assert!(wgsl.contains("var in0: texture_2d<f32>;"), "{wgsl}");
     assert!(wgsl.contains("var in3: texture_3d<f32>;"), "{wgsl}");
-    assert!(wgsl.contains("var in4: texture_3d<f32>;"), "{wgsl}");
+    assert!(wgsl.contains("var in4: texture_2d_array<f32>;"), "{wgsl}");
     assert!(wgsl.contains("textureLoad("), "{wgsl}");
 
     // Verify textured inputs free storage buffer bindings when packing under a tight limit.
@@ -3832,4 +3832,331 @@ fn hardware_texture_mirroring_matches_cpu_across_2d_3d_aligned_unaligned_and_nar
         vec![0],
         "loop AtLinear on a wide 2D grid should mirror as a hardware texture"
     );
+}
+
+#[test]
+fn hardware_block_compressed_textures_match_cpu_across_bc1_bc4_bc5_bc7_and_2d_arrays() {
+    let Some(gpu) = gpu() else { return };
+    use entelechy_abi::{BlockFormat, CompressedBlocks, FieldData};
+
+    let source = "kernel test.bc_sample@1 {
+        requires { field.read; field.write; }
+        input bc1: Grid<Vec4 as unorm8>;
+        input bc4: Grid<Float as unorm8>;
+        input bc5: Grid<Vec2 as unorm8>;
+        input bc7: Grid<Vec4 as unorm8>;
+        input arr: Volume<Vec4 as unorm8>;
+        output out: Grid<Vec4>;
+        compute {
+            let uv = (coord() + vec2(0.5, 0.5)) / domain();
+            let a = at(bc1, uv * size(bc1)) + at_linear(bc1, uv * size(bc1));
+            let b = at(bc4, uv * size(bc4)) + at_linear(bc4, uv * size(bc4));
+            let c = at(bc5, uv * size(bc5)) + at_linear(bc5, uv * size(bc5));
+            let d = at(bc7, uv * size(bc7)) + at_linear(bc7, uv * size(bc7));
+            let layer = floor(fract(uv.x * 1.7 + uv.y * 0.9) * size(arr).z);
+            let p3 = vec3(uv.x * size(arr).x, uv.y * size(arr).y, layer + 0.5);
+            let e = at(arr, p3) + at_linear(arr, p3);
+            return vec4(
+                a.x + b + c.x + d.x + e.x,
+                a.y + c.y + d.y + e.y,
+                a.z + d.z + e.z,
+                a.w + d.w + e.w
+            ) * 0.125;
+        }
+    }";
+    let module = compile(source).unwrap_or_else(|e| panic!("{e}"));
+    let textured = entelechy_gpu::wgsl::textured_inputs(&module, 16);
+    assert_eq!(textured, vec![0, 1, 2, 3, 4]);
+
+    let make_bc = |fmt: BlockFormat, domain: Domain, seed: u32| -> (FieldData, u64) {
+        let w = domain.width() as usize;
+        let h = domain.height() as usize;
+        let d = domain.depth() as usize;
+        let ch = fmt.channels();
+        let mut pixels = vec![0u8; w * h * d * ch];
+        for z in 0..d {
+            for y in 0..h {
+                for x in 0..w {
+                    let base = ((z * h + y) * w + x) * ch;
+                    let r = ((x * 23 + y * 11 + z * 57 + seed as usize * 17) % 256) as u8;
+                    let g = ((x * 7 + y * 31 + z * 43 + seed as usize * 29) % 256) as u8;
+                    let b = ((x * 19 + y * 13 + z * 71 + seed as usize * 37) % 256) as u8;
+                    let a = if fmt == BlockFormat::Bc1RgbaUnorm {
+                        255
+                    } else {
+                        200u8.wrapping_add(((x + y * 3 + z * 5) % 56) as u8)
+                    };
+                    let rgba = [r, g, b, a];
+                    pixels[base..base + ch].copy_from_slice(&rgba[..ch]);
+                }
+            }
+        }
+        let blocks = CompressedBlocks::encode_unorm8(fmt, domain, &pixels).unwrap();
+        let compressed_bytes = blocks.bytes().len() as u64;
+        (
+            FieldData::from_blocks(domain, blocks).unwrap(),
+            compressed_bytes,
+        )
+    };
+
+    // Include non-multiple-of-4 extents (13x9, 11x7, 15x10) and a 3-layer 2D array.
+    let specs = [
+        (BlockFormat::Bc1RgbaUnorm, Domain::Grid(13, 9), 1),
+        (BlockFormat::Bc4RUnorm, Domain::Grid(11, 7), 2),
+        (BlockFormat::Bc5RgUnorm, Domain::Grid(15, 10), 3),
+        (BlockFormat::Bc7RgbaUnorm, Domain::Grid(16, 12), 4),
+        (BlockFormat::Bc7RgbaUnorm, Domain::Volume(12, 8, 3), 5),
+    ];
+
+    let mut cpu_host = Host::new(8 << 20);
+    let mut gpu_host = Host::new(8 << 20);
+    let mut cpu_handles = Vec::new();
+    let mut gpu_handles = Vec::new();
+    let mut expected_bytes = Vec::new();
+    for (fmt, dom, seed) in specs {
+        let (data, cbytes) = make_bc(fmt, dom, seed);
+        cpu_handles.push(cpu_host.adopt(data.clone()).unwrap());
+        gpu_handles.push(gpu_host.adopt(data).unwrap());
+        expected_bytes.push((fmt, dom, cbytes));
+    }
+
+    // Upload all compressed inputs directly to GPU and drop Host copies.
+    {
+        let mut scope = Scope::new(&mut gpu_host, all());
+        for &h in &gpu_handles {
+            assert!(Backend::upload(&gpu, h, &mut scope).unwrap());
+        }
+    }
+    for (idx, &h) in gpu_handles.iter().enumerate() {
+        gpu_host.let_go_of_copy(h).unwrap();
+        let bytes = gpu_host.field_bytes(h).unwrap();
+        assert_eq!(bytes.host, 0, "Host RAM copy must be released");
+        if gpu.supports_texture_compression_bc() {
+            assert_eq!(
+                bytes.device, expected_bytes[idx].2,
+                "GPU VRAM for {:?} over {} must equal exact compressed block bytes (no uncompressed buffer)",
+                expected_bytes[idx].0, expected_bytes[idx].1
+            );
+        }
+    }
+
+    let out_domain = Domain::Grid(24, 16);
+    let cpu = CpuBackend;
+    let cpu_prep = cpu.prepare(&module).unwrap();
+    let cpu_out = {
+        let mut scope = Scope::new(&mut cpu_host, all());
+        Backend::execute(
+            &cpu,
+            cpu_prep.as_ref(),
+            &module,
+            &Invocation {
+                inputs: cpu_handles.clone(),
+                params: vec![],
+                domain: out_domain,
+                context: Context::default(),
+            },
+            &mut scope,
+        )
+        .unwrap()[0]
+    };
+    let cpu_words = cpu_host.data(cpu_out).unwrap().storage().to_vec();
+
+    let gpu_prep = gpu.prepare(&module).unwrap();
+    let gpu_out = {
+        let mut scope = Scope::new(&mut gpu_host, all());
+        gpu.execute(
+            gpu_prep.as_ref(),
+            &module,
+            &Invocation {
+                inputs: gpu_handles.clone(),
+                params: vec![],
+                domain: out_domain,
+                context: Context::default(),
+            },
+            &mut scope,
+        )
+        .unwrap()[0]
+    };
+    let gpu_words = {
+        let dev = gpu_host.resident(gpu_out).unwrap().unwrap();
+        gpu.download(dev, out_domain.count() * 16).unwrap()
+    };
+
+    for (idx, (&cw, &gw)) in cpu_words.iter().zip(gpu_words.iter()).enumerate() {
+        let cf = f32::from_bits(cw);
+        let gf = f32::from_bits(gw);
+        assert!(
+            (cf - gf).abs() <= (1.0 / 255.0) + 1e-4,
+            "hardware BC sampling mismatch at word {idx}: cpu={cf} vs gpu={gf} (diff={})",
+            (cf - gf).abs()
+        );
+    }
+
+    // Exercise GPU `decompress_bc` download path on both 2D and 2D-array compressed textures.
+    for (idx, (&ch, &gh)) in cpu_handles.iter().zip(gpu_handles.iter()).enumerate() {
+        let cpu_ref = cpu_host.data(ch).unwrap().storage().to_vec();
+        let dev = gpu_host.resident(gh).unwrap().unwrap();
+        let byte_len = gpu_host
+            .schema(gh)
+            .unwrap()
+            .storage_words(gpu_host.domain(gh).unwrap().count())
+            * 4;
+        let gpu_dl = gpu.download(dev, byte_len).unwrap();
+        assert_eq!(cpu_ref.len(), gpu_dl.len());
+        let (fmt, dom, _) = expected_bytes[idx];
+        let valid_bytes = dom.count() * fmt.channels();
+        let tol = match fmt {
+            // BC7 weights are exact 6-bit powers of two per Khronos §17, so
+            // hardware decoders match CPU bit-for-bit.
+            BlockFormat::Bc7RgbaUnorm => 0,
+            // Khronos / WebGPU CTS permits small fixed-point 1/3 and 1/7 weight
+            // differences on hardware BC1/BC4/BC5 texture units (e.g. 37/64 vs 4/7).
+            BlockFormat::Bc1RgbaUnorm | BlockFormat::Bc4RUnorm | BlockFormat::Bc5RgUnorm => 3,
+        };
+        for b in 0..valid_bytes {
+            let cw = ((cpu_ref[b / 4] >> ((b % 4) * 8)) & 0xFF) as i32;
+            let gw = ((gpu_dl[b / 4] >> ((b % 4) * 8)) & 0xFF) as i32;
+            assert!(
+                (cw - gw).abs() <= tol,
+                "decompress_bc download mismatch for {:?} at byte {b}: cpu={cw} vs gpu={gw} (tol={tol})",
+                fmt
+            );
+        }
+    }
+
+    // Exercise software decompression fallback (`without_texture_compression`) on the same inputs.
+    let soft_gpu = GpuBackend::new().unwrap().without_texture_compression();
+    assert!(!soft_gpu.supports_texture_compression_bc());
+    let mut soft_host = Host::new(8 << 20);
+    let mut soft_handles = Vec::new();
+    for (fmt, dom, seed) in specs {
+        let (data, _) = make_bc(fmt, dom, seed);
+        soft_handles.push(soft_host.adopt(data).unwrap());
+    }
+    let soft_prep = soft_gpu.prepare(&module).unwrap();
+    let soft_out = {
+        let mut scope = Scope::new(&mut soft_host, all());
+        soft_gpu
+            .execute(
+                soft_prep.as_ref(),
+                &module,
+                &Invocation {
+                    inputs: soft_handles,
+                    params: vec![],
+                    domain: out_domain,
+                    context: Context::default(),
+                },
+                &mut scope,
+            )
+            .unwrap()[0]
+    };
+    let soft_words = {
+        let dev = soft_host.resident(soft_out).unwrap().unwrap();
+        soft_gpu.download(dev, out_domain.count() * 16).unwrap()
+    };
+    for (idx, (&cw, &sw)) in cpu_words.iter().zip(soft_words.iter()).enumerate() {
+        let cf = f32::from_bits(cw);
+        let sf = f32::from_bits(sw);
+        assert!(
+            (cf - sf).abs() <= 1e-5,
+            "software BC fallback mismatch at word {idx}: cpu={cf} vs soft_gpu={sf}"
+        );
+    }
+}
+
+#[test]
+fn hardware_compressed_volume_join_copies_blocks_gpu_to_gpu_without_decompression() {
+    let Some(gpu) = gpu() else { return };
+    if !gpu.supports_texture_compression_bc() {
+        return;
+    }
+    use entelechy_abi::{BlockFormat, CompressedBlocks, FieldData};
+
+    let make_layer = |fmt: BlockFormat, w: u32, h: u32, tag: u8| -> FieldData {
+        let ch = fmt.channels();
+        let mut pixels = vec![0u8; (w as usize) * (h as usize) * ch];
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let base = (y * w as usize + x) * ch;
+                let vals = [
+                    tag.wrapping_mul(60).wrapping_add((x * 9) as u8),
+                    tag.wrapping_mul(40).wrapping_add((y * 13) as u8),
+                    255u8.saturating_sub(tag * 50),
+                    255,
+                ];
+                pixels[base..base + ch].copy_from_slice(&vals[..ch]);
+            }
+        }
+        let blocks = CompressedBlocks::encode_unorm8(fmt, Domain::Grid(w, h), &pixels).unwrap();
+        FieldData::from_blocks(Domain::Grid(w, h), blocks).unwrap()
+    };
+
+    // Test both BC7 (4 B/el, whole words) and BC4 (1 B/el, odd 13x9 extent).
+    for (fmt, w, h) in [
+        (BlockFormat::Bc7RgbaUnorm, 16u32, 12u32),
+        (BlockFormat::Bc4RUnorm, 13u32, 9u32),
+    ] {
+        let layers = [
+            make_layer(fmt, w, h, 1),
+            make_layer(fmt, w, h, 2),
+            make_layer(fmt, w, h, 3),
+        ];
+        let mut host = Host::new(8 << 20);
+        let handles: Vec<_> = layers
+            .iter()
+            .map(|d| host.adopt(d.clone()).unwrap())
+            .collect();
+        {
+            let mut scope = Scope::new(&mut host, all());
+            for &hnd in &handles {
+                Backend::upload(&gpu, hnd, &mut scope).unwrap();
+            }
+        }
+        for &hnd in &handles {
+            host.let_go_of_copy(hnd).unwrap();
+        }
+        let layer_elems = (w as usize) * (h as usize);
+        let parts: Vec<_> = handles.iter().map(|&hnd| (hnd, 0..layer_elems)).collect();
+        let joined_domain = Domain::Volume(w, h, 3);
+        let joined = {
+            let mut scope = Scope::new(&mut host, all());
+            Backend::join(&gpu, &parts, &fmt.schema(), joined_domain, &mut scope)
+                .unwrap()
+                .expect("GPU compressed layer join must succeed")
+        };
+        let expected_bytes = fmt.byte_len(joined_domain).unwrap() as u64;
+        let mem = host.field_bytes(joined).unwrap();
+        assert_eq!(mem.host, 0);
+        assert_eq!(
+            mem.device, expected_bytes,
+            "joined {:?} Volume must remain compressed on GPU without uncompressed buffer",
+            fmt
+        );
+
+        // Verify GPU-joined Texture2DArray contents match CPU-decoded layers via download().
+        let dev = host.resident(joined).unwrap().unwrap();
+        let byte_len = fmt.schema().storage_words(joined_domain.count()) * 4;
+        let gpu_words = gpu.download(dev, byte_len).unwrap();
+
+        let mut expected_raw = Vec::new();
+        for l in &layers {
+            expected_raw.extend_from_slice(l.blocks().unwrap().bytes());
+        }
+        let cpu_joined = FieldData::from_blocks(
+            joined_domain,
+            CompressedBlocks::new(fmt, joined_domain, expected_raw).unwrap(),
+        )
+        .unwrap();
+        let cpu_words = cpu_joined.storage();
+        let valid_bytes = joined_domain.count() * fmt.channels();
+        for b in 0..valid_bytes {
+            let cb = ((cpu_words[b / 4] >> ((b % 4) * 8)) & 0xFF) as i32;
+            let gb = ((gpu_words[b / 4] >> ((b % 4) * 8)) & 0xFF) as i32;
+            assert!(
+                (cb - gb).abs() <= 1,
+                "GPU compressed join mismatch for {:?} at byte {b}: cpu={cb} vs gpu={gb}",
+                fmt
+            );
+        }
+    }
 }

@@ -152,11 +152,16 @@ fn room(host: &Host) -> usize {
 /// beside its documents, not all of them. What reads it on the processor
 /// brings the words back once. Answers whether its copy went.
 fn put_on_device(runtime: &mut Runtime, handle: Handle) -> bool {
+    let compressed = runtime
+        .host()
+        .data(handle)
+        .is_ok_and(|data| data.blocks().is_some());
     runtime.has_device()
-        && runtime
-            .host()
-            .field_bytes(handle)
-            .is_ok_and(|bytes| bytes.host >= COPY_LEAST)
+        && (compressed
+            || runtime
+                .host()
+                .field_bytes(handle)
+                .is_ok_and(|bytes| bytes.host >= COPY_LEAST))
         && runtime.upload(handle).unwrap_or(false)
         && runtime.host_mut().let_go_of_copy(handle).is_ok()
 }
@@ -228,6 +233,9 @@ fn kept_as(data: FieldData, ty: &str) -> Result<FieldData, String> {
         .schema()
         .with_encoding(encoding)
         .map_err(|why| format!("what the file holds ({}) {why}", data.schema().describe()))?;
+    if *data.schema() == schema {
+        return Ok(data);
+    }
     FieldData::from_values(schema, data.domain(), &data.values()).map_err(|e| e.to_string())
 }
 

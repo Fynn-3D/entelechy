@@ -10,8 +10,10 @@
 //! one); memory may keep a scalar narrower ([`Encoding`]). An image is a
 //! grid of four-float elements; the pixel helpers are views of it.
 
+pub mod block;
 pub mod encoding;
 
+pub use block::{BlockFormat, CompressedBlocks};
 pub use encoding::Encoding;
 
 use std::any::Any;
@@ -568,14 +570,65 @@ fn words_for(schema: &Schema, domain: Domain) -> Result<usize, HostError> {
     Ok(schema.storage_words(domain.count()))
 }
 
+/// Heap-allocated block-compressed payload so uncompressed [`FieldData`] pays
+/// only a single pointer of overhead.
+struct CompressedPayload {
+    blocks: CompressedBlocks,
+    decoded: std::sync::OnceLock<Vec<u32>>,
+}
+
 /// Elements laid out by a [`Schema`] over a [`Domain`], first axis
 /// fastest. Storage holds Kernel words for a wide schema, packed scalars
-/// for a narrow one.
-#[derive(Clone, Debug, PartialEq)]
+/// for a narrow one, or hardware-native compressed blocks ([`CompressedBlocks`])
+/// decoded lazily on CPU/JIT access while uploaded directly to GPU hardware
+/// compressed textures without decompression.
 pub struct FieldData {
     schema: Schema,
     domain: Domain,
     storage: Vec<u32>,
+    compressed: Option<Box<CompressedPayload>>,
+}
+
+impl Clone for FieldData {
+    fn clone(&self) -> Self {
+        Self {
+            schema: self.schema.clone(),
+            domain: self.domain,
+            storage: self.storage.clone(),
+            compressed: self.compressed.as_ref().map(|c| {
+                Box::new(CompressedPayload {
+                    blocks: c.blocks.clone(),
+                    decoded: std::sync::OnceLock::new(),
+                })
+            }),
+        }
+    }
+}
+
+impl fmt::Debug for FieldData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FieldData")
+            .field("schema", &self.schema)
+            .field("domain", &self.domain)
+            .field("storage_words", &self.storage.len())
+            .field(
+                "blocks",
+                &self.compressed.as_ref().map(|c| c.blocks.format()),
+            )
+            .finish()
+    }
+}
+
+impl PartialEq for FieldData {
+    fn eq(&self, other: &Self) -> bool {
+        if self.schema != other.schema || self.domain != other.domain {
+            return false;
+        }
+        match (&self.compressed, &other.compressed) {
+            (Some(a), Some(b)) => a.blocks == b.blocks,
+            _ => self.storage() == other.storage(),
+        }
+    }
 }
 
 impl FieldData {
@@ -586,6 +639,7 @@ impl FieldData {
             schema,
             domain,
             storage,
+            compressed: None,
         })
     }
 
@@ -606,6 +660,30 @@ impl FieldData {
             schema,
             domain,
             storage,
+            compressed: None,
+        })
+    }
+
+    /// Wraps hardware block-compressed texture data (BC1, BC4, BC5, BC7) as a
+    /// typed Field whose logical schema is `unorm8` over `domain`.
+    pub fn from_blocks(domain: Domain, blocks: CompressedBlocks) -> Result<Self, HostError> {
+        let Some(expected) = blocks.format().byte_len(domain) else {
+            return Err(HostError::ZeroSize);
+        };
+        if blocks.bytes().len() != expected {
+            return Err(HostError::WordCount {
+                expected: expected.div_ceil(4),
+                actual: blocks.bytes().len().div_ceil(4),
+            });
+        }
+        Ok(Self {
+            schema: blocks.format().schema(),
+            domain,
+            storage: Vec::new(),
+            compressed: Some(Box::new(CompressedPayload {
+                blocks,
+                decoded: std::sync::OnceLock::new(),
+            })),
         })
     }
 
@@ -625,6 +703,7 @@ impl FieldData {
             schema,
             domain,
             storage,
+            compressed: None,
         })
     }
 
@@ -639,6 +718,7 @@ impl FieldData {
             schema: Schema::pixel(),
             domain: Domain::Grid(image.width, image.height),
             storage,
+            compressed: None,
         }
     }
 
@@ -657,17 +737,58 @@ impl FieldData {
         self.domain.count() as u32
     }
 
-    /// The memory as kept, as a file or a device holds it.
+    /// Compressed block payload, when this Field holds hardware block-compressed
+    /// texels instead of uncompressed storage words.
+    pub fn blocks(&self) -> Option<&CompressedBlocks> {
+        self.compressed.as_deref().map(|c| &c.blocks)
+    }
+
+    /// Actual Host RAM bytes occupied by this Field's authoritative payload.
+    pub fn host_bytes(&self) -> u64 {
+        match &self.compressed {
+            Some(c) => c.blocks.bytes().len() as u64,
+            None => self.storage.len() as u64 * 4,
+        }
+    }
+
+    /// Host budget words charged for this Field.
+    pub(crate) fn charge_words(&self) -> usize {
+        match &self.compressed {
+            Some(c) => c.blocks.bytes().len().div_ceil(4),
+            None => self.storage.len(),
+        }
+    }
+
+    /// The memory as kept, as a file or a device holds it; block-compressed
+    /// Fields decode lazily on demand into packed `unorm8` words.
     pub fn storage(&self) -> &[u32] {
-        &self.storage
+        match &self.compressed {
+            Some(c) => c
+                .decoded
+                .get_or_init(|| c.blocks.decode_storage(self.domain)),
+            None => &self.storage,
+        }
+    }
+
+    /// Ensures mutable uncompressed word storage, decoding compressed blocks
+    /// once if needed.
+    fn storage_mut_uncompressed(&mut self) -> &mut Vec<u32> {
+        if let Some(mut c) = self.compressed.take() {
+            self.storage = c
+                .decoded
+                .take()
+                .unwrap_or_else(|| c.blocks.decode_storage(self.domain));
+        }
+        &mut self.storage
     }
 
     /// The Kernel's words, element after element, widened when narrow.
     pub fn values(&self) -> std::borrow::Cow<'_, [u32]> {
+        let storage = self.storage();
         if self.schema.is_wide() {
-            std::borrow::Cow::Borrowed(&self.storage)
+            std::borrow::Cow::Borrowed(storage)
         } else {
-            std::borrow::Cow::Owned(self.schema.unpack(&self.storage, self.domain.count()))
+            std::borrow::Cow::Owned(self.schema.unpack(storage, self.domain.count()))
         }
     }
 
@@ -682,14 +803,15 @@ impl FieldData {
         }
         let stride = self.schema.value_words();
         let index = index as usize;
+        let storage = self.storage();
         if self.schema.is_wide() {
             return Ok(std::borrow::Cow::Borrowed(
-                &self.storage[index * stride..(index + 1) * stride],
+                &storage[index * stride..(index + 1) * stride],
             ));
         }
         Ok(std::borrow::Cow::Owned(
             (0..stride)
-                .map(|scalar| self.schema.load(&self.storage, index, scalar))
+                .map(|scalar| self.schema.load(storage, index, scalar))
                 .collect(),
         ))
     }
@@ -1039,6 +1161,7 @@ enum Storage {
         domain: Domain,
         device: Box<dyn Any + Send + Sync>,
         kept: Option<FieldData>,
+        device_bytes: Option<u64>,
     },
 }
 
@@ -1072,19 +1195,19 @@ impl Storage {
         match self {
             Storage::Free => FieldBytes::default(),
             Storage::Data(data) => FieldBytes {
-                host: data.storage().len() as u64 * 4,
+                host: data.host_bytes(),
                 device: 0,
             },
             Storage::Resident {
                 schema,
                 domain,
                 kept,
+                device_bytes,
                 ..
             } => FieldBytes {
-                host: kept
-                    .as_ref()
-                    .map_or(0, |data| data.storage().len() as u64 * 4),
-                device: schema.storage_words(domain.count()) as u64 * 4,
+                host: kept.as_ref().map_or(0, FieldData::host_bytes),
+                device: device_bytes
+                    .unwrap_or_else(|| schema.storage_words(domain.count()) as u64 * 4),
             },
         }
     }
@@ -1274,7 +1397,7 @@ impl Host {
 
     /// Takes ownership of existing data.
     pub fn adopt(&mut self, data: FieldData) -> Result<Handle, HostError> {
-        let requested = data.storage.len();
+        let requested = data.charge_words();
         self.place(requested, Storage::Data(data))
     }
 
@@ -1294,6 +1417,30 @@ impl Host {
                 domain,
                 device,
                 kept: None,
+                device_bytes: None,
+            },
+        )
+    }
+
+    /// Takes ownership of a device-resident Field whose actual device footprint
+    /// is `device_bytes` (for hardware block-compressed textures).
+    pub fn adopt_resident_bytes(
+        &mut self,
+        schema: Schema,
+        domain: Domain,
+        device_bytes: u64,
+        device: Box<dyn Any + Send + Sync>,
+    ) -> Result<Handle, HostError> {
+        let _ = words_for(&schema, domain)?;
+        let requested = usize::try_from(device_bytes.div_ceil(4)).unwrap_or(usize::MAX);
+        self.place(
+            requested,
+            Storage::Resident {
+                schema,
+                domain,
+                device,
+                kept: None,
+                device_bytes: Some(device_bytes),
             },
         )
     }
@@ -1443,19 +1590,20 @@ impl Host {
     /// A Field's storage as kept, to write in place: a backend fills a new
     /// Field here.
     pub fn storage_mut(&mut self, handle: Handle) -> Result<&mut [u32], HostError> {
-        Ok(&mut self.data_mut(handle)?.storage)
+        Ok(self.data_mut(handle)?.storage_mut_uncompressed())
     }
 
     /// Replaces the whole storage, as kept; the length must match.
     pub fn write_storage(&mut self, handle: Handle, storage: &[u32]) -> Result<(), HostError> {
         let data = self.data_mut(handle)?;
-        if storage.len() != data.storage.len() {
+        let dst = data.storage_mut_uncompressed();
+        if storage.len() != dst.len() {
             return Err(HostError::WordCount {
-                expected: data.storage.len(),
+                expected: dst.len(),
                 actual: storage.len(),
             });
         }
-        data.storage.copy_from_slice(storage);
+        dst.copy_from_slice(storage);
         Ok(())
     }
 
@@ -1470,10 +1618,12 @@ impl Host {
                 actual: values.len(),
             });
         }
-        if data.schema.is_wide() {
-            data.storage.copy_from_slice(values);
+        let schema = data.schema.clone();
+        let dst = data.storage_mut_uncompressed();
+        if schema.is_wide() {
+            dst.copy_from_slice(values);
         } else {
-            data.storage = data.schema.pack(values);
+            *dst = schema.pack(values);
         }
         Ok(())
     }
@@ -1500,9 +1650,10 @@ impl Host {
                 actual: words.len(),
             });
         }
+        let schema = data.schema.clone();
+        let dst = data.storage_mut_uncompressed();
         for (scalar, word) in words.iter().enumerate() {
-            data.schema
-                .store(&mut data.storage, index as usize, scalar, *word);
+            schema.store(dst, index as usize, scalar, *word);
         }
         Ok(())
     }
@@ -1522,6 +1673,26 @@ impl Host {
         handle: Handle,
         device: Box<dyn Any + Send + Sync>,
     ) -> Result<(), HostError> {
+        self.make_resident_inner(handle, None, device)
+    }
+
+    /// Like [`Host::make_resident`], recording the exact device byte footprint
+    /// `device_bytes` (for hardware block-compressed textures).
+    pub fn make_resident_bytes(
+        &mut self,
+        handle: Handle,
+        device_bytes: u64,
+        device: Box<dyn Any + Send + Sync>,
+    ) -> Result<(), HostError> {
+        self.make_resident_inner(handle, Some(device_bytes), device)
+    }
+
+    fn make_resident_inner(
+        &mut self,
+        handle: Handle,
+        device_bytes: Option<u64>,
+        device: Box<dyn Any + Send + Sync>,
+    ) -> Result<(), HostError> {
         let slot = self.slot_mut(handle)?;
         let (schema, domain) = slot.describe().expect("live slot");
         let schema = schema.clone();
@@ -1535,6 +1706,7 @@ impl Host {
             domain,
             device,
             kept,
+            device_bytes,
         };
         Ok(())
     }
@@ -1562,9 +1734,7 @@ impl Host {
     pub fn let_go_of_copy(&mut self, handle: Handle) -> Result<u64, HostError> {
         let slot = self.slot_mut(handle)?;
         Ok(match &mut slot.storage {
-            Storage::Resident { kept, .. } => kept
-                .take()
-                .map_or(0, |data| data.storage().len() as u64 * 4),
+            Storage::Resident { kept, .. } => kept.take().map_or(0, |data| data.host_bytes()),
             _ => 0,
         })
     }
@@ -1588,6 +1758,7 @@ impl Host {
         | Storage::Resident {
             kept: Some(data), ..
         } = storage
+            && !data.storage.is_empty()
         {
             self.keep_spare(data.storage, Some(version), made);
         }
@@ -1627,7 +1798,7 @@ impl Host {
     pub fn working(&mut self, handle: Handle) -> Result<Vec<u32>, HostError> {
         let lineage = self.slot(handle)?.lineage.clone();
         let version = self.version(handle)?;
-        let len = self.data(handle)?.storage.len();
+        let len = self.data(handle)?.storage().len();
         // Of the released buffers that hold words this Field differs from
         // on known pages, the one it differs from on fewest: one holding
         // words the Field was made from, one made from this Field, one
@@ -1652,7 +1823,7 @@ impl Host {
             .min_by_key(|(_, pages)| pages.count());
         if let Some((at, pages)) = found {
             let mut words = self.spare.swap_remove(at).words;
-            let storage = &self.data(handle)?.storage;
+            let storage = self.data(handle)?.storage();
             for page in pages.iter() {
                 let span = Pages::span(page, len);
                 words[span.clone()].copy_from_slice(&storage[span]);
@@ -1664,13 +1835,13 @@ impl Host {
             .iter()
             .position(|buffer| buffer.words.len() == len && buffer.holds.is_none())
             .map(|at| self.spare.swap_remove(at).words);
-        let storage = &self.data(handle)?.storage;
+        let storage = self.data(handle)?.storage();
         Ok(match reuse {
             Some(mut words) => {
                 words.copy_from_slice(storage);
                 words
             }
-            None => storage.clone(),
+            None => storage.to_vec(),
         })
     }
 
@@ -1750,10 +1921,15 @@ impl Host {
         if first.schema != second.schema || first.domain != second.domain {
             return Some(false);
         }
-        let len = first.storage.len();
+        if first.compressed.is_some() || second.compressed.is_some() {
+            return Some(first == second);
+        }
+        let first_s = first.storage();
+        let second_s = second.storage();
+        let len = first_s.len();
         let on = |page: usize| {
             let span = Pages::span(page, len);
-            first.storage[span.clone()] == second.storage[span]
+            first_s[span.clone()] == second_s[span]
         };
         let lineage = |field: Handle| self.slot(field).ok()?.lineage.as_ref();
         let (of_a, of_b) = (lineage(a), lineage(b));
@@ -1797,7 +1973,8 @@ impl Host {
     pub fn read_pixel(&self, handle: Handle, x: u32, y: u32) -> Result<Pixel, HostError> {
         let data = self.data(handle)?;
         let index = Self::pixel_index(data, x, y)?;
-        let channel = |k: usize| f32::from_bits(data.schema.load(&data.storage, index, k));
+        let storage = data.storage();
+        let channel = |k: usize| f32::from_bits(data.schema.load(storage, index, k));
         Ok([channel(0), channel(1), channel(2), channel(3)])
     }
 
@@ -1811,8 +1988,10 @@ impl Host {
     ) -> Result<(), HostError> {
         let data = self.data_mut(handle)?;
         let index = Self::pixel_index(data, x, y)?;
+        let schema = data.schema.clone();
+        let dst = data.storage_mut_uncompressed();
         for (k, v) in pixel.iter().enumerate() {
-            data.schema.store(&mut data.storage, index, k, v.to_bits());
+            schema.store(dst, index, k, v.to_bits());
         }
         Ok(())
     }

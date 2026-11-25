@@ -380,7 +380,9 @@ pub fn textured_inputs_for_limits(
                 volumes.push(index);
             }
             Shape::Grid
-                if (narrow && (linear_used.contains(&index) || loop_at.contains(&index)))
+                if (enc == Encoding::Unorm8
+                    && (linear_used.contains(&index) || at_used.contains(&index)))
+                    || (narrow && (linear_used.contains(&index) || loop_at.contains(&index)))
                     || loop_linear.contains(&index) =>
             {
                 primary_grids.push(index);

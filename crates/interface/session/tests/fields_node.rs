@@ -391,3 +391,400 @@ fn a_directory_named_through_a_package_is_read_inside_that_package() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn solid_bc_bytes(
+    fmt: entelechy_kernel::BlockFormat,
+    w: u32,
+    h: u32,
+    rgba: [u8; 4],
+    ktx2: bool,
+) -> Vec<u8> {
+    let ch = fmt.channels();
+    let mut pixels = vec![0u8; (w as usize) * (h as usize) * ch];
+    for p in pixels.chunks_exact_mut(ch) {
+        p.copy_from_slice(&rgba[..ch]);
+    }
+    let blocks =
+        entelechy_kernel::CompressedBlocks::encode_unorm8(fmt, Domain::Grid(w, h), &pixels)
+            .unwrap();
+    if ktx2 {
+        entelechy_formats::texture::encode_ktx2(Domain::Grid(w, h), &blocks).unwrap()
+    } else {
+        entelechy_formats::texture::encode_dds(Domain::Grid(w, h), &blocks).unwrap()
+    }
+}
+
+#[test]
+fn a_volume_fields_node_streams_compressed_ktx2_and_dds_textures_into_a_gpu_array() {
+    let dir =
+        std::env::temp_dir().join(format!("entelechy-fields-volume-bc-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("textures")).unwrap();
+    let fmt = entelechy_kernel::BlockFormat::Bc7RgbaUnorm;
+    std::fs::write(
+        dir.join("textures/red.ktx2"),
+        solid_bc_bytes(fmt, 16, 12, [230, 30, 20, 255], true),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("textures/green.dds"),
+        solid_bc_bytes(fmt, 16, 12, [25, 220, 40, 255], false),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("textures/wrong_size.ktx2"),
+        solid_bc_bytes(fmt, 8, 8, [0, 0, 255, 255], true),
+    )
+    .unwrap();
+
+    let n = 80;
+    let scene_src = format!(
+        "kernel t.paths@1 {{
+            requires {{ field.write; }}
+            param which: Int = 0;
+            output result: Rows<Int>;
+            compute {{
+                return if which == 0 {{ {}[element()] }}
+                else if which == 1 {{ {}[element()] }}
+                else {{ {}[element()] }};
+            }}
+        }}
+        kernel t.probe@1 {{
+            requires {{ field.read; field.write; }}
+            input atlas: Volume<Vec4 as unorm8>;
+            input ranges: Rows<IVec2>;
+            output result: Rows<Vec4>;
+            compute {{
+                let slot = at(ranges, element());
+                return if slot.x < 0 {{
+                    vec4(-1.0, -1.0, -1.0, -1.0)
+                }} else {{
+                    at_linear(atlas, vec3(size(atlas).x * 0.5, size(atlas).y * 0.5, float(slot.x) + 0.5))
+                }};
+            }}
+        }}
+        kernel t.ranges@1 {{
+            requires {{ field.read; field.write; }}
+            input ranges: Rows<IVec2>;
+            output result: Rows<IVec2>;
+            compute {{ return sample(ranges); }}
+        }}
+        param which: Int = 0;
+        node paths: t.paths@1 {{ which = which; domain = {n}; }}
+        node atlas: Volume<Vec4 as unorm8> fields \"textures/\" {{ paths <- paths.result; }}
+        node probe: t.probe@1 {{ atlas <- atlas.result; ranges <- atlas.ranges; domain = 3; }}
+        node ranges: t.ranges@1 {{ ranges <- atlas.ranges; }}
+        output probe <- probe.result;
+        output ranges <- ranges.result;
+        ",
+        spelled(&["red.ktx2", "missing.ktx2", "green.dds"], n),
+        spelled(&["green.dds"], n),
+        spelled(&["green.dds", "wrong_size.ktx2"], n),
+    );
+    std::fs::write(dir.join("scene.esn"), scene_src).unwrap();
+
+    let (mut session, is_hw_bc) = match entelechy_gpu::GpuBackend::new() {
+        Ok(gpu) => {
+            let bc = gpu.supports_texture_compression_bc();
+            let mut runtime = entelechy_kernel::Runtime::with_backend(4 << 20, Box::new(gpu));
+            runtime.set_small(0);
+            (
+                Session::open_with(&dir.join("scene.esn"), None, runtime),
+                bc,
+            )
+        }
+        Err(_) => (open(&dir), false),
+    };
+    let events = session.sync();
+    assert!(session.graph().is_some(), "{events:?}");
+
+    // Frame 1 feeds paths; Frame 2 reads the joined compressed Texture2DArray.
+    session.evaluate(&Context::default()).unwrap();
+    session.evaluate(&Context::default()).unwrap();
+
+    let ranges: Vec<(i32, i32)> = words(&mut session, "ranges")
+        .chunks(2)
+        .map(|r| (r[0] as i32, r[1] as i32))
+        .collect();
+    assert_eq!(ranges, vec![(0, 1), (-1, 0), (1, 1)]);
+
+    let probed: Vec<[f32; 4]> = words(&mut session, "probe")
+        .chunks(4)
+        .map(|p| {
+            [
+                f32::from_bits(p[0]),
+                f32::from_bits(p[1]),
+                f32::from_bits(p[2]),
+                f32::from_bits(p[3]),
+            ]
+        })
+        .collect();
+    assert!((probed[0][0] - 230.0 / 255.0).abs() < 0.03, "{probed:?}");
+    assert!((probed[0][1] - 30.0 / 255.0).abs() < 0.03, "{probed:?}");
+    assert_eq!(probed[1], [-1.0, -1.0, -1.0, -1.0]);
+    assert!((probed[2][0] - 25.0 / 255.0).abs() < 0.03, "{probed:?}");
+    assert!((probed[2][1] - 220.0 / 255.0).abs() < 0.03, "{probed:?}");
+
+    let layer_bytes = fmt.byte_len(Domain::Grid(16, 12)).unwrap() as u64;
+    if is_hw_bc {
+        let result_mem = session
+            .memory_map()
+            .held
+            .into_iter()
+            .find(|e| e.owner == "atlas.result")
+            .map(|e| (e.bytes.host, e.bytes.device))
+            .expect("atlas.result is held");
+        assert_eq!(
+            result_mem,
+            (0, 2 * layer_bytes),
+            "2 compressed BC7 layers must occupy exact compressed VRAM with zero Host RAM copy"
+        );
+    }
+
+    // Evict red.ktx2 -> green.dds compacts GPU-to-GPU down to layer 0!
+    session.set_param("which", Value::Int(1)).unwrap();
+    session.evaluate(&Context::default()).unwrap();
+    session.evaluate(&Context::default()).unwrap();
+    let ranges: Vec<(i32, i32)> = words(&mut session, "ranges")
+        .chunks(2)
+        .map(|r| (r[0] as i32, r[1] as i32))
+        .collect();
+    assert_eq!(ranges, vec![(0, 1)]);
+    let probed: Vec<[f32; 4]> = words(&mut session, "probe")
+        .chunks(4)
+        .map(|p| {
+            [
+                f32::from_bits(p[0]),
+                f32::from_bits(p[1]),
+                f32::from_bits(p[2]),
+                f32::from_bits(p[3]),
+            ]
+        })
+        .collect();
+    assert!((probed[0][1] - 220.0 / 255.0).abs() < 0.03, "{probed:?}");
+    if is_hw_bc {
+        let result_mem = session
+            .memory_map()
+            .held
+            .into_iter()
+            .find(|e| e.owner == "atlas.result")
+            .map(|e| (e.bytes.host, e.bytes.device))
+            .expect("atlas.result is held");
+        assert_eq!(result_mem, (0, layer_bytes));
+    }
+
+    // Adding a mismatched extent texture rejects it cleanly while preserving green.dds.
+    session.set_param("which", Value::Int(2)).unwrap();
+    session.evaluate(&Context::default()).unwrap();
+    let said: Vec<String> = session.sync().iter().map(ToString::to_string).collect();
+    assert!(
+        said.iter()
+            .any(|line| line.contains("wrong_size.ktx2") && line.contains("8x8")),
+        "{said:?}"
+    );
+    session.evaluate(&Context::default()).unwrap();
+    let ranges: Vec<(i32, i32)> = words(&mut session, "ranges")
+        .chunks(2)
+        .map(|r| (r[0] as i32, r[1] as i32))
+        .collect();
+    assert_eq!(ranges, vec![(0, 1), (-1, 0)]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn static_ktx2_and_dds_inputs_stay_compressed_on_gpu_and_match_cpu() {
+    let dir =
+        std::env::temp_dir().join(format!("entelechy-static-bc-inputs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("albedo.ktx2"),
+        solid_bc_bytes(
+            entelechy_kernel::BlockFormat::Bc7RgbaUnorm,
+            16,
+            16,
+            [200, 100, 50, 255],
+            true,
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("normal.dds"),
+        solid_bc_bytes(
+            entelechy_kernel::BlockFormat::Bc5RgUnorm,
+            16,
+            16,
+            [128, 192, 0, 0],
+            false,
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("rough.ktx2"),
+        solid_bc_bytes(
+            entelechy_kernel::BlockFormat::Bc4RUnorm,
+            16,
+            16,
+            [77, 0, 0, 0],
+            true,
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("scene.esn"),
+        "kernel t.read@1 {
+            requires { field.read; field.write; }
+            input albedo: Grid<Vec4 as unorm8>;
+            input normal: Grid<Vec2 as unorm8>;
+            input rough: Grid<Float as unorm8>;
+            output result: Grid<Vec4>;
+            compute {
+                let p = coord() + vec2(0.5, 0.5);
+                let a = at_linear(albedo, p);
+                let n = at_linear(normal, p);
+                let r = at_linear(rough, p);
+                return vec4(a.x, n.y, r, a.w);
+            }
+        }
+        input albedo: Grid<Vec4 as unorm8> = \"albedo.ktx2\";
+        input normal: Grid<Vec2 as unorm8> = \"normal.dds\";
+        input rough: Grid<Float as unorm8> = \"rough.ktx2\";
+        node out: t.read@1 { albedo <- albedo; normal <- normal; rough <- rough; }
+        output result <- out.result;
+        ",
+    )
+    .unwrap();
+
+    let mut cpu_session = Session::open_with(
+        &dir.join("scene.esn"),
+        None,
+        entelechy_kernel::Runtime::with_backend(4 << 20, Box::new(entelechy_cpu::CpuBackend)),
+    );
+    let events = cpu_session.sync();
+    assert!(cpu_session.graph().is_some(), "{events:?}");
+    cpu_session.evaluate(&Context::default()).unwrap();
+    let cpu_words = words(&mut cpu_session, "result");
+
+    if let Ok(gpu) = entelechy_gpu::GpuBackend::new() {
+        let is_hw_bc = gpu.supports_texture_compression_bc();
+        let mut runtime = entelechy_kernel::Runtime::with_backend(4 << 20, Box::new(gpu));
+        runtime.set_small(0);
+        let mut gpu_session = Session::open_with(&dir.join("scene.esn"), None, runtime);
+        let events = gpu_session.sync();
+        assert!(gpu_session.graph().is_some(), "{events:?}");
+        if is_hw_bc {
+            let held = gpu_session.memory_map().held;
+            let bytes_of = |name: &str| {
+                held.iter()
+                    .find(|e| e.owner == name)
+                    .map(|e| (e.bytes.host, e.bytes.device))
+                    .unwrap_or_else(|| panic!("{name} missing from memory map"))
+            };
+            assert_eq!(bytes_of("albedo"), (0, 256)); // 16x16 BC7 = 16 blocks * 16 B
+            assert_eq!(bytes_of("normal"), (0, 256)); // 16x16 BC5 = 16 blocks * 16 B
+            assert_eq!(bytes_of("rough"), (0, 128)); // 16x16 BC4 = 16 blocks * 8 B
+        }
+        gpu_session.evaluate(&Context::default()).unwrap();
+        let gpu_words = words(&mut gpu_session, "result");
+        for (idx, (&cw, &gw)) in cpu_words.iter().zip(gpu_words.iter()).enumerate() {
+            let cf = f32::from_bits(cw);
+            let gf = f32::from_bits(gw);
+            assert!(
+                (cf - gf).abs() <= (1.0 / 255.0) + 1e-4,
+                "word {idx}: cpu={cf} vs gpu={gf}"
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn background_io_pool_streams_and_cancels_volume_textures_cleanly() {
+    let dir = std::env::temp_dir().join(format!("entelechy-bg-volume-pool-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("textures")).unwrap();
+    let fmt = entelechy_kernel::BlockFormat::Bc7RgbaUnorm;
+    for (name, rgb) in [
+        ("t0.ktx2", [240, 20, 20, 255]),
+        ("t1.ktx2", [20, 240, 20, 255]),
+        ("t2.ktx2", [20, 20, 240, 255]),
+    ] {
+        std::fs::write(
+            dir.join("textures").join(name),
+            solid_bc_bytes(fmt, 16, 16, rgb, true),
+        )
+        .unwrap();
+    }
+    let n = 64;
+    let scene_src = format!(
+        "kernel t.paths@1 {{
+            requires {{ field.write; }}
+            param which: Int = 0;
+            output result: Rows<Int>;
+            compute {{ return if which == 0 {{ {}[element()] }} else {{ {}[element()] }}; }}
+        }}
+        kernel t.ranges@1 {{
+            requires {{ field.read; field.write; }}
+            input ranges: Rows<IVec2>;
+            output result: Rows<IVec2>;
+            compute {{ return sample(ranges); }}
+        }}
+        kernel t.probe@1 {{
+            requires {{ field.read; field.write; }}
+            input atlas: Volume<Vec4 as unorm8>;
+            output result: Rows<Vec4>;
+            compute {{ return at(atlas, vec3(4.0, 4.0, float(element()))); }}
+        }}
+        param which: Int = 0;
+        node paths: t.paths@1 {{ which = which; domain = {n}; }}
+        node atlas: Volume<Vec4 as unorm8> fields \"textures/\" {{ paths <- paths.result; }}
+        node ranges: t.ranges@1 {{ ranges <- atlas.ranges; }}
+        node probe: t.probe@1 {{ atlas <- atlas.result; domain = 2; }}
+        output ranges <- ranges.result;
+        output probe <- probe.result;
+        ",
+        spelled(&["t0.ktx2", "t1.ktx2", "t2.ktx2"], n),
+        spelled(&["t1.ktx2", "t2.ktx2"], n),
+    );
+    std::fs::write(dir.join("scene.esn"), scene_src).unwrap();
+
+    let mut session = open(&dir);
+    session.set_background(true);
+    // Request t0/t1/t2 in background, then immediately swap to t1/t2 (cancelling t0).
+    session.evaluate(&Context::default()).unwrap();
+    session.set_param("which", Value::Int(1)).unwrap();
+    session.evaluate(&Context::default()).unwrap();
+
+    let began = std::time::Instant::now();
+    loop {
+        session.sync();
+        session.evaluate(&Context::default()).unwrap();
+        let ranges: Vec<(i32, i32)> = words(&mut session, "ranges")
+            .chunks(2)
+            .map(|r| (r[0] as i32, r[1] as i32))
+            .collect();
+        if ranges == vec![(0, 1), (1, 1)] {
+            break;
+        }
+        assert!(
+            began.elapsed().as_secs() < 10,
+            "background streaming timed out: {ranges:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let probed: Vec<[f32; 4]> = words(&mut session, "probe")
+        .chunks(4)
+        .map(|p| {
+            [
+                f32::from_bits(p[0]),
+                f32::from_bits(p[1]),
+                f32::from_bits(p[2]),
+                f32::from_bits(p[3]),
+            ]
+        })
+        .collect();
+    assert!((probed[0][1] - 240.0 / 255.0).abs() < 0.03, "{probed:?}");
+    assert!((probed[1][2] - 240.0 / 255.0).abs() < 0.03, "{probed:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

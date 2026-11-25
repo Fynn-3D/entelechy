@@ -11,3 +11,4 @@ pub mod gltf;
 pub mod midi;
 #[cfg(feature = "vector")]
 pub mod svg;
+pub mod texture;

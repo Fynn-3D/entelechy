@@ -1,20 +1,29 @@
-//! Fields nodes: the Field files a node's paths name, read as the scene
-//! asks and joined where they are.
+//! Fields nodes: the Field or compressed texture files a node's paths name,
+//! read asynchronously off the frame loop and joined where they live —
+//! either linearly as `Rows<E>` or as a 2D texture array `Volume<E>`.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use entelechy_kernel::{FieldData, Handle, Host, Runtime, Schema};
+use entelechy_kernel::{Domain, FieldData, Handle, Host, Runtime, Schema, Shape};
 
 use super::{Declared, Inputs, room};
 use crate::store::{Stamp, Store};
 use crate::{Diagnostic, Event};
 
-/// A `fields` node: its directory, the paths it was last given, each file
-/// they name as it stands, the Field it last read its paths from, and
-/// whether what it holds changed since its outputs were last made.
+/// Frame-paced streaming upload budget (`8 MiB/frame`) used when background
+/// streaming is active so bursty asset arrivals never stall interactive frame
+/// pacing. At least one arrived file always settles per frame.
+const STREAM_UPLOAD_BYTES_PER_FRAME: usize = 8 * 1024 * 1024;
+
+/// A `fields` node: its directory, whether it joins into a 2D texture-array
+/// `Volume` (otherwise `Rows`), the paths it was last given, each file they
+/// name as it stands, the Field it last read its paths from, and whether what
+/// it holds changed since its outputs were last made.
 pub(super) struct FieldNode {
     pub(super) dir: PathBuf,
+    is_volume: bool,
     paths: Vec<String>,
     files: BTreeMap<String, Chunk>,
     seen: Option<Handle>,
@@ -28,7 +37,7 @@ pub(super) struct FieldNode {
 }
 
 impl FieldNode {
-    /// Lets go of the Field of every file in.
+    /// Lets go of the Field of every file in, and cancels pending reads.
     fn let_go(self, host: &mut Host) {
         for (_, chunk) in self.files {
             chunk.let_go(host);
@@ -36,38 +45,48 @@ impl FieldNode {
     }
 }
 
-/// A Field file a `fields` node names, with the stamp it was asked at.
+/// A file a `fields` node names, with the stamp it was asked at.
 enum Chunk {
-    /// On its way.
+    /// On its way from the background I/O pool.
     Coming(Box<dyn crate::store::Later>, Option<Stamp>),
+    /// Arrived from disk, waiting for its frame-paced upload budget slice.
+    Ready(Box<dyn crate::store::Arrived>, Option<Stamp>),
     /// In, laid out as the node's elements ([`FieldNode::element`]).
     In(Piece, Option<Stamp>),
     /// Not in: no such file, or one refused and reported.
     Out(Option<Stamp>),
 }
 
-/// Where the elements of a file in are.
+/// Where the elements (for `Rows`) or layers (for `Volume`) of a file in are.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Piece {
     /// A Field of their own, on the device where the session has one, not
     /// yet joined.
     Own(Handle),
-    /// How many there are from where, in the result the node last joined:
-    /// joined, a file keeps no Field of its own.
+    /// Start index and count (elements for `Rows`, layers for `Volume`) in
+    /// the result the node last joined: joined, a file keeps no Field of its
+    /// own.
     Joined(usize, usize),
 }
 
 impl Chunk {
     fn stamp(&self) -> Option<Stamp> {
         match self {
-            Self::Coming(_, stamp) | Self::In(_, stamp) | Self::Out(stamp) => *stamp,
+            Self::Coming(_, stamp)
+            | Self::Ready(_, stamp)
+            | Self::In(_, stamp)
+            | Self::Out(stamp) => *stamp,
         }
     }
 
-    /// Lets go of the Field of a file in not yet joined.
-    fn let_go(self, host: &mut Host) {
-        if let Self::In(Piece::Own(handle), _) = self {
-            let _ = host.release(handle);
+    /// Cancels a pending read or lets go of the Field of a file not yet joined.
+    fn let_go(mut self, host: &mut Host) {
+        match self {
+            Self::Coming(ref mut later, _) => later.cancel(),
+            Self::In(Piece::Own(handle), _) => {
+                let _ = host.release(handle);
+            }
+            Self::Ready(..) | Self::In(Piece::Joined(..), _) | Self::Out(_) => {}
         }
     }
 }
@@ -90,60 +109,103 @@ fn ask(store: &dyn Store, file: &Path, background: bool) -> Box<dyn crate::store
     }
 }
 
-/// A Field file as it came in for a `fields` node whose element is
-/// `element` (where a Kernel reads it): its elements laid out as the node
-/// joins them ([`joined_as`]), within `room` words.
+/// Decodes an arrived file for a `fields` node whose element is `element`
+/// (where a Kernel reads it), preserving block-compressed textures directly
+/// without CPU decompression when their layout already matches `joined_as`.
 fn taken(
+    file: &Path,
     arrived: &dyn crate::store::Arrived,
     element: Option<&Schema>,
+    node_ty: &str,
+    is_volume: bool,
     room: usize,
 ) -> Result<FieldData, String> {
-    let mut want = entelechy_formats::file::HEADER_BYTES;
-    let start = loop {
-        let start = arrived.start(want);
-        if start.len() < want || entelechy_formats::file::header_whole(&start) {
-            break start;
+    let ext = entelechy_formats::extension(file);
+    let data = if ext == "field" || ext.is_empty() {
+        let mut want = entelechy_formats::file::HEADER_BYTES;
+        let start = loop {
+            let start = arrived.start(want);
+            if start.len() < want || entelechy_formats::file::header_whole(&start) {
+                break start;
+            }
+            want = want.saturating_mul(2);
+        };
+        let (schema, domain, from) =
+            entelechy_formats::file::layout(&start).map_err(|e| e.to_string())?;
+        if let Some(element) = element
+            && schema.scalars() != element.scalars()
+        {
+            return Err(format!(
+                "its elements are {schema}, where the node's are {element}"
+            ));
         }
-        want = want.saturating_mul(2);
-    };
-    let (schema, domain, from) =
-        entelechy_formats::file::layout(&start).map_err(|e| e.to_string())?;
-    if let Some(element) = element
-        && schema.scalars() != element.scalars()
-    {
+        let needed = schema.storage_words(domain.count());
+        if needed > room {
+            return Err(entelechy_kernel::HostError::BudgetExceeded {
+                requested: needed,
+                available: room,
+            }
+            .to_string());
+        }
+        let (words, bytes) = arrived.words(from);
+        entelechy_formats::file::from_words(schema, domain, words, bytes)
+            .map_err(|e| e.to_string())?
+    } else if is_volume && matches!(ext.as_str(), "ktx2" | "dds" | "png" | "ppm" | "pgm") {
+        let bytes: Cow<'_, [u8]> = match arrived.as_bytes() {
+            Some(slice) => Cow::Borrowed(slice),
+            None => Cow::Owned(arrived.start(arrived.len())),
+        };
+        entelechy_formats::fits(&bytes, file, room)?;
+        let want_grid = node_ty
+            .strip_prefix("Volume<")
+            .map(|rest| format!("Grid<{rest}"));
+        let (data, _) = entelechy_formats::decode(&bytes, file, want_grid.as_deref(), room)?;
+        if let Some(element) = element
+            && data.schema().scalars() != element.scalars()
+        {
+            return Err(format!(
+                "its elements are {}, where the node's are {element}",
+                data.schema()
+            ));
+        }
+        data
+    } else if is_volume {
         return Err(format!(
-            "its elements are {schema}, where the node's are {element}"
+            "unsupported file `.{ext}` for a Volume fields node (use .ktx2, .dds, .png, .ppm, .pgm, or .field)"
+        ));
+    } else {
+        return Err(format!(
+            "unsupported file `.{ext}` for a Rows fields node (use .field)"
+        ));
+    };
+
+    if is_volume && !matches!(data.domain().shape(), Shape::Grid | Shape::Volume) {
+        return Err(format!(
+            "a Volume fields node requires 2D Grid or Volume files, not {}",
+            data.domain().shape()
         ));
     }
-    let needed = schema.storage_words(domain.count());
-    if needed > room {
-        return Err(entelechy_kernel::HostError::BudgetExceeded {
-            requested: needed,
-            available: room,
-        }
-        .to_string());
-    }
-    let (words, bytes) = arrived.words(from);
-    let data = entelechy_formats::file::from_words(schema, domain, words, bytes)
-        .map_err(|e| e.to_string())?;
     let joined = joined_as(element, data.schema().scalars());
     if *data.schema() == joined {
         return Ok(data);
     }
-    FieldData::from_values(joined, domain, &data.values()).map_err(|e| e.to_string())
+    FieldData::from_values(joined, data.domain(), &data.values()).map_err(|e| e.to_string())
 }
 
 /// A fields node's outputs from what it holds, those of `ports` its
-/// scene reads: `result`, the elements of the files in, in the order
-/// named, joined from where they are ([`Runtime::join`]), one zero
-/// element where none is; `ranges`, a row a path, where its elements start
-/// and how many there are, -1 and 0 for one not in (one such row where no
-/// path is named). Joined, a file's own Field is let go and its elements
-/// are found in the result.
+/// scene reads:
+/// - `result`: elements of loaded files concatenated in `paths` order (`Rows`),
+///   or 2D texture layers stacked along Z (`Volume` / `Texture2DArray`), joined
+///   GPU-to-GPU where resident ([`Runtime::join_domain`]); one zero element (or
+///   1x1x1 layer) when none are loaded.
+/// - `ranges`: one `IVec2` row per path: `(start, count)` in elements (`Rows`)
+///   or layers (`Volume`), `(-1, 0)` for pending/absent paths.
 fn made_in(
     node: &mut FieldNode,
+    node_name: &str,
     runtime: &mut Runtime,
     ports: &[&str],
+    events: &mut Vec<Event>,
 ) -> Vec<(&'static str, Result<Handle, String>)> {
     let host = runtime.host_mut();
     let schema = node.element.clone().or_else(|| {
@@ -155,32 +217,114 @@ fn made_in(
             _ => None,
         })
     });
+    struct RejectedLayer {
+        path: String,
+        own_handle: Option<Handle>,
+        got: (u32, u32),
+        expected: (u32, u32),
+    }
     let mut ranges = Vec::with_capacity(node.paths.len().max(1) * 2);
     let mut parts = Vec::new();
     let mut placed = Vec::new();
+    let mut rejected: Vec<RejectedLayer> = Vec::new();
+    let mut target_dims: Option<(u32, u32)> = None;
     let mut start = 0usize;
+
     for path in &node.paths {
-        let part = match node.files.get(path) {
-            Some(Chunk::In(Piece::Own(handle), _)) => host
-                .domain(*handle)
-                .ok()
-                .map(|domain| (*handle, 0..domain.count())),
-            Some(Chunk::In(Piece::Joined(from, count), _)) => {
-                node.joined.map(|joined| (joined, *from..from + count))
+        if node.is_volume {
+            let entry = match node.files.get(path) {
+                Some(Chunk::In(Piece::Own(handle), _)) => host.domain(*handle).ok().map(|d| {
+                    (
+                        *handle,
+                        (d.width(), d.height()),
+                        0..d.count(),
+                        d.depth() as usize,
+                        true,
+                    )
+                }),
+                Some(Chunk::In(Piece::Joined(from_layer, layer_count), _)) => {
+                    node.joined.and_then(|joined| {
+                        let d = host.domain(joined).ok()?;
+                        let layer_elems = (d.width() as usize) * (d.height() as usize);
+                        let begin = *from_layer * layer_elems;
+                        let end = (*from_layer + *layer_count) * layer_elems;
+                        Some((
+                            joined,
+                            (d.width(), d.height()),
+                            begin..end,
+                            *layer_count,
+                            false,
+                        ))
+                    })
+                }
+                _ => None,
+            };
+            match entry {
+                Some((handle, dims, range, layers, is_own)) => {
+                    let expected = *target_dims.get_or_insert(dims);
+                    if dims != expected {
+                        rejected.push(RejectedLayer {
+                            path: path.clone(),
+                            own_handle: is_own.then_some(handle),
+                            got: dims,
+                            expected,
+                        });
+                        ranges.extend([-1i32 as u32, 0]);
+                        continue;
+                    }
+                    ranges.extend([start as u32, layers as u32]);
+                    placed.push((path.clone(), start, layers));
+                    parts.push((handle, range));
+                    start += layers;
+                }
+                None => ranges.extend([-1i32 as u32, 0]),
             }
-            _ => None,
-        };
-        match part {
-            Some((handle, range)) => {
-                let count = range.len();
-                ranges.extend([start as u32, count as u32]);
-                placed.push((path.clone(), start, count));
-                parts.push((handle, range));
-                start += count;
+        } else {
+            let part = match node.files.get(path) {
+                Some(Chunk::In(Piece::Own(handle), _)) => host
+                    .domain(*handle)
+                    .ok()
+                    .map(|domain| (*handle, 0..domain.count())),
+                Some(Chunk::In(Piece::Joined(from, count), _)) => {
+                    node.joined.map(|joined| (joined, *from..from + count))
+                }
+                _ => None,
+            };
+            match part {
+                Some((handle, range)) => {
+                    let count = range.len();
+                    ranges.extend([start as u32, count as u32]);
+                    placed.push((path.clone(), start, count));
+                    parts.push((handle, range));
+                    start += count;
+                }
+                None => ranges.extend([-1i32 as u32, 0]),
             }
-            None => ranges.extend([-1i32 as u32, 0]),
         }
     }
+
+    for RejectedLayer {
+        path,
+        own_handle,
+        got: (gw, gh),
+        expected: (ew, eh),
+    } in rejected
+    {
+        if let Some(handle) = own_handle {
+            let _ = host.release(handle);
+        }
+        if let Some(chunk) = node.files.get_mut(&path) {
+            let stamp = chunk.stamp();
+            *chunk = Chunk::Out(stamp);
+        }
+        events.push(Event::Rejected {
+            path: node.dir.join(&path),
+            error: Diagnostic::new(format!(
+                "fields node `{node_name}`: {path}: extent {gw}x{gh} does not match the node's layer size {ew}x{eh}"
+            )),
+        });
+    }
+
     if ranges.is_empty() {
         ranges.extend([-1i32 as u32, 0]);
     }
@@ -190,7 +334,7 @@ fn made_in(
             "ranges",
             FieldData::from_storage(
                 Schema::new(vec![entelechy_kernel::Scalar::Int; 2]),
-                entelechy_kernel::Domain::Rows((ranges.len() / 2) as u32),
+                Domain::Rows((ranges.len() / 2) as u32),
                 ranges,
             )
             .and_then(|data| host.adopt(data))
@@ -201,7 +345,17 @@ fn made_in(
         return made;
     };
     let result = if parts.is_empty() {
-        host.create(schema, entelechy_kernel::Domain::Rows(1))
+        let empty_domain = if node.is_volume {
+            Domain::Volume(1, 1, 1)
+        } else {
+            Domain::Rows(1)
+        };
+        host.create(schema, empty_domain).map_err(|e| e.to_string())
+    } else if node.is_volume {
+        let (w, h) = target_dims.expect("non-empty volume parts set target_dims");
+        let layers = u32::try_from(start).unwrap_or(u32::MAX);
+        runtime
+            .join_domain(&parts, &schema, Domain::Volume(w, h, layers))
             .map_err(|e| e.to_string())
     } else {
         runtime.join(&parts, &schema).map_err(|e| e.to_string())
@@ -220,13 +374,17 @@ fn made_in(
     made
 }
 
-/// A file's elements as a Field of a fields node's: put on the device
-/// where the session has one and their words join there, the Host copy
-/// let go, so the node keeps none of a file's words in memory.
+/// A file's elements as a Field of a fields node's: put on the device where
+/// the session has one and its blocks or words join there, the Host copy let
+/// go, so the node keeps none of a file's bytes in Host RAM.
 fn kept_in(runtime: &mut Runtime, data: FieldData) -> Result<Handle, String> {
+    let compressed = data.blocks().is_some();
     let whole_words = data.schema().element_bytes().is_multiple_of(4);
     let handle = runtime.host_mut().adopt(data).map_err(|e| e.to_string())?;
-    if whole_words && runtime.has_device() && runtime.upload(handle).unwrap_or(false) {
+    if (compressed || whole_words)
+        && runtime.has_device()
+        && runtime.upload(handle).unwrap_or(false)
+    {
         let _ = runtime.host_mut().let_go_of_copy(handle);
     }
     Ok(handle)
@@ -274,15 +432,17 @@ impl Inputs {
         }
         let background = self.background;
         for node in &files.field_nodes {
+            let is_volume = node.ty.starts_with("Volume<");
             if self
                 .field_nodes
                 .get(&node.node)
-                .is_none_or(|known| known.dir != node.dir)
+                .is_none_or(|known| known.dir != node.dir || known.is_volume != is_volume)
             {
                 let before = self.field_nodes.insert(
                     node.node.clone(),
                     FieldNode {
                         dir: node.dir.clone(),
+                        is_volume,
                         paths: Vec::new(),
                         files: BTreeMap::new(),
                         seen: None,
@@ -322,18 +482,22 @@ impl Inputs {
         }
     }
 
-    /// Takes in the files fields node `node` named that came in, and makes
-    /// its outputs again where what it holds changed.
+    /// Takes in the files fields node `node` named that came in (respecting
+    /// the per-frame upload budget when background streaming is enabled), and
+    /// makes its outputs again where what it holds changed.
     fn settle_field_node(
         &mut self,
         node: &entelechy_scene::FieldsNode,
         runtime: &mut Runtime,
         events: &mut Vec<Event>,
     ) {
+        let background = self.background;
         let room = room(runtime.host());
         let Some(known) = self.field_nodes.get_mut(&node.node) else {
             return;
         };
+        // Step 1: non-blockingly drain any completed background reads into
+        // `Chunk::Ready` so worker channels clear promptly.
         for (path, chunk) in &mut known.files {
             let Chunk::Coming(later, stamp) = chunk else {
                 continue;
@@ -343,39 +507,75 @@ impl Inputs {
             };
             let stamp = *stamp;
             let file = node.dir.join(path);
-            known.changed = true;
-            *chunk = match read {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Chunk::Out(stamp),
+            match read {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    known.changed = true;
+                    *chunk = Chunk::Out(stamp);
+                }
                 Err(error) => {
+                    known.changed = true;
                     events.push(Event::Rejected {
                         path: file,
                         error: Diagnostic::new(format!("fields node `{}`: {error}", node.node)),
                     });
+                    *chunk = Chunk::Out(stamp);
+                }
+                Ok(arrived) => {
+                    *chunk = Chunk::Ready(arrived, stamp);
+                }
+            }
+        }
+        // Step 2: decode and upload ready chunks within the per-frame budget
+        // (always settling at least one file per tick; unbounded when
+        // background mode is off so replays remain strictly deterministic).
+        let mut settled_bytes = 0usize;
+        let mut settled_count = 0usize;
+        let is_volume = known.is_volume;
+        let element = known.element.clone();
+        for (path, chunk) in &mut known.files {
+            if !matches!(chunk, Chunk::Ready(..)) {
+                continue;
+            }
+            if background && settled_count > 0 && settled_bytes >= STREAM_UPLOAD_BYTES_PER_FRAME {
+                break;
+            }
+            let Chunk::Ready(arrived, stamp) = std::mem::replace(chunk, Chunk::Out(None)) else {
+                unreachable!();
+            };
+            let file_bytes = arrived.len();
+            let file = node.dir.join(path);
+            known.changed = true;
+            *chunk = match taken(
+                &file,
+                arrived.as_ref(),
+                element.as_ref(),
+                &node.ty,
+                is_volume,
+                room,
+            )
+            .and_then(|data| kept_in(runtime, data))
+            {
+                Ok(handle) => Chunk::In(Piece::Own(handle), stamp),
+                Err(why) => {
+                    events.push(Event::Rejected {
+                        path: file,
+                        error: Diagnostic::new(format!(
+                            "fields node `{}`: {path}: {why}",
+                            node.node
+                        )),
+                    });
                     Chunk::Out(stamp)
                 }
-                Ok(arrived) => match taken(arrived.as_ref(), known.element.as_ref(), room)
-                    .and_then(|data| kept_in(runtime, data))
-                {
-                    Ok(handle) => Chunk::In(Piece::Own(handle), stamp),
-                    Err(why) => {
-                        events.push(Event::Rejected {
-                            path: file,
-                            error: Diagnostic::new(format!(
-                                "fields node `{}`: {path}: {why}",
-                                node.node
-                            )),
-                        });
-                        Chunk::Out(stamp)
-                    }
-                },
             };
+            settled_bytes = settled_bytes.saturating_add(file_bytes);
+            settled_count += 1;
         }
         if !known.changed {
             return;
         }
         known.changed = false;
         let ports: Vec<&str> = node.outputs.iter().map(|(port, _)| port.as_str()).collect();
-        let made = made_in(known, runtime, &ports);
+        let made = made_in(known, &node.node, runtime, &ports, events);
         for (port, handle) in made {
             let held = handle.map(|handle| {
                 if let Some((_, external)) = node.outputs.iter().find(|(name, _)| name == port) {
@@ -399,10 +599,11 @@ impl Inputs {
     }
 
     /// Gives fields node `node` the paths `paths` spell (read from the
-    /// Field `handle`): a file no longer named is let go, one newly named
-    /// asked for, taken in by a sync once it is in. Refused whole, the
-    /// paths before staying, where a path is not one under the directory or
-    /// is not readable; reported by the next sync.
+    /// Field `handle`): a file no longer named is let go (cancelling any
+    /// in-flight background read), one newly named asked for, taken in by a
+    /// sync once it is in. Refused whole, the paths before staying, where a
+    /// path is not one under the directory or is not readable; reported by
+    /// the next sync.
     pub fn give_field_paths(
         &mut self,
         store: &dyn Store,

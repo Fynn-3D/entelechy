@@ -479,8 +479,10 @@ pub(crate) fn emit_preamble(
             continue;
         }
         if textured.contains(&index) {
+            let enc = input_encoding(module, index);
             let tex_ty = match port.shape() {
                 Shape::Grid => "texture_2d<f32>",
+                Shape::Volume if enc == Encoding::Unorm8 => "texture_2d_array<f32>",
                 Shape::Volume => "texture_3d<f32>",
                 Shape::Rows => unreachable!("rows inputs are never textured"),
             };
@@ -837,10 +839,19 @@ fn index_in{index}(c: vec2<f32>) -> u32 {{
                     );
                 }
                 Shape::Volume => {
+                    let load_expr = if input_encoding(module, index) == Encoding::Unorm8 {
+                        format!(
+                            "textureLoad(in{index}, vec2<i32>(i32(x), i32(y)), i32(z), 0){swizzle}"
+                        )
+                    } else {
+                        format!(
+                            "textureLoad(in{index}, vec3<i32>(i32(x), i32(y), i32(z)), 0){swizzle}"
+                        )
+                    };
                     let _ = writeln!(
                         out,
                         "fn texel_in{index}(x: u32, y: u32, z: u32) -> {ty} {{
-    return textureLoad(in{index}, vec3<i32>(i32(x), i32(y), i32(z)), 0){swizzle};
+    return {load_expr};
 }}
 fn at_in{index}(c: vec3<f32>) -> {ty} {{
     let w = bitcast<u32>(ctx[{slot}].x);

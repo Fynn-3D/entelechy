@@ -619,25 +619,18 @@ fn check_in(
                     ));
                 }
                 // A fields node's ranges, two Ints a path, and its result,
-                // rows of its element.
+                // rows (or volume layers) of its element.
                 if let Some((node, port)) = lowered.files.field_nodes.iter().find_map(|node| {
                     let (port, _) = node.outputs.iter().find(|(_, external)| external == name)?;
                     Some((node, port))
                 }) {
-                    let element = if port == "ranges" {
-                        "IVec2"
-                    } else {
-                        node.ty
-                            .split_once('<')
-                            .and_then(|(_, rest)| rest.strip_suffix('>'))
-                            .unwrap_or("")
-                            .trim()
-                    };
-                    let schema = element
-                        .parse::<entelechy_ir::Type>()
-                        .ok()
-                        .and_then(|element| entelechy_ir::schema_of(element, &[]));
-                    return Some((entelechy_ir::Shape::Rows, schema));
+                    if port == "ranges" {
+                        return Some((
+                            entelechy_ir::Shape::Rows,
+                            entelechy_ir::schema_of(entelechy_ir::Type::IVec2, &[]),
+                        ));
+                    }
+                    return crate::devices::declared(&node.ty, false);
                 }
                 let asset = lowered.files.assets.iter().find(|a| a.name == *name)?;
                 crate::devices::declared(&asset.ty, asset.bytes)

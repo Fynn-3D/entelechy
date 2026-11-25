@@ -12,10 +12,10 @@ use std::fmt;
 use std::str::FromStr;
 
 pub use entelechy_host::{
-    Census, Domain, Encoding, FieldBytes, FieldData, Handle, Host, HostError, Image, MadeFrom,
-    PAGE_WORDS, Pages, Pixel, Scalar, Schema, Shape, Version,
+    BlockFormat, Census, CompressedBlocks, Domain, Encoding, FieldBytes, FieldData, Handle, Host,
+    HostError, Image, MadeFrom, PAGE_WORDS, Pages, Pixel, Scalar, Schema, Shape, Version,
 };
-pub use entelechy_host::{DEFAULT_WORK, MAX_WORK, encoding};
+pub use entelechy_host::{DEFAULT_WORK, MAX_WORK, block, encoding};
 
 /// A named authority a Kernel may declare and be granted; what each
 /// grants is [`Capability::doc`].
@@ -1335,6 +1335,13 @@ impl<'a> Scope<'a> {
         Ok(self.host.data(field)?.storage())
     }
 
+    /// Hardware block-compressed payload of an input, when stored as BCn
+    /// blocks. Requires `field.read`.
+    pub fn blocks(&self, field: Handle) -> Result<Option<&CompressedBlocks>, AbiError> {
+        self.require(Capability::FieldRead)?;
+        Ok(self.host.data(field)?.blocks())
+    }
+
     /// A copy of an input's memory as kept, to write in place: a scan's
     /// memory, which the bound Field never sees changed. Copied a page at a
     /// time where the Host knows the Field was made from words it still
@@ -1414,6 +1421,19 @@ impl<'a> Scope<'a> {
         Ok(self.host.make_resident(field, device)?)
     }
 
+    /// Gives an input a device-resident copy with explicit `device_bytes`
+    /// accounting (for hardware block-compressed textures). Requires
+    /// `field.read`.
+    pub fn make_resident_bytes(
+        &mut self,
+        field: Handle,
+        device_bytes: u64,
+        device: Box<dyn std::any::Any + Send + Sync>,
+    ) -> Result<(), AbiError> {
+        self.require(Capability::FieldRead)?;
+        Ok(self.host.make_resident_bytes(field, device_bytes, device)?)
+    }
+
     /// A new zeroed Field. Requires `field.write`.
     pub fn create(&mut self, schema: Schema, domain: Domain) -> Result<Handle, AbiError> {
         self.require(Capability::FieldWrite)?;
@@ -1477,6 +1497,21 @@ impl<'a> Scope<'a> {
     ) -> Result<Handle, AbiError> {
         self.require(Capability::FieldWrite)?;
         Ok(self.host.adopt_resident(schema, domain, device)?)
+    }
+
+    /// A new device-resident Field charged `device_bytes` (for hardware
+    /// block-compressed textures). Requires `field.write`.
+    pub fn adopt_resident_bytes(
+        &mut self,
+        schema: Schema,
+        domain: Domain,
+        device_bytes: u64,
+        device: Box<dyn std::any::Any + Send + Sync>,
+    ) -> Result<Handle, AbiError> {
+        self.require(Capability::FieldWrite)?;
+        Ok(self
+            .host
+            .adopt_resident_bytes(schema, domain, device_bytes, device)?)
     }
 
     /// Releases a Field this scope created. Requires `field.write`.

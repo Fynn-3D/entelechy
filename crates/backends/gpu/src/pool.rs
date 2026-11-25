@@ -4,10 +4,12 @@
 use super::*;
 use std::ops::Range;
 
-/// A resident image: its pixels as a storage buffer of `vec4<f32>`, with an
-/// optional lazily-populated 2D/3D hardware texture mirror for TMU-cached reads.
+/// A resident image: either a storage buffer (with an optional lazily-populated
+/// 2D/3D hardware texture mirror) or a hardware block-compressed 2D/2D-array
+/// texture (`compressed`, with zero uncompressed storage buffer until a buffer
+/// consumer asks for one).
 pub(crate) struct DeviceImage {
-    pub(crate) buffer: wgpu::Buffer,
+    pub(crate) buffer: Option<wgpu::Buffer>,
     /// Where the buffer goes when its Field is released, for the next output
     /// of its size. `None` when the buffer is not the backend's to keep.
     pub(crate) spare: Option<Spare>,
@@ -16,15 +18,37 @@ pub(crate) struct DeviceImage {
     pub(crate) holds: Option<Held>,
     /// Lazily populated hardware 2D/3D texture mirror (`TYPED-FIELD-ARCHITECTURE.md` §2).
     pub(crate) mirror: Mutex<Option<crate::texture::TextureMirror>>,
+    /// Direct hardware block-compressed texture (`BC1`/`BC4`/`BC5`/`BC7`), when
+    /// resident without an uncompressed storage buffer.
+    pub(crate) compressed: Option<crate::texture::CompressedTexture>,
+    /// Lazily unpacked `unorm8` buffer for a compressed texture when downloaded,
+    /// presented, or read via a non-textured storage binding.
+    pub(crate) unpacked: Mutex<Option<wgpu::Buffer>>,
 }
 
 impl DeviceImage {
     pub(crate) fn new(buffer: wgpu::Buffer, spare: Option<Spare>, holds: Option<Held>) -> Self {
         Self {
-            buffer,
+            buffer: Some(buffer),
             spare,
             holds,
             mirror: Mutex::new(None),
+            compressed: None,
+            unpacked: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn compressed(
+        texture: crate::texture::CompressedTexture,
+        spare: Option<Spare>,
+    ) -> Self {
+        Self {
+            buffer: None,
+            spare,
+            holds: None,
+            mirror: Mutex::new(None),
+            compressed: Some(texture),
+            unpacked: Mutex::new(None),
         }
     }
 }
@@ -306,7 +330,17 @@ impl Drop for DeviceImage {
         // command that reads it was submitted before whatever writes it next,
         // and one queue runs in order.
         if let Some(spare) = self.spare.take() {
-            spare.keep(self.buffer.clone(), self.holds.take());
+            if let Some(buffer) = self.buffer.take() {
+                spare.keep(buffer, self.holds.take());
+            }
+            if let Some(unpacked) = self
+                .unpacked
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take()
+            {
+                spare.keep(unpacked, None);
+            }
         }
     }
 }

@@ -988,12 +988,18 @@ be keywords.
    row of `-1` and `0`. A file is asked for when first named and let go
    when no longer named; one that changes is read again. Where the
    session prepares in the background (the Player, a served session, a
-   page) a file is read off the frames, taken in by the first sync after
-   it is in, the frames going on with what was in meanwhile; a replay or
-   a run takes each in a frame later, as a files node does. Its type is a
-   `Rows` of the element; a fields node takes no domain or params. It is
-   how a world larger than memory keeps in it only what its frames are
-   near ([why](DECISIONS.md#what-a-scene-reads-of-the-hosts-world-is-an-input-or-a-node)).
+   page) files are read through a bounded background I/O pool with
+   per-request cancellation when paths leave the active set, and uploaded
+   within a per-frame budget so large-world bursts never stall a frame; a
+   replay or a run takes each in deterministically a frame later, as a
+   files node does. Its type is a `Rows` of the element (joining `.field`
+   chunks end-to-end) or a `Volume` of the element (stacking same-extent
+   2D `.ktx2`, `.dds`, `.png`, `.ppm`, `.pgm`, or 2D `.field` layers along
+   `Z` into a hardware `Texture2DArray`, where `ranges` gives each path's
+   `(layer_start, layer_count)` and identical hardware BC layers join
+   GPU-to-GPU without decompression); a fields node takes no domain or
+   params. It is how a world larger than memory keeps in it only what its
+   frames are near ([why](DECISIONS.md#what-a-scene-reads-of-the-hosts-world-is-an-input-or-a-node)).
 10. `times = N;` on a Kernel node or placed graph stands for `name/1` to
     `name/N`, each wired as written; `carry port <- output;` feeds the
     port from the previous time's output from the second time on.

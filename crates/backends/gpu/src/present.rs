@@ -372,10 +372,13 @@ impl WgpuDisplay {
         let image = device
             .downcast_ref::<DeviceImage>()
             .ok_or_else(|| "image is resident on a different backend".to_string())?;
+        let buffer = image.buffer.as_ref().ok_or_else(|| {
+            "resident compressed texture cannot be presented directly as wide pixels".to_string()
+        })?;
         let placement = placement(width, height, window_width, window_height);
         self.present_buffer(
             presenter,
-            Some(&image.buffer),
+            Some(buffer),
             width,
             height,
             placement,

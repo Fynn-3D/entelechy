@@ -285,6 +285,12 @@ entelechy export examples/voxel/scene.esn --out voxel.html   # one page that pla
 - TrueType or OpenType: glyphs, outlines and metrics for `--chars`, or
   every character; a scene may also read a font itself with
   `node glyphs: font "x.ttf" { codes <- wanted.result; }`.
+- PNG, PPM, or PGM images: hardware block-compressed textures (`.ktx2` by
+  default, or `--container dds`) with `--format bc7|bc5|bc4|bc1` (default
+  `bc7` for color, `bc4` for grayscale `.pgm`). Scenes read `.ktx2` and
+  `.dds` directly into `Grid<... as unorm8>` or streamed `Volume<... as unorm8>`
+  `fields` nodes with zero CPU decompression on hardware supporting
+  `TEXTURE_COMPRESSION_BC`.
 
 `entelechy-export` writes Host files as other software's formats:
 vertices, triangles and PNGs as a GLB (`<stem>.normal.png`,

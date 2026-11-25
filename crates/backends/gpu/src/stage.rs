@@ -86,7 +86,7 @@ pub(crate) struct Staged {
     pub(crate) params_buffer: wgpu::Buffer,
     pub(crate) context_slice: crate::batch::UniformSlice,
     pub(crate) params_slice: crate::batch::UniformSlice,
-    pub(crate) input_buffers: Vec<wgpu::Buffer>,
+    pub(crate) input_buffers: Vec<Option<wgpu::Buffer>>,
     /// What the passes bind for the inputs, by binding: the inputs' own
     /// buffers, and the pack where some are packed.
     pub(crate) bound_inputs: Vec<(u32, wgpu::Buffer)>,
@@ -203,17 +203,74 @@ pub(crate) fn adopt_outputs(
 }
 
 impl WgpuBackend {
+    /// Returns the resident storage buffer of `image`, lazily unpacking a
+    /// hardware block-compressed texture on the GPU if `image` has no storage
+    /// buffer yet.
+    pub(crate) fn buffer_of(&self, image: &DeviceImage) -> Result<wgpu::Buffer, ExecutionError> {
+        if let Some(buffer) = &image.buffer {
+            return Ok(buffer.clone());
+        }
+        let mut unpacked = image.unpacked.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(buffer) = unpacked.as_ref() {
+            return Ok(buffer.clone());
+        }
+        let ct = image.compressed.as_ref().ok_or_else(|| {
+            ExecutionError::Device(
+                "resident GPU image holds neither storage buffer nor compressed texture".to_owned(),
+            )
+        })?;
+        let buffer = self.decompress_compressed_to_buffer(ct)?;
+        *unpacked = Some(buffer.clone());
+        Ok(buffer)
+    }
+
+    /// Uploads a block-compressed Host Field directly into a native hardware
+    /// BC1/BC4/BC5/BC7 `wgpu::Texture` (zero uncompressed storage buffer),
+    /// returning its view if compressed hardware residency applies.
+    pub(crate) fn upload_compressed(
+        &self,
+        scope: &mut Scope<'_>,
+        handle: Handle,
+    ) -> Result<Option<wgpu::TextureView>, ExecutionError> {
+        if !self.texture_compression_bc {
+            return Ok(None);
+        }
+        if let Some(view) = scope
+            .resident(handle)?
+            .and_then(|dev| dev.downcast_ref::<DeviceImage>())
+            .and_then(|img| img.compressed.as_ref())
+            .map(|ct| ct.view.clone())
+        {
+            return Ok(Some(view));
+        }
+        if scope.resident(handle)?.is_some() {
+            return Ok(None);
+        }
+        let Some(blocks) = scope.blocks(handle)? else {
+            return Ok(None);
+        };
+        let domain = scope.size(handle)?;
+        let ct = self.create_compressed_texture(domain, blocks.format(), blocks.bytes())?;
+        let view = ct.view.clone();
+        let bytes = ct.bytes;
+        scope.make_resident_bytes(
+            handle,
+            bytes,
+            Box::new(DeviceImage::compressed(ct, Some(self.spare.clone()))),
+        )?;
+        Ok(Some(view))
+    }
+
     pub(crate) fn bind_input(
         &self,
         scope: &mut Scope<'_>,
         handle: Handle,
     ) -> Result<wgpu::Buffer, ExecutionError> {
-        let resident = scope
+        if let Some(image) = scope
             .resident(handle)?
             .and_then(|device| device.downcast_ref::<DeviceImage>())
-            .map(|device| device.buffer.clone());
-        if let Some(buffer) = resident {
-            return Ok(buffer);
+        {
+            return self.buffer_of(image);
         }
         let usage = wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_SRC
@@ -283,6 +340,7 @@ impl WgpuBackend {
             .ok()??
             .downcast_ref::<DeviceImage>()?
             .buffer
+            .as_ref()?
             .clone();
         if from.size() < size {
             return None;
@@ -392,9 +450,11 @@ impl WgpuBackend {
         if !batched {
             self.batch.flush()?;
         }
-        // Inputs: bind resident buffers directly; upload the rest once and
-        // leave them resident.
-        let mut input_buffers: Vec<wgpu::Buffer> = Vec::with_capacity(invocation.inputs.len());
+        // Inputs: bind resident buffers directly (skipping storage buffers for
+        // hardware block-compressed textures bound as sampled textures!); upload
+        // the rest once and leave them resident.
+        let mut input_buffers: Vec<Option<wgpu::Buffer>> =
+            Vec::with_capacity(invocation.inputs.len());
         let mut input_extents: Vec<entelechy_abi::Domain> =
             Vec::with_capacity(invocation.inputs.len());
         // A memory's steps write it, so the bound buffer is a copy of the
@@ -404,9 +464,17 @@ impl WgpuBackend {
         for (index, handle) in invocation.inputs.iter().enumerate() {
             let extent = scope.size(*handle)?;
             input_extents.push(extent);
-            let bound = self.bind_input(scope, *handle)?;
             let port = &module.manifest.inputs[index];
-            if module.manifest.memories.contains(&port.name) {
+            let is_memory = module.manifest.memories.contains(&port.name);
+            if !is_memory
+                && pipeline.textured.contains(&index)
+                && self.upload_compressed(scope, *handle)?.is_some()
+            {
+                input_buffers.push(None);
+                continue;
+            }
+            let bound = self.bind_input(scope, *handle)?;
+            if is_memory {
                 let size = (port.ty.schema.storage_words(extent.count()) * 4) as u64;
                 let copy = self.spare.take(
                     &self.device,
@@ -419,9 +487,9 @@ impl WgpuBackend {
                 // before it, once the uniforms are settled.
                 copies.push((bound, copy.clone(), size));
                 memory_outputs.push((index, copy.clone(), extent));
-                input_buffers.push(copy);
+                input_buffers.push(Some(copy));
             } else {
-                input_buffers.push(bound);
+                input_buffers.push(Some(bound));
             }
         }
         // What the pass binds for its inputs: each its own, except packed ones
@@ -432,6 +500,7 @@ impl WgpuBackend {
         for (index, buffer) in input_buffers.iter().enumerate() {
             if !pipeline.packed.iter().any(|group| group.contains(&index))
                 && !pipeline.textured.contains(&index)
+                && let Some(buffer) = buffer
             {
                 bound_inputs.push((wgsl::INPUT_BINDING + index as u32, buffer.clone()));
             }
@@ -487,7 +556,14 @@ impl WgpuBackend {
                     )
                 })?;
                 offsets.push(offset);
-                copies_in_group.push((input_buffers[index].clone(), packed_words * 4, words * 4));
+                copies_in_group.push((
+                    input_buffers[index]
+                        .as_ref()
+                        .expect("packed input holds a storage buffer")
+                        .clone(),
+                    packed_words * 4,
+                    words * 4,
+                ));
                 packed_words += words;
             }
             let byte_size = (packed_words * 4).max(16).div_ceil(16) * 16;
@@ -640,7 +716,10 @@ impl WgpuBackend {
                 None
             };
             pending_mirrors.push(texture::PendingMirrorCopy {
-                src: input_buffers[plan.input_index].clone(),
+                src: input_buffers[plan.input_index]
+                    .as_ref()
+                    .expect("mirrored input holds a storage buffer")
+                    .clone(),
                 dst: plan.mirror.texture.clone(),
                 width: plan.width,
                 height: plan.height,
@@ -795,7 +874,9 @@ impl WgpuBackend {
                 scatter,
                 buffer,
                 highs.as_ref(),
-                &input_buffers[*base as usize],
+                input_buffers[*base as usize]
+                    .as_ref()
+                    .expect("scatter base holds a storage buffer"),
                 &context_buffer,
                 *count,
                 output_words,
@@ -854,7 +935,9 @@ impl WgpuBackend {
                 &mut encoder,
                 lows,
                 &context_buffer,
-                &input_buffers[*base as usize],
+                input_buffers[*base as usize]
+                    .as_ref()
+                    .expect("scatter base holds a storage buffer"),
                 buffer,
                 count * output_words,
             );

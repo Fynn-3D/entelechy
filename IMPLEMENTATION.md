@@ -93,6 +93,19 @@ Packages built from existing modes, with no engine feature of their own.
   [planner](crates/core/graph/src/evaluate/plan.rs)); `values()` are a
   Kernel's words, `storage()` the Field's bytes. Held by the matrix's
   `narrow` rows and the [packed part](examples/data/README.md).
+- Hardware block-compressed textures (`BC1`, `BC4`, `BC5`, `BC7`): pure-Rust
+  Khronos §17 codec in the Host ([block](crates/core/host/src/block.rs)),
+  zero-decompression `.ktx2` and `.dds` containers in
+  [formats](crates/interface/formats/src/texture.rs) and
+  [import](crates/interface/import/src/texture.rs), native
+  `TEXTURE_COMPRESSION_BC` 2D and `Texture2DArray` residency with GPU-to-GPU
+  compressed layer `join` and software fallback
+  ([texture](crates/backends/gpu/src/texture.rs),
+  [gpu parity](crates/backends/gpu/tests/parity.rs)), plus bounded
+  cancellable background `IoPool` and frame-paced `Volume<E>` `fields` node
+  streaming ([store](crates/interface/documents/src/store.rs),
+  [field_nodes](crates/interface/documents/src/inputs/field_nodes.rs),
+  [fields tests](crates/interface/session/tests/fields_node.rs)).
 - Residency: the Host owns every Field; words return from the device only
   at observation, through `Runtime::image`
   ([runtime](crates/core/kernel/src/lib.rs), [parity](crates/backends/gpu/tests/parity.rs)).

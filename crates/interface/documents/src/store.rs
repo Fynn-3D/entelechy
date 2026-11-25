@@ -58,6 +58,9 @@ pub trait Later: Send {
     /// The file once it is in, or why it is not; `None` while it is
     /// still on its way. Answers once.
     fn poll(&mut self) -> Option<io::Result<Box<dyn Arrived>>>;
+    /// Signals that the caller no longer needs this read so pending
+    /// background I/O can be skipped before touching disk.
+    fn cancel(&mut self) {}
 }
 
 /// A file read whole, held where it was read into, its bytes taken as
@@ -74,6 +77,10 @@ pub trait Arrived: Send {
     /// Its bytes from `from` on as little-endian words, the last padded
     /// with zeros, and how many bytes they are.
     fn words(&self, from: usize) -> (Vec<u32>, usize);
+    /// Contiguous slice of all bytes when held in memory without copying.
+    fn as_bytes(&self) -> Option<&[u8]> {
+        None
+    }
 }
 
 /// A file's bytes in hand, as an [`Arrived`].
@@ -94,6 +101,10 @@ impl Arrived for Bytes {
         extend_words(&mut words, body);
         (words, body.len())
     }
+
+    fn as_bytes(&self) -> Option<&[u8]> {
+        Some(&self.0)
+    }
 }
 
 /// A file read already: a [`Later`] that answers at once.
@@ -110,6 +121,122 @@ pub(crate) fn read_now(read: io::Result<Vec<u8>>) -> Box<dyn Later> {
     Box::new(Now(Some(
         read.map(|bytes| Box::new(Bytes(bytes)) as Box<dyn Arrived>),
     )))
+}
+
+/// Bounded background worker pool for [`Disk::read_later`] with per-request
+/// cancellation so evicted large-world streaming reads skip disk I/O cleanly
+/// without spawning unbounded OS threads.
+#[cfg(not(target_arch = "wasm32"))]
+mod io_pool {
+    use std::collections::VecDeque;
+    use std::io;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
+
+    /// Fixed worker threads servicing background disk reads.
+    const WORKERS: usize = 4;
+
+    struct Job {
+        path: PathBuf,
+        cancelled: Arc<AtomicBool>,
+        reply: mpsc::Sender<io::Result<Vec<u8>>>,
+    }
+
+    struct Queue {
+        jobs: Mutex<VecDeque<Job>>,
+        wake: Condvar,
+    }
+
+    struct Reading {
+        receiver: mpsc::Receiver<io::Result<Vec<u8>>>,
+        cancelled: Arc<AtomicBool>,
+    }
+
+    impl Drop for Reading {
+        fn drop(&mut self) {
+            self.cancelled.store(true, Ordering::Relaxed);
+        }
+    }
+
+    impl super::Later for Reading {
+        fn poll(&mut self) -> Option<io::Result<Box<dyn super::Arrived>>> {
+            match self.receiver.try_recv() {
+                Ok(read) => super::read_now(read).poll(),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    Some(Err(io::Error::other("the read stopped")))
+                }
+            }
+        }
+
+        fn cancel(&mut self) {
+            self.cancelled.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn pool() -> &'static Arc<Queue> {
+        static POOL: OnceLock<Arc<Queue>> = OnceLock::new();
+        POOL.get_or_init(|| {
+            let queue = Arc::new(Queue {
+                jobs: Mutex::new(VecDeque::new()),
+                wake: Condvar::new(),
+            });
+            for index in 0..WORKERS {
+                let worker_queue = Arc::clone(&queue);
+                let _ = std::thread::Builder::new()
+                    .name(format!("entelechy-io-{index}"))
+                    .spawn(move || {
+                        loop {
+                            let job = {
+                                let mut guard = worker_queue
+                                    .jobs
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                while guard.is_empty() {
+                                    guard = worker_queue
+                                        .wake
+                                        .wait(guard)
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                }
+                                guard.pop_front()
+                            };
+                            let Some(job) = job else { continue };
+                            if job.cancelled.load(Ordering::Relaxed) {
+                                continue;
+                            }
+                            let read = std::fs::read(&job.path);
+                            if !job.cancelled.load(Ordering::Relaxed) {
+                                let _ = job.reply.send(read);
+                            }
+                        }
+                    });
+            }
+            queue
+        })
+    }
+
+    pub(super) fn read_later(path: PathBuf) -> Box<dyn super::Later> {
+        let (reply, receiver) = mpsc::channel();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let queue = pool();
+        {
+            let mut guard = queue
+                .jobs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.push_back(Job {
+                path,
+                cancelled: Arc::clone(&cancelled),
+                reply,
+            });
+        }
+        queue.wake.notify_one();
+        Box::new(Reading {
+            receiver,
+            cancelled,
+        })
+    }
 }
 
 /// Files by path, read and written whole.
@@ -422,25 +549,7 @@ impl Store for Disk {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn read_later(&self, path: &Path) -> Box<dyn Later> {
-        /// A read on a thread of its own.
-        struct Reading(std::sync::mpsc::Receiver<io::Result<Vec<u8>>>);
-        impl Later for Reading {
-            fn poll(&mut self) -> Option<io::Result<Box<dyn Arrived>>> {
-                match self.0.try_recv() {
-                    Ok(read) => read_now(read).poll(),
-                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        Some(Err(io::Error::other("the read stopped")))
-                    }
-                }
-            }
-        }
-        let (sent, read) = std::sync::mpsc::channel();
-        let path = path.to_path_buf();
-        std::thread::spawn(move || {
-            let _ = sent.send(std::fs::read(path));
-        });
-        Box::new(Reading(read))
+        io_pool::read_later(path.to_path_buf())
     }
 
     fn read_words(&self, path: &Path, from: usize) -> io::Result<(Vec<u32>, usize)> {
