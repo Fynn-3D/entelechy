@@ -87,6 +87,24 @@ pub(crate) fn ask_ahead(
     }
 }
 
+/// Why asynchronous WebGPU pipeline compilation in a page failed.
+pub(crate) enum CompileError {
+    /// The JS layout-descriptor bridge could not encode an entry before asking
+    /// the browser (an engine bug that must surface instead of silently
+    /// degrading to single-threaded CPU fallback).
+    Bridge(String),
+    /// The browser or WebGPU device refused or lost the pipeline.
+    Device(String),
+}
+
+impl CompileError {
+    fn message(&self) -> &str {
+        match self {
+            Self::Bridge(msg) | Self::Device(msg) => msg,
+        }
+    }
+}
+
 /// Asks the browser to compile the pipeline of `source`'s `main` with one
 /// group of `entries` (or takes what [`ask_ahead`] asked), and waits until
 /// it has, parked. Returns `Err` immediately when the browser or device
@@ -97,7 +115,7 @@ pub(crate) fn compile_beside(
     label: &str,
     source: &str,
     entries: &[wgpu::BindGroupLayoutEntry],
-) -> Result<(), String> {
+) -> Result<(), CompileError> {
     let Some(device) = device.as_webgpu() else {
         return Ok(());
     };
@@ -114,19 +132,35 @@ pub(crate) fn compile_beside(
     let ahead = ASKED.with(|asked_ahead| asked_ahead.borrow_mut().remove(&key));
     let asked = match ahead {
         Some(asked) => asked,
-        None => ask(device, label, source, entries).map_err(|e| describe_js_error(&e))?,
+        None => match ask(device, label, source, entries) {
+            Ok(asked) => asked,
+            Err(error) => {
+                if traced {
+                    let took = entelechy_rules::clock::since(started).as_secs_f64() * 1000.0;
+                    tell(&format!(
+                        "refused {label} in {took:.0} ms ({})",
+                        error.message()
+                    ));
+                }
+                return Err(error);
+            }
+        },
     };
     let answer = wait.block_on(wasm_bindgen_futures::JsFuture::from(asked));
+    let result = answer
+        .map(|_| ())
+        .map_err(|e| CompileError::Device(describe_js_error(&e)));
     if traced {
         let took = entelechy_rules::clock::since(started).as_secs_f64() * 1000.0;
-        let how = if answer.is_ok() {
-            "compiled"
-        } else {
-            "refused"
-        };
-        tell(&format!("{how} {label} in {took:.0} ms"));
+        match &result {
+            Ok(()) => tell(&format!("compiled {label} in {took:.0} ms")),
+            Err(error) => tell(&format!(
+                "refused {label} in {took:.0} ms ({})",
+                error.message()
+            )),
+        }
     }
-    answer.map(|_| ()).map_err(|e| describe_js_error(&e))
+    result
 }
 
 /// Whether the page asked to be told each pipeline (`entelechy_trace`).
@@ -150,16 +184,26 @@ fn ask(
     label: &str,
     source: &str,
     entries: &[wgpu::BindGroupLayoutEntry],
+) -> Result<js_sys::Promise, CompileError> {
+    let bindings = Array::new();
+    for entry in entries {
+        bindings.push(&binding(entry)?);
+    }
+    ask_device(device, label, source, bindings)
+        .map_err(|e| CompileError::Device(describe_js_error(&e)))
+}
+
+fn ask_device(
+    device: &JsValue,
+    label: &str,
+    source: &str,
+    bindings: Array,
 ) -> Result<js_sys::Promise, JsValue> {
     let module = call(
         device,
         "createShaderModule",
         &object(&[("label", label.into()), ("code", source.into())])?,
     )?;
-    let bindings = Array::new();
-    for entry in entries {
-        bindings.push(&binding(entry)?);
-    }
     let group = call(
         device,
         "createBindGroupLayout",
@@ -187,36 +231,83 @@ fn ask(
     Ok(promise)
 }
 
-/// A binding as the browser takes it: a Kernel binds buffers alone.
-fn binding(entry: &wgpu::BindGroupLayoutEntry) -> Result<JsValue, JsValue> {
-    let wgpu::BindingType::Buffer {
-        ty,
-        has_dynamic_offset,
-        min_binding_size,
-    } = entry.ty
-    else {
-        return Err("a Kernel binds buffers alone".into());
+/// A bind group layout entry as WebGPU's `GPUBindGroupLayoutEntry` takes it:
+/// uniform/storage buffers, sampled hardware textures, and hardware samplers.
+fn binding(entry: &wgpu::BindGroupLayoutEntry) -> Result<JsValue, CompileError> {
+    let js_err = |e: JsValue| CompileError::Bridge(describe_js_error(&e));
+    let (field, layout) = match entry.ty {
+        wgpu::BindingType::Buffer {
+            ty,
+            has_dynamic_offset,
+            min_binding_size,
+        } => {
+            let kind = match ty {
+                wgpu::BufferBindingType::Uniform => "uniform",
+                wgpu::BufferBindingType::Storage { read_only: true } => "read-only-storage",
+                wgpu::BufferBindingType::Storage { read_only: false } => "storage",
+            };
+            let buffer = object(&[
+                ("type", kind.into()),
+                ("hasDynamicOffset", has_dynamic_offset.into()),
+                (
+                    "minBindingSize",
+                    min_binding_size
+                        .map_or(0.0, |size| size.get() as f64)
+                        .into(),
+                ),
+            ])
+            .map_err(js_err)?;
+            ("buffer", buffer)
+        }
+        wgpu::BindingType::Texture {
+            sample_type,
+            view_dimension,
+            multisampled,
+        } => {
+            let sample = match sample_type {
+                wgpu::TextureSampleType::Float { filterable: true } => "float",
+                wgpu::TextureSampleType::Float { filterable: false } => "unfilterable-float",
+                wgpu::TextureSampleType::Depth => "depth",
+                wgpu::TextureSampleType::Sint => "sint",
+                wgpu::TextureSampleType::Uint => "uint",
+            };
+            let dimension = match view_dimension {
+                wgpu::TextureViewDimension::D1 => "1d",
+                wgpu::TextureViewDimension::D2 => "2d",
+                wgpu::TextureViewDimension::D2Array => "2d-array",
+                wgpu::TextureViewDimension::Cube => "cube",
+                wgpu::TextureViewDimension::CubeArray => "cube-array",
+                wgpu::TextureViewDimension::D3 => "3d",
+            };
+            let texture = object(&[
+                ("sampleType", sample.into()),
+                ("viewDimension", dimension.into()),
+                ("multisampled", multisampled.into()),
+            ])
+            .map_err(js_err)?;
+            ("texture", texture)
+        }
+        wgpu::BindingType::Sampler(ty) => {
+            let kind = match ty {
+                wgpu::SamplerBindingType::Filtering => "filtering",
+                wgpu::SamplerBindingType::NonFiltering => "non-filtering",
+                wgpu::SamplerBindingType::Comparison => "comparison",
+            };
+            let sampler = object(&[("type", kind.into())]).map_err(js_err)?;
+            ("sampler", sampler)
+        }
+        other => {
+            return Err(CompileError::Bridge(format!(
+                "unsupported WebGPU bind group layout entry: {other:?}"
+            )));
+        }
     };
-    let kind = match ty {
-        wgpu::BufferBindingType::Uniform => "uniform",
-        wgpu::BufferBindingType::Storage { read_only: true } => "read-only-storage",
-        wgpu::BufferBindingType::Storage { read_only: false } => "storage",
-    };
-    let buffer = object(&[
-        ("type", kind.into()),
-        ("hasDynamicOffset", has_dynamic_offset.into()),
-        (
-            "minBindingSize",
-            min_binding_size
-                .map_or(0.0, |size| size.get() as f64)
-                .into(),
-        ),
-    ])?;
     object(&[
         ("binding", entry.binding.into()),
         ("visibility", entry.visibility.bits().into()),
-        ("buffer", buffer),
+        (field, layout),
     ])
+    .map_err(js_err)
 }
 
 fn object(fields: &[(&str, JsValue)]) -> Result<JsValue, JsValue> {

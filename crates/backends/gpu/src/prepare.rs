@@ -258,7 +258,10 @@ impl Shader {
                     &self.source,
                     &self.entries,
                 ) {
-                    return Err(Unbuilt::Device(error));
+                    return Err(match error {
+                        crate::page::CompileError::Bridge(msg) => Unbuilt::Ours(msg),
+                        crate::page::CompileError::Device(msg) => Unbuilt::Device(msg),
+                    });
                 }
                 let scopes = Scopes::push(device);
                 let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
