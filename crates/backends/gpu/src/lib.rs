@@ -137,6 +137,8 @@ pub(crate) struct WgpuBackend {
     /// Whether the adapter offers hardware linear/anisotropic filtering on
     /// 32-bit float textures (`FLOAT32_FILTERABLE`).
     float32_filterable: bool,
+    /// Hardware subgroup (wave / SIMD-group) capabilities (`SUBGROUP`).
+    subgroups: wgsl::SubgroupCaps,
     /// Failure words and their readback buffers, for reuse: a checked node
     /// takes a pair each run.
     failures: Arc<Mutex<Vec<(wgpu::Buffer, wgpu::Buffer)>>>,
@@ -311,6 +313,18 @@ impl WgpuBackend {
         self.device.limits().max_compute_workgroup_storage_size
     }
 
+    /// Hardware subgroup (wave / SIMD-group) capabilities enabled on this device.
+    pub fn subgroups(&self) -> wgsl::SubgroupCaps {
+        self.subgroups
+    }
+
+    /// Disables subgroup codegen on this backend, exercising non-subgroup
+    /// workgroup fallbacks on hardware that supports `SUBGROUP`.
+    pub fn without_subgroups(mut self) -> Self {
+        self.subgroups = wgsl::SubgroupCaps::default();
+        self
+    }
+
     /// Gives the device a run, work or copy: every run but the empty ones
     /// a wait is marked by goes through here, so a clocked frame counts
     /// each.
@@ -398,6 +412,35 @@ impl WgpuBackend {
         if float32_filterable {
             features |= wgpu::Features::FLOAT32_FILTERABLE;
         }
+        let has_subgroups = adapter.features().contains(wgpu::Features::SUBGROUP);
+        if has_subgroups {
+            features |= wgpu::Features::SUBGROUP;
+        }
+        let adapter_info = adapter.get_info();
+        let subgroups = if has_subgroups {
+            // wgpu-hal hardcodes a conservative 4..64 range for all Metal
+            // adapters; Apple Silicon GPUs (Apple7+) always run fixed 32-lane
+            // SIMD-groups, unlocking single-wave `group <= 32` shuffles and
+            // zero-atomic 32-bit `subgroupBallot` compaction.
+            let apple_metal = adapter_info.backend == wgpu::Backend::Metal
+                && adapter_info.name.starts_with("Apple ");
+            let (min_size, max_size) = if apple_metal {
+                (32, 32)
+            } else {
+                (
+                    adapter_info.subgroup_min_size,
+                    adapter_info.subgroup_max_size,
+                )
+            };
+            wgsl::SubgroupCaps {
+                enabled: true,
+                min_size,
+                max_size,
+                enable_directive: PAGE,
+            }
+        } else {
+            wgsl::SubgroupCaps::default()
+        };
         let (device, queue) = wait
             .block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("entelechy"),
@@ -406,7 +449,7 @@ impl WgpuBackend {
                 ..Default::default()
             }))
             .map_err(|error| GpuError(error.to_string()))?;
-        let adapter_name = adapter.get_info().name;
+        let adapter_name = adapter_info.name;
         let heard: Arc<Mutex<Vec<String>>> = Arc::default();
         let keep = |heard: &Arc<Mutex<Vec<String>>>, line: String| {
             if let Ok(mut heard) = heard.lock() {
@@ -509,6 +552,7 @@ impl WgpuBackend {
             primitive_index,
             texture_compression_bc,
             float32_filterable,
+            subgroups,
             uploaded: std::sync::atomic::AtomicU64::new(0),
             failures: Arc::new(Mutex::new(Vec::new())),
             last_nanos: std::sync::atomic::AtomicU64::new(u64::MAX),
@@ -1075,6 +1119,7 @@ impl Backend for WgpuBackend {
                 &mut encoder,
                 module,
                 reduce,
+                pipeline.reduce_fold,
                 &context_buffer,
                 &params_buffer,
                 &bound_inputs,
@@ -1530,6 +1575,26 @@ impl GpuBackend {
             Driver::Wgpu(b) => b.workgroup_memory(),
             #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
             Driver::WebGl(_) => 0,
+        }
+    }
+
+    /// Hardware subgroup (wave / SIMD-group) capabilities enabled on this
+    /// backend. Disabled on WebGL2.
+    pub fn subgroups(&self) -> wgsl::SubgroupCaps {
+        match &self.0 {
+            Driver::Wgpu(b) => b.subgroups(),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(_) => wgsl::SubgroupCaps::default(),
+        }
+    }
+
+    /// This backend with subgroup codegen disabled, for testing non-subgroup
+    /// workgroup fallbacks on hardware that supports `SUBGROUP`.
+    pub fn without_subgroups(self) -> Self {
+        match self.0 {
+            Driver::Wgpu(b) => Self(Driver::Wgpu(Box::new((*b).without_subgroups()))),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(b) => Self(Driver::WebGl(b)),
         }
     }
 

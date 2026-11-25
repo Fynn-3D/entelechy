@@ -10,6 +10,9 @@ pub(crate) struct Pipeline<P = Pass> {
     pub(crate) main: P,
     /// The fold of a reduce module, run level by level after the map.
     pub(crate) reduce: Option<P>,
+    /// Elements folded into one per reduce pass (`256` for workgroup/subgroup
+    /// parallel reduce, `entelechy_rules::reduce::FOLD` for giant-struct fallback).
+    pub(crate) reduce_fold: usize,
     /// The combine of a scatter module, run after the map.
     pub(crate) scatter: Option<Scatter<P>>,
     /// The fold of a prefix module, run over the map's output in place.
@@ -35,11 +38,11 @@ pub(crate) struct Pipeline<P = Pass> {
     pub(crate) samplers: wgsl::SamplerSet,
 }
 
-/// A prefix fold's three passes: a block a walk, the blocks' totals
-/// scanned, then every element given its block's offset.
+/// A hierarchical prefix fold's two passes: per-block parallel scan (used
+/// recursively up the block-total levels) and block-offset propagation back
+/// down to level 0.
 pub(crate) struct Prefix<P = Pass> {
     pub(crate) blocks: P,
-    pub(crate) tops: P,
     pub(crate) offsets: P,
     /// Whether it sums whole ([`wgsl::sums_whole`]): high words beside
     /// the output and the totals, and a failure record.
@@ -336,7 +339,6 @@ impl<P> Pipeline<P> {
         }
         if let Some(prefix) = &self.prefix {
             visit(&prefix.blocks);
-            visit(&prefix.tops);
             visit(&prefix.offsets);
         }
     }
@@ -345,6 +347,7 @@ impl<P> Pipeline<P> {
         Ok(Pipeline {
             main: make(self.main)?,
             reduce: self.reduce.map(&mut *make).transpose()?,
+            reduce_fold: self.reduce_fold,
             scatter: self.scatter.map(|s| s.made(make)).transpose()?,
             prefix: self.prefix.map(|p| p.made(make)).transpose()?,
             fails: self.fails,
@@ -362,7 +365,6 @@ impl<P> Prefix<P> {
     fn made<Q>(self, make: Make<'_, P, Q>) -> Result<Prefix<Q>, Unbuilt> {
         Ok(Prefix {
             blocks: make(self.blocks)?,
-            tops: make(self.tops)?,
             offsets: make(self.offsets)?,
             whole: self.whole,
         })
@@ -741,8 +743,9 @@ impl WgpuBackend {
                 );
             }
         }
-        // A group's exchanges are arrays in its workgroup's memory.
-        let memory = wgsl::group_memory(module);
+        // A group's exchanges are arrays in its workgroup's memory unless the
+        // group runs register-only inside a single hardware subgroup.
+        let memory = wgsl::group_memory_for(module, self.subgroups);
         let most = u64::from(self.device.limits().max_compute_workgroup_storage_size);
         if memory > most {
             return Some(format!(
@@ -989,13 +992,14 @@ impl WgpuBackend {
         let longs = self.longs(module);
         let filtered = wgsl::filtered_uses(module);
         let samplers = wgsl::samplers_for(module, &textured, self.float32_filterable);
-        let source = wgsl::emit_full_filtered(
+        let source = wgsl::emit_full_with_subgroups(
             module,
             &packed,
             &textured,
             longs,
             wgsl::first_half(module, longs),
             self.float32_filterable,
+            self.subgroups,
         );
         let mut entries = vec![
             uniform_entry(wgsl::CONTEXT_BINDING),
@@ -1051,8 +1055,11 @@ impl WgpuBackend {
             }
         }
         let main = self.pass(&module.manifest.id.to_string(), &source, &entries)?;
-        let reduce = if module.manifest.mode == entelechy_ir::Mode::Reduce {
-            let reduce_source = wgsl::emit_reduce_packed_groups_longs(module, &packed, longs);
+        let (reduce, reduce_fold) = if module.manifest.mode == entelechy_ir::Mode::Reduce {
+            let max_wg = u64::from(self.device.limits().max_compute_workgroup_storage_size);
+            let strategy = wgsl::reduce_strategy(module, self.subgroups, max_wg);
+            let reduce_source =
+                wgsl::emit_reduce_with_strategy(module, &packed, longs, strategy, self.subgroups);
             // The map pass's bindings, then the fold's own.
             let (count_binding, in_binding, out_binding) = wgsl::reduce_bindings(module);
             let mut entries = vec![
@@ -1075,9 +1082,12 @@ impl WgpuBackend {
             if fails {
                 entries.push(storage_entry(wgsl::FAILURE_BINDING, false));
             }
-            Some(self.pass("reduce", &reduce_source, &entries)?)
+            (
+                Some(self.pass("reduce", &reduce_source, &entries)?),
+                strategy.fold_factor(),
+            )
         } else {
-            None
+            (None, entelechy_rules::reduce::FOLD)
         };
         let prefix = if matches!(module.manifest.mode, entelechy_ir::Mode::Prefix { .. }) {
             let mut entries = vec![
@@ -1097,17 +1107,20 @@ impl WgpuBackend {
             Some(Prefix {
                 blocks: self.pass(
                     "prefix blocks",
-                    &wgsl::emit_prefix(module, wgsl::PrefixPass::Blocks),
-                    &entries,
-                )?,
-                tops: self.pass(
-                    "prefix tops",
-                    &wgsl::emit_prefix(module, wgsl::PrefixPass::Tops),
+                    &wgsl::emit_prefix_with_subgroups(
+                        module,
+                        wgsl::PrefixPass::Blocks,
+                        self.subgroups,
+                    ),
                     &entries,
                 )?,
                 offsets: self.pass(
                     "prefix offsets",
-                    &wgsl::emit_prefix(module, wgsl::PrefixPass::Offsets),
+                    &wgsl::emit_prefix_with_subgroups(
+                        module,
+                        wgsl::PrefixPass::Offsets,
+                        self.subgroups,
+                    ),
                     &entries,
                 )?,
                 whole: wgsl::sums_whole(module),
@@ -1281,6 +1294,7 @@ impl WgpuBackend {
         Ok(Pipeline {
             main,
             reduce,
+            reduce_fold,
             scatter,
             prefix,
             fails,

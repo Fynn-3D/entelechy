@@ -195,14 +195,10 @@ impl WgpuBackend {
         )
     }
 
-    /// A prefix fold on the device: three passes over the map's output, in
-    /// place. One invocation walks each block and leaves its total, one scans
-    /// the blocks' totals, and one per element adds its block's offset. The
-    /// rule is order-free, so this grouping gives the reference's words; the
-    /// passes order themselves, with no shared memory or barrier.
-    ///
-    /// A block holds about the square root of the count, so both walks are
-    /// the same length.
+    /// A hierarchical parallel prefix fold on the device: scans contiguous
+    /// blocks of [`wgsl::PREFIX_BLOCK`] elements in place, recursively scans
+    /// the block totals with the same shader until one block remains, and
+    /// propagates block offsets back down to level 0.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn run_prefix(
         &self,
@@ -214,41 +210,64 @@ impl WgpuBackend {
         timing: Option<&Timing>,
         failure: Option<&wgpu::Buffer>,
     ) -> wgpu::Buffer {
+        let block_size = wgsl::PREFIX_BLOCK as usize;
         let count = element_count.max(1);
-        let per_block = entelechy_rules::prefix::block(count);
-        let blocks = count.div_ceil(per_block);
-        let plan: [u32; 4] = [count as u32, per_block as u32, blocks as u32, 0];
-        let mut plan_bytes = [0u8; 16];
-        for (slot, word) in plan_bytes.chunks_exact_mut(4).zip(plan) {
-            slot.copy_from_slice(&word.to_le_bytes());
+        let alloc_storage = |elems: usize| {
+            self.spare.take(
+                &self.device,
+                ((elems * output_words * 4) as u64).max(16).div_ceil(16) * 16,
+                wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+            )
+        };
+        let mut used_plans = Vec::new();
+        // Level 0 operates on `output`; each subsequent level operates on the
+        // previous level's block totals buffer until `blocks == 1`.
+        struct Level {
+            count: usize,
+            blocks: usize,
+            data: wgpu::Buffer,
+            sums: wgpu::Buffer,
+            data_highs: Option<wgpu::Buffer>,
+            sums_highs: Option<wgpu::Buffer>,
         }
-        let plan_buffer = self.take_uniform(&plan_bytes);
-        let sums = self.spare.take(
-            &self.device,
-            ((blocks * output_words * 4) as u64).max(16).div_ceil(16) * 16,
-            wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-        );
-        // A whole sum's high words beside the output and the totals.
-        let highs = prefix.whole.then(|| {
-            let take = |words: usize| {
-                self.spare.take(
-                    &self.device,
-                    ((words * 4) as u64).max(16).div_ceil(16) * 16,
-                    wgpu::BufferUsages::STORAGE
-                        | wgpu::BufferUsages::COPY_SRC
-                        | wgpu::BufferUsages::COPY_DST,
-                )
-            };
-            (take(count * output_words), take(blocks * output_words))
-        });
-        let passes = [
-            (&prefix.blocks, blocks as u32),
-            (&prefix.tops, 1),
-            (&prefix.offsets, count as u32),
-        ];
-        for (index, ((pipeline, layout), threads)) in passes.iter().enumerate() {
+        let mut levels: Vec<Level> = Vec::new();
+        let mut cur_count = count;
+        let mut cur_data = output.clone();
+        let mut cur_highs = prefix.whole.then(|| alloc_storage(count));
+        loop {
+            let blocks = cur_count.div_ceil(block_size);
+            let sums = alloc_storage(blocks);
+            let sums_highs = prefix.whole.then(|| alloc_storage(blocks));
+            levels.push(Level {
+                count: cur_count,
+                blocks,
+                data: cur_data,
+                sums: sums.clone(),
+                data_highs: cur_highs,
+                sums_highs: sums_highs.clone(),
+            });
+            if blocks <= 1 {
+                break;
+            }
+            cur_count = blocks;
+            cur_data = sums;
+            cur_highs = sums_highs;
+        }
+        let num_levels = levels.len();
+        let mut dispatch_prefix = |pipeline: &wgpu::ComputePipeline,
+                                   layout: &wgpu::BindGroupLayout,
+                                   level: &Level,
+                                   flags: u32,
+                                   groups: u32,
+                                   is_last: bool| {
+            let plan: [u32; 4] = [level.count as u32, level.blocks as u32, 0, flags];
+            let mut plan_bytes = [0u8; 16];
+            for (slot, word) in plan_bytes.chunks_exact_mut(4).zip(plan) {
+                slot.copy_from_slice(&word.to_le_bytes());
+            }
+            let plan_buffer = self.take_uniform(&plan_bytes);
             let base_entries = [
                 wgpu::BindGroupEntry {
                     binding: wgsl::PREFIX_PLAN_BINDING,
@@ -256,16 +275,18 @@ impl WgpuBackend {
                 },
                 wgpu::BindGroupEntry {
                     binding: wgsl::PREFIX_OUT_BINDING,
-                    resource: output.as_entire_binding(),
+                    resource: level.data.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: wgsl::PREFIX_SUMS_BINDING,
-                    resource: sums.as_entire_binding(),
+                    resource: level.sums.as_entire_binding(),
                 },
             ];
             let full_entries;
             let entries: &[wgpu::BindGroupEntry] =
-                if let (Some((out_highs, sum_highs)), Some(failure)) = (&highs, failure) {
+                if let (Some(out_highs), Some(sum_highs), Some(failure)) =
+                    (&level.data_highs, &level.sums_highs, failure)
+                {
                     full_entries = [
                         base_entries[0].clone(),
                         base_entries[1].clone(),
@@ -292,22 +313,73 @@ impl WgpuBackend {
                 layout,
                 entries,
             });
-            let last = index + 1 == passes.len();
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("entelechy prefix"),
                 timestamp_writes: timing
-                    .and_then(|timing| last.then(|| timing.compute(None, Some(1)))),
+                    .and_then(|timing| is_last.then(|| timing.compute(None, Some(1)))),
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &group, &[]);
-            let (x, y) = wgsl::folded(threads.div_ceil(wgsl::PREFIX_WORKGROUP));
+            let (x, y) = wgsl::folded(groups);
             pass.dispatch_workgroups(x, y, 1);
+            used_plans.push(plan_buffer);
+        };
+        // Up-sweep: scan each level in parallel blocks of 256.
+        for (depth, level) in levels.iter().enumerate() {
+            let mut flags = 0u32;
+            if depth == 0 {
+                flags |= wgsl::PREFIX_FLAG_WIDEN;
+            }
+            let is_single_pass = num_levels == 1;
+            if is_single_pass {
+                flags |= wgsl::PREFIX_FLAG_CHECK_FITS;
+            }
+            dispatch_prefix(
+                &prefix.blocks.0,
+                &prefix.blocks.1,
+                level,
+                flags,
+                level.blocks as u32,
+                is_single_pass,
+            );
         }
-        self.spare.keep(plan_buffer, None);
-        self.spare.keep(sums, None);
-        if let Some((out_highs, sum_highs)) = highs {
-            self.spare.keep(out_highs, None);
-            self.spare.keep(sum_highs, None);
+        // Down-sweep: propagate scanned block totals back to level 0.
+        if num_levels > 1 {
+            for depth in (0..num_levels - 1).rev() {
+                let level = &levels[depth];
+                let is_last = depth == 0;
+                let flags = if is_last {
+                    wgsl::PREFIX_FLAG_CHECK_FITS
+                } else {
+                    0
+                };
+                let groups = (level.count as u32).div_ceil(wgsl::PREFIX_WORKGROUP);
+                dispatch_prefix(
+                    &prefix.offsets.0,
+                    &prefix.offsets.1,
+                    level,
+                    flags,
+                    groups,
+                    is_last,
+                );
+            }
+        }
+        for plan_buffer in used_plans {
+            self.spare.keep(plan_buffer, None);
+        }
+        // `level.data` / `level.data_highs` at depth > 0 alias the previous
+        // level's `sums` / `sums_highs`, so return only each freshly allocated
+        // scratch buffer once.
+        for (depth, level) in levels.into_iter().enumerate() {
+            if depth == 0
+                && let Some(h) = level.data_highs
+            {
+                self.spare.keep(h, None);
+            }
+            self.spare.keep(level.sums, None);
+            if let Some(h) = level.sums_highs {
+                self.spare.keep(h, None);
+            }
         }
         output
     }
@@ -321,6 +393,7 @@ impl WgpuBackend {
         encoder: &mut wgpu::CommandEncoder,
         module: &Validated,
         reduce: &Pass,
+        reduce_fold: usize,
         context_buffer: &wgpu::Buffer,
         params_buffer: &wgpu::Buffer,
         bound_inputs: &[(u32, wgpu::Buffer)],
@@ -335,12 +408,14 @@ impl WgpuBackend {
         let final_buffer = mapped;
         let stride = output_words as u64 * 4;
         let mut count = element_count as u64;
+        let parallel_block = reduce_fold == wgsl::REDUCE_BLOCK as usize;
         // The level between levels, from the pile: a scene reduces the same
         // count every frame. Every element a level reads was written by the
         // level before, so nothing stale is seen.
+        let first_ahead = (count as usize).div_ceil(reduce_fold);
         let other = self.spare.take(
             &self.device,
-            (entelechy_rules::reduce::after_fold(count as usize) as u64 * stride).max(16),
+            (first_ahead as u64 * stride).max(16),
             wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
@@ -405,8 +480,13 @@ impl WgpuBackend {
             });
             pass.set_pipeline(reduce_pipeline);
             pass.set_bind_group(0, &group, &[]);
-            let ahead = entelechy_rules::reduce::after_fold(count as usize) as u32;
-            let (x, y) = wgsl::folded(ahead.div_ceil(wgsl::REDUCE_WORKGROUP));
+            let ahead = (count as usize).div_ceil(reduce_fold) as u32;
+            let groups = if parallel_block {
+                ahead
+            } else {
+                ahead.div_ceil(wgsl::REDUCE_WORKGROUP)
+            };
+            let (x, y) = wgsl::folded(groups);
             pass.dispatch_workgroups(x, y, 1);
             drop(pass);
             count = u64::from(ahead);

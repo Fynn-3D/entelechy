@@ -4636,3 +4636,624 @@ fn hardware_compressed_multimip_volume_join_preserves_full_mip_chain_gpu_to_gpu(
     assert!((l1_m2_b - 230.0 / 255.0).abs() < 0.03, "l1_b={l1_m2_b}");
     assert!((l1_m2_r - 30.0 / 255.0).abs() < 0.03, "l1_r={l1_m2_r}");
 }
+
+#[test]
+fn subgroup_group_exchanges_match_cpu_across_sizes_types_failures_and_fallback() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let caps = gpu.subgroups();
+    let fallback = GpuBackend::new().unwrap().without_subgroups();
+    assert!(!fallback.subgroups().enabled);
+
+    // Verify WGSL codegen: single-wave group 32 emits subgroupShuffle with zero
+    // workgroup memory or barriers, and browser WebGPU mode prepends `enable subgroups;`.
+    let probe_src = "kernel test.sg_probe@1 {
+        requires { field.write; }
+        output result: Rows<Vec4>;
+        group 32 {
+            let v = vec4(float(element()), float(lane()), 1.0, 2.0);
+            return exchange(v, lane() ^ 1);
+        }
+    }";
+    let probe = compile(probe_src).unwrap();
+    if caps.fits_single_wave(32) {
+        let native_wgsl = entelechy_gpu::wgsl::emit_full_with_subgroups(
+            &probe,
+            &[],
+            &[],
+            entelechy_gpu::wgsl::Longs::Native,
+            entelechy_gpu::wgsl::Half::High,
+            true,
+            caps,
+        );
+        assert!(
+            native_wgsl.contains("subgroupShuffle(") && native_wgsl.contains("subgroupAny("),
+            "expected subgroup shuffle codegen:\n{native_wgsl}"
+        );
+        assert!(
+            !native_wgsl.contains("var<workgroup>") && !native_wgsl.contains("workgroupBarrier()"),
+            "single-wave group should emit zero workgroup storage and barriers:\n{native_wgsl}"
+        );
+        let page_caps = entelechy_gpu::wgsl::SubgroupCaps {
+            enable_directive: true,
+            ..caps
+        };
+        let page_wgsl = entelechy_gpu::wgsl::emit_full_with_subgroups(
+            &probe,
+            &[],
+            &[],
+            entelechy_gpu::wgsl::Longs::Native,
+            entelechy_gpu::wgsl::Half::High,
+            true,
+            page_caps,
+        );
+        assert!(
+            page_wgsl.starts_with("enable subgroups;\n"),
+            "browser WebGPU mode must emit enable directive first"
+        );
+    }
+
+    let run_both = |source: &str, domain: Domain| {
+        let module = compile(source).unwrap();
+        let inv = Invocation {
+            inputs: vec![],
+            params: vec![],
+            domain,
+            context: Context::default(),
+        };
+        let mut host = Host::new(1 << 22);
+        let cpu_h = CpuBackend
+            .execute(&module, &inv, &mut Scope::new(&mut host, all()))
+            .unwrap()[0];
+        let cpu_words = host.data(cpu_h).unwrap().storage().to_vec();
+
+        for (tag, backend) in [("subgroups", &gpu), ("fallback", &fallback)] {
+            let prep = Backend::prepare(backend, &module).unwrap();
+            let out_h = Backend::execute(
+                backend,
+                prep.as_ref(),
+                &module,
+                &inv,
+                &mut Scope::new(&mut host, all()),
+            )
+            .unwrap()[0];
+            let dev = host.resident(out_h).unwrap().expect("resident");
+            let words = Backend::download(backend, dev, cpu_words.len() * 4).unwrap();
+            assert_eq!(
+                words, cpu_words,
+                "{tag} mismatch for domain {domain:?}:\n{source}"
+            );
+        }
+    };
+
+    // Diverse group sizes (non-powers of two, sub-wave, full wave, multi-wave) and domains.
+    for size in [1u32, 3, 7, 8, 16, 31, 32, 64] {
+        for count in [1u32, 13, 33, 100] {
+            let src = format!(
+                "kernel test.sg_sz_{size}@1 {{
+                    requires {{ field.write; }}
+                    output result: Rows<Int>;
+                    group {size} {{
+                        let a = element() * 3 + lane();
+                        let b = exchange(a, lane() + 1);
+                        let c = exchange(b, lane() - 2);
+                        return a + b * 2 + c;
+                    }}
+                }}"
+            );
+            run_both(&src, Domain::Rows(count));
+        }
+    }
+
+    // Complex exchanged types: Bool, Long (native i64 split), Mat2, Struct with mixed fields.
+    let typed_src = "kernel test.sg_types@1 {
+        requires { field.write; }
+        output result: Rows<Vec4>;
+        struct Pack { tag: Int; pos: Vec2; flag: Bool; }
+        group 32 {
+            let i = element();
+            let b = exchange((i & 1) == 0, 31 - lane());
+            let l = exchange(long(i) * 10000000007l + long(lane()), (lane() + 5) & 31);
+            let m = exchange(mat2(vec2(float(i), 1.0), vec2(-2.0, float(lane()))), lane() ^ 3);
+            let p = exchange(Pack { tag: i, pos: vec2(float(i), float(lane())), flag: b }, (lane() + 13) & 31);
+            let low = int(l & 65535l);
+            let high = int((l >> 32l) & 65535l);
+            return vec4(
+                float(p.tag + low + high) + if p.flag { 7.0 } else { 0.0 },
+                p.pos.x + m[0].x,
+                p.pos.y + m[1].y,
+                float(b),
+            );
+        }
+    }";
+    run_both(typed_src, Domain::Rows(111));
+
+    // Accounted single-wave group failure parity: budget and integer overflow at non-zero lane.
+    let fail_src = "kernel test.sg_fail@1 {
+        requires { field.write; }
+        budget 64;
+        param rounds: Int = 100;
+        output result: Rows<Int>;
+        group 32 {
+            let base = element();
+            let v = loop rounds with s = 0 {
+                let extra = loop (lane() + 1) with acc = 0 { acc + 1 };
+                let step = exchange(s + base + extra, lane() ^ 1);
+                step % 9973
+            };
+            return v;
+        }
+    }";
+    let fail_mod = entelechy_ir::account(&compile(fail_src).unwrap()).unwrap();
+    assert!(fail_mod.accounted());
+    let inv = Invocation {
+        inputs: vec![],
+        params: vec![Value::Int(100)],
+        domain: Domain::Rows(64),
+        context: Context::default(),
+    };
+    let mut cpu_host = Host::new(1 << 22);
+    let cpu_err = CpuBackend
+        .execute(&fail_mod, &inv, &mut Scope::new(&mut cpu_host, all()))
+        .unwrap_err()
+        .to_string();
+    for (tag, backend) in [("subgroups", &gpu), ("fallback", &fallback)] {
+        let mut dev_host = Host::new(1 << 22);
+        let prep = Backend::prepare(backend, &fail_mod).unwrap();
+        let gpu_err = Backend::execute(
+            backend,
+            prep.as_ref(),
+            &fail_mod,
+            &inv,
+            &mut Scope::new(&mut dev_host, all()),
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(gpu_err, cpu_err, "{tag} budget failure mismatch");
+    }
+}
+
+#[test]
+fn hierarchical_parallel_prefix_matches_cpu_across_levels_combines_overflow_and_fallback() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let caps = gpu.subgroups();
+    let fallback = GpuBackend::new().unwrap().without_subgroups();
+
+    // Check emitted subgroup instructions for whole integer sum.
+    let isum_mod = compile(
+        "kernel test.pfx_isum@1 {
+            requires { field.read; field.write; }
+            input xs: Rows<Int>;
+            output result: Rows<Int>;
+            prefix over xs with sum { return sample(xs); }
+        }",
+    )
+    .unwrap();
+    if caps.wave_parallel_256() {
+        let wgsl = entelechy_gpu::wgsl::emit_prefix_with_subgroups(
+            &isum_mod,
+            entelechy_gpu::wgsl::PrefixPass::Blocks,
+            caps,
+        );
+        assert!(
+            wgsl.contains("subgroupShuffleUp("),
+            "prefix blocks should use subgroupShuffleUp:\n{wgsl}"
+        );
+    }
+
+    // 1-level (<=256), 2-level (257..65536), and 3-level (>65536) hierarchical scans.
+    let counts = [1usize, 7, 255, 256, 257, 1000, 65_536, 70_000];
+    let int_combines = ["sum", "min", "max"];
+    for combine in int_combines {
+        let src = format!(
+            "kernel test.pfx_i_{combine}@1 {{
+                requires {{ field.read; field.write; }}
+                input xs: Rows<Int>;
+                output result: Rows<Int>;
+                prefix over xs with {combine} {{ return sample(xs); }}
+            }}"
+        );
+        let module = compile(&src).unwrap();
+        let prep_sg = Backend::prepare(&gpu, &module).unwrap();
+        let prep_fb = Backend::prepare(&fallback, &module).unwrap();
+        for &n in &counts {
+            let input_words: Vec<u32> = (0..n)
+                .map(|i| {
+                    let v = ((i as i32 * 37) % 19) - 9;
+                    v as u32
+                })
+                .collect();
+            let mut cpu_host = Host::new(1 << 24);
+            let cpu_inp = cpu_host
+                .adopt(
+                    entelechy_abi::FieldData::from_storage(
+                        entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]),
+                        Domain::Rows(n as u32),
+                        input_words.clone(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            let cpu_inv = Invocation {
+                inputs: vec![cpu_inp],
+                params: vec![],
+                domain: Domain::Rows(n as u32),
+                context: Context::default(),
+            };
+            let cpu_h = CpuBackend
+                .execute(&module, &cpu_inv, &mut Scope::new(&mut cpu_host, all()))
+                .unwrap()[0];
+            let cpu_words = cpu_host.data(cpu_h).unwrap().storage().to_vec();
+
+            for (tag, backend, prep) in [
+                ("subgroups", &gpu, prep_sg.as_ref()),
+                ("fallback", &fallback, prep_fb.as_ref()),
+            ] {
+                let mut dev_host = Host::new(1 << 24);
+                let dev_inp = dev_host
+                    .adopt(
+                        entelechy_abi::FieldData::from_storage(
+                            entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]),
+                            Domain::Rows(n as u32),
+                            input_words.clone(),
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
+                let inv = Invocation {
+                    inputs: vec![dev_inp],
+                    params: vec![],
+                    domain: Domain::Rows(n as u32),
+                    context: Context::default(),
+                };
+                let out_h = Backend::execute(
+                    backend,
+                    prep,
+                    &module,
+                    &inv,
+                    &mut Scope::new(&mut dev_host, all()),
+                )
+                .unwrap()[0];
+                let dev = dev_host.resident(out_h).unwrap().expect("resident");
+                let words = Backend::download(backend, dev, cpu_words.len() * 4).unwrap();
+                assert_eq!(words, cpu_words, "{tag} prefix {combine} mismatch at n={n}");
+            }
+        }
+    }
+
+    // Float min/max across 3 levels (70,000 elements) and mixed Int+Float struct under min.
+    let mixed_mod = compile(
+        "kernel test.pfx_mixed@1 {
+            requires { field.read; field.write; }
+            struct Acc { count: Int; weight: Float; }
+            input xs: Rows<Int>;
+            output result: Rows<Acc>;
+            prefix over xs with min {
+                let x = sample(xs);
+                return Acc { count: x, weight: float(x) * 0.25 };
+            }
+        }",
+    )
+    .unwrap();
+    let n = 70_000usize;
+    let inp_words: Vec<u32> = (0..n)
+        .map(|i| (((i * 29) % 101) as i32 - 50) as u32)
+        .collect();
+    let mut cpu_host = Host::new(1 << 24);
+    let cpu_inp = cpu_host
+        .adopt(
+            entelechy_abi::FieldData::from_storage(
+                entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]),
+                Domain::Rows(n as u32),
+                inp_words.clone(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let cpu_inv = Invocation {
+        inputs: vec![cpu_inp],
+        params: vec![],
+        domain: Domain::Rows(n as u32),
+        context: Context::default(),
+    };
+    let cpu_h = CpuBackend
+        .execute(&mixed_mod, &cpu_inv, &mut Scope::new(&mut cpu_host, all()))
+        .unwrap()[0];
+    let cpu_words = cpu_host.data(cpu_h).unwrap().storage().to_vec();
+    for (tag, backend) in [("subgroups", &gpu), ("fallback", &fallback)] {
+        let mut dev_host = Host::new(1 << 24);
+        let dev_inp = dev_host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]),
+                    Domain::Rows(n as u32),
+                    inp_words.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let inv = Invocation {
+            inputs: vec![dev_inp],
+            params: vec![],
+            domain: Domain::Rows(n as u32),
+            context: Context::default(),
+        };
+        let prep = Backend::prepare(backend, &mixed_mod).unwrap();
+        let out_h = Backend::execute(
+            backend,
+            prep.as_ref(),
+            &mixed_mod,
+            &inv,
+            &mut Scope::new(&mut dev_host, all()),
+        )
+        .unwrap()[0];
+        let dev = dev_host.resident(out_h).unwrap().expect("resident");
+        let words = Backend::download(backend, dev, cpu_words.len() * 4).unwrap();
+        assert_eq!(words, cpu_words, "{tag} mixed struct min mismatch");
+    }
+
+    // Exact first-overflow reporting across 1-level (block 0), 2-level (block 1), and 3-level.
+    let overflow_mod = compile(
+        "kernel test.pfx_ovf@1 {
+            requires { field.read; field.write; }
+            input xs: Rows<Int>;
+            output result: Rows<Int>;
+            prefix over xs with sum { return sample(xs); }
+        }",
+    )
+    .unwrap();
+    for (len, boom_at) in [(64usize, 5usize), (512, 260), (70_000, 66_000)] {
+        let mut words = vec![0u32; len];
+        words[boom_at - 1] = 2_000_000_000u32;
+        words[boom_at] = 500_000_000u32;
+        let mut cpu_host = Host::new(1 << 24);
+        let cpu_inp = cpu_host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]),
+                    Domain::Rows(len as u32),
+                    words.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let cpu_inv = Invocation {
+            inputs: vec![cpu_inp],
+            params: vec![],
+            domain: Domain::Rows(len as u32),
+            context: Context::default(),
+        };
+        let cpu_err = CpuBackend
+            .execute(
+                &overflow_mod,
+                &cpu_inv,
+                &mut Scope::new(&mut cpu_host, all()),
+            )
+            .unwrap_err()
+            .to_string();
+        for (tag, backend) in [("subgroups", &gpu), ("fallback", &fallback)] {
+            let mut dev_host = Host::new(1 << 24);
+            let dev_inp = dev_host
+                .adopt(
+                    entelechy_abi::FieldData::from_storage(
+                        entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]),
+                        Domain::Rows(len as u32),
+                        words.clone(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            let inv = Invocation {
+                inputs: vec![dev_inp],
+                params: vec![],
+                domain: Domain::Rows(len as u32),
+                context: Context::default(),
+            };
+            let prep = Backend::prepare(backend, &overflow_mod).unwrap();
+            let gpu_err = Backend::execute(
+                backend,
+                prep.as_ref(),
+                &overflow_mod,
+                &inv,
+                &mut Scope::new(&mut dev_host, all()),
+            )
+            .unwrap_err()
+            .to_string();
+            assert_eq!(
+                gpu_err, cpu_err,
+                "{tag} prefix overflow mismatch for len={len}, boom_at={boom_at}"
+            );
+        }
+    }
+}
+
+#[test]
+fn parallel_pairwise_reduce_matches_cpu_bit_for_bit_across_strategies_and_types() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let caps = gpu.subgroups();
+    let fallback = GpuBackend::new().unwrap().without_subgroups();
+
+    // Non-associative floating-point merge verifies exact pairwise binary tree equivalence.
+    let module = compile(
+        "kernel test.red_tree@1 {
+            requires { field.read; field.write; }
+            input xs: Rows<Float>;
+            output result: Rows<Float>;
+            compute over xs { return sample(xs); }
+            merge(a, b) { return a * 0.75 + b * 0.25 + 0.125; }
+        }",
+    )
+    .unwrap();
+    if caps.wave_parallel_256() {
+        let strat =
+            entelechy_gpu::wgsl::reduce_strategy(&module, caps, u64::from(gpu.workgroup_memory()));
+        assert_eq!(strat, entelechy_gpu::wgsl::ReduceStrategy::Subgroup256);
+        let wgsl = entelechy_gpu::wgsl::emit_reduce_with_strategy(
+            &module,
+            &[],
+            entelechy_gpu::wgsl::Longs::Native,
+            strat,
+            caps,
+        );
+        assert!(
+            wgsl.contains("subgroupShuffleDown("),
+            "expected subgroupShuffleDown in reduce:\n{wgsl}"
+        );
+    }
+
+    let prep_sg = Backend::prepare(&gpu, &module).unwrap();
+    let prep_fb = Backend::prepare(&fallback, &module).unwrap();
+    for count in [
+        1usize, 2, 3, 5, 6, 7, 15, 16, 17, 31, 32, 33, 70, 255, 256, 257, 1000, 70_000,
+    ] {
+        let data: Vec<u32> = (0..count)
+            .map(|i| (((i * 13) % 97) as f32 * 0.125 - 4.0).to_bits())
+            .collect();
+        let mut cpu_host = Host::new(1 << 24);
+        let cpu_inp = cpu_host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float]),
+                    Domain::Rows(count as u32),
+                    data.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let cpu_inv = Invocation {
+            inputs: vec![cpu_inp],
+            params: vec![],
+            domain: Domain::Rows(1),
+            context: Context::default(),
+        };
+        let cpu_h = CpuBackend
+            .execute(&module, &cpu_inv, &mut Scope::new(&mut cpu_host, all()))
+            .unwrap()[0];
+        let cpu_word = cpu_host.data(cpu_h).unwrap().storage()[0];
+
+        for (tag, backend, prep) in [
+            ("subgroups", &gpu, prep_sg.as_ref()),
+            ("fallback", &fallback, prep_fb.as_ref()),
+        ] {
+            let mut dev_host = Host::new(1 << 24);
+            let dev_inp = dev_host
+                .adopt(
+                    entelechy_abi::FieldData::from_storage(
+                        entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float]),
+                        Domain::Rows(count as u32),
+                        data.clone(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            let inv = Invocation {
+                inputs: vec![dev_inp],
+                params: vec![],
+                domain: Domain::Rows(1),
+                context: Context::default(),
+            };
+            let out_h = Backend::execute(
+                backend,
+                prep,
+                &module,
+                &inv,
+                &mut Scope::new(&mut dev_host, all()),
+            )
+            .unwrap()[0];
+            let dev = dev_host.resident(out_h).unwrap().expect("resident");
+            let word = Backend::download(backend, dev, 4).unwrap()[0];
+            assert_eq!(
+                word,
+                cpu_word,
+                "{tag} pairwise tree mismatch at count={count}: gpu={} cpu={}",
+                f32::from_bits(word),
+                f32::from_bits(cpu_word)
+            );
+        }
+    }
+}
+
+#[test]
+fn subgroup_rasterizer_compaction_matches_fallback() {
+    let Some(gpu) = gpu() else {
+        return;
+    };
+    let fallback = GpuBackend::new().unwrap().without_subgroups();
+    // Build 2,400 mixed small, large, offscreen, and degenerate triangles across 10 blocks of 256.
+    let tri_count = 2400usize;
+    let mut verts: Vec<u32> = Vec::with_capacity(tri_count * 3 * 9);
+    let mut tris: Vec<u32> = Vec::with_capacity(tri_count * 3);
+    let push_v = |verts: &mut Vec<u32>, x: f32, y: f32, z: f32, w: f32, nx: f32, u: f32, v: f32| {
+        for f in [x, y, z, w, nx, 0.0, 1.0, u, v] {
+            verts.push(f.to_bits());
+        }
+    };
+    for t in 0..tri_count {
+        let base = (t * 3) as u32;
+        tris.extend([base, base + 1, base + 2]);
+        let fx = ((t % 40) as f32 / 20.0) - 0.95;
+        let fy = (((t / 40) % 40) as f32 / 20.0) - 0.95;
+        let z = 0.1 + 0.8 * ((t * 17) % 100) as f32 / 100.0;
+        let kind = t % 5;
+        let (dx, dy, w) = match kind {
+            0 => (0.28, 0.24, 1.0),   // large hardware-rasterized triangle
+            1 => (0.015, 0.015, 1.0), // tiny software-rasterized triangle
+            2 => (0.12, 0.10, -1.0),  // behind near plane (culled)
+            3 => (0.0, 0.0, 1.0),     // degenerate zero area (culled)
+            _ => (0.18, 0.14, 1.0),   // medium hardware triangle
+        };
+        let nx = (t % 7) as f32 / 7.0;
+        push_v(&mut verts, fx, fy, z, w, nx, 0.0, 0.0);
+        push_v(&mut verts, fx + dx, fy, z, w, nx, 1.0, 0.0);
+        push_v(&mut verts, fx, fy + dy, z, w, nx, 0.0, 1.0);
+    }
+    let bytes = 128 * 128 * entelechy_rules::raster::SURFACE_WORDS * 4;
+    let run_raster = |backend: &GpuBackend| {
+        let mut host = Host::new(1 << 24);
+        let vh = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::raster::vertex_schema(),
+                    Domain::Rows((tri_count * 3) as u32),
+                    verts.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let th = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::raster::triangle_schema(),
+                    Domain::Rows(tri_count as u32),
+                    tris.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let inv = Invocation {
+            inputs: vec![vh, th],
+            params: vec![],
+            domain: Domain::Grid(128, 128),
+            context: Context::default(),
+        };
+        let out_h = Backend::execute_native(
+            backend,
+            entelechy_rules::NativeOp::Rasterize,
+            &inv,
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap()[0];
+        Backend::download(backend, host.resident(out_h).unwrap().unwrap(), bytes).unwrap()
+    };
+    let sg_words = run_raster(&gpu);
+    let fb_words = run_raster(&fallback);
+    assert_eq!(
+        sg_words, fb_words,
+        "subgroup raster compaction must match non-subgroup fallback bit for bit"
+    );
+}

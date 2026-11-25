@@ -12,6 +12,7 @@ pub(crate) fn emit_function(
     packed: &[Vec<usize>],
     textured: &[usize],
     longs: Longs,
+    subgroup_group: bool,
 ) {
     let args = if entry && module.manifest.mode == Mode::Scan {
         format!(
@@ -52,6 +53,7 @@ pub(crate) fn emit_function(
         loops: Vec::new(),
         pairs: longs == Longs::Pairs,
         group_look: false,
+        subgroup_group,
     };
     emitter.instructions(&function.body, 1);
     if stores {
@@ -137,6 +139,9 @@ pub(crate) struct Emitter<'a> {
     /// reaches alike and which stops them all together once one has
     /// failed.
     group_look: bool,
+    /// Whether this `group N` entry exchanges values register-to-register via
+    /// `subgroupShuffle` instead of workgroup shared memory.
+    subgroup_group: bool,
 }
 
 /// Whether `body` holds an exchange, in nested blocks too.
@@ -234,6 +239,30 @@ impl Emitter<'_> {
                     Mode::Group { size } => size,
                     _ => 1,
                 };
+                if self.subgroup_group {
+                    self.line(
+                        depth,
+                        "if (subgroupAny(failed_here)) { group_failed = true; failed_here = true; }",
+                    );
+                    let lane_var = format!("sg_l_{}", id.0);
+                    self.line(
+                        depth,
+                        &format!(
+                            "let {lane_var}: u32 = u32((({} % {size}) + {size}) % {size});",
+                            v(lane)
+                        ),
+                    );
+                    let shuffled = subgroup_shuffle_expr(
+                        self.module,
+                        *ty,
+                        &v(value),
+                        &lane_var,
+                        "subgroupShuffle",
+                        self.pairs,
+                    );
+                    self.line(depth, &format!("let v{}: {ty_name} = {shuffled};", id.0));
+                    return;
+                }
                 let meet = meet_name(*ty);
                 self.line(depth, &format!("{meet}[group_lane] = {};", v(value)));
                 self.line(depth, "if (failed_here) { group_failed = 1u; }");

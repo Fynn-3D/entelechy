@@ -125,8 +125,9 @@ fn uv_of(v: u32) -> vec2<f32> {
 }
 ";
 
-/// Step 1: which triangles are drawn, and how.
-const KEEP_WGSL: &str = "
+/// Step 1: common bindings, `usable` and `sort` shared across subgroup and
+/// fallback compaction passes.
+const KEEP_COMMON_WGSL: &str = "
 @group(0) @binding(3) var<storage, read_write> marks: array<u32>;
 @group(0) @binding(4) var<storage, read_write> offsets: array<u32>;
 @group(0) @binding(5) var<storage, read_write> indices: array<u32>;
@@ -177,6 +178,239 @@ fn sort(t: u32) -> u32 {
     return 1u;
 }
 
+var<workgroup> place_marks: array<u32, 8>;
+
+// Each kept triangle writes its corners and its row at its place, caching the
+// block's 8 mark words once in workgroup memory.
+@compute @workgroup_size(256)
+fn place(@builtin(local_invocation_index) local: u32, @builtin(workgroup_id) group: vec3<u32>) {
+    let block = group.x + group.y * setup.blocks_x;
+    if local < 8u && block < setup.block_count {
+        place_marks[local] = marks[block * 8u + local];
+    }
+    workgroupBarrier();
+    let t = block * BLOCK + local;
+    if block >= setup.block_count || t >= setup.triangle_count {
+        return;
+    }
+    let word = place_marks[local / 32u];
+    let bit = local % 32u;
+    if ((word >> bit) & 1u) == 0u {
+        return;
+    }
+    var before = countOneBits(word & ((1u << bit) - 1u));
+    for (var w = 0u; w < local / 32u; w++) {
+        before += countOneBits(place_marks[w]);
+    }
+    let at = offsets[block] + before;
+    indices[at * 3u] = corner(t, 0u);
+    indices[at * 3u + 1u] = corner(t, 1u);
+    indices[at * 3u + 2u] = corner(t, 2u);
+    rows[at] = t;
+}
+";
+
+/// Step 1 `mark` + `sum` for 32-lane hardware subgroups (Apple Metal, NVIDIA):
+/// `subgroupBallot` produces each 32-bit mark word with zero workgroup atomics
+/// and 1 barrier, and `subgroupInclusiveAdd` scans block sums in 2 barriers.
+const KEEP_SG32_WGSL: &str = "
+var<workgroup> wave_counts: array<u32, 8>;
+
+@compute @workgroup_size(256)
+fn mark(
+    @builtin(local_invocation_index) local: u32,
+    @builtin(workgroup_id) group: vec3<u32>,
+    @builtin(subgroup_invocation_id) sg_id: u32,
+) {
+    let block = group.x + group.y * setup.blocks_x;
+    let t = block * BLOCK + local;
+    let keep = block < setup.block_count && t < setup.triangle_count && sort(t) == 1u;
+    let ballot = subgroupBallot(keep).x;
+    let wave = local / 32u;
+    if sg_id == 0u {
+        if block < setup.block_count {
+            marks[block * 8u + wave] = ballot;
+        }
+        wave_counts[wave] = countOneBits(ballot);
+    }
+    workgroupBarrier();
+    if wave == 0u {
+        var c = 0u;
+        if sg_id < 8u {
+            c = wave_counts[sg_id];
+        }
+        let total = subgroupAdd(c);
+        if sg_id == 0u && block < setup.block_count {
+            offsets[block] = total;
+        }
+    }
+}
+
+var<workgroup> wave_sums: array<u32, 64>;
+
+@compute @workgroup_size(256)
+fn sum(
+    @builtin(local_invocation_index) local: u32,
+    @builtin(subgroup_invocation_id) sg_id: u32,
+    @builtin(subgroup_size) sg_size: u32,
+) {
+    let n = setup.block_count;
+    let per = (n + 255u) / 256u;
+    let first = min(local * per, n);
+    let last = min(first + per, n);
+    var own = 0u;
+    for (var i = first; i < last; i++) {
+        own += offsets[i];
+    }
+    let wave = local / sg_size;
+    let num_waves = 256u / sg_size;
+    var inc = subgroupInclusiveAdd(own);
+    if sg_id == sg_size - 1u {
+        wave_sums[wave] = inc;
+    }
+    workgroupBarrier();
+    if num_waves <= sg_size {
+        if wave == 0u {
+            var w = 0u;
+            if sg_id < num_waves {
+                w = wave_sums[sg_id];
+            }
+            let w_inc = subgroupInclusiveAdd(w);
+            if sg_id < num_waves {
+                wave_sums[sg_id] = w_inc;
+            }
+        }
+    } else if local == 0u {
+        var acc = wave_sums[0u];
+        for (var w = 1u; w < num_waves; w++) {
+            acc += wave_sums[w];
+            wave_sums[w] = acc;
+        }
+    }
+    workgroupBarrier();
+    if wave > 0u {
+        inc += wave_sums[wave - 1u];
+    }
+    var at = inc - own;
+    for (var i = first; i < last; i++) {
+        let count = offsets[i];
+        offsets[i] = at;
+        at += count;
+    }
+    if local == 255u {
+        args[0] = inc * 3u;
+        args[1] = 1u;
+        args[2] = 0u;
+        args[3] = 0u;
+        args[4] = 0u;
+    }
+}
+";
+
+/// Step 1 `mark` + `sum` for general power-of-two hardware subgroups (16/32/64
+/// lanes, e.g. AMD Wave64 / Intel Xe Wave16): wave-aggregated `kept` counts and
+/// 2-barrier `subgroupInclusiveAdd` block scan.
+const KEEP_SG_GENERAL_WGSL: &str = "
+var<workgroup> marked: array<atomic<u32>, 8>;
+var<workgroup> kept: atomic<u32>;
+
+@compute @workgroup_size(256)
+fn mark(
+    @builtin(local_invocation_index) local: u32,
+    @builtin(workgroup_id) group: vec3<u32>,
+    @builtin(subgroup_invocation_id) sg_id: u32,
+) {
+    if local < 8u {
+        atomicStore(&marked[local], 0u);
+    }
+    if local == 0u {
+        atomicStore(&kept, 0u);
+    }
+    workgroupBarrier();
+    let block = group.x + group.y * setup.blocks_x;
+    let t = block * BLOCK + local;
+    let keep = block < setup.block_count && t < setup.triangle_count && sort(t) == 1u;
+    if keep {
+        atomicOr(&marked[local / 32u], 1u << (local % 32u));
+    }
+    let wave_kept = subgroupAdd(u32(keep));
+    if sg_id == 0u && wave_kept > 0u {
+        atomicAdd(&kept, wave_kept);
+    }
+    workgroupBarrier();
+    if block < setup.block_count {
+        if local < 8u {
+            marks[block * 8u + local] = atomicLoad(&marked[local]);
+        }
+        if local == 0u {
+            offsets[block] = atomicLoad(&kept);
+        }
+    }
+}
+
+var<workgroup> wave_sums: array<u32, 64>;
+
+@compute @workgroup_size(256)
+fn sum(
+    @builtin(local_invocation_index) local: u32,
+    @builtin(subgroup_invocation_id) sg_id: u32,
+    @builtin(subgroup_size) sg_size: u32,
+) {
+    let n = setup.block_count;
+    let per = (n + 255u) / 256u;
+    let first = min(local * per, n);
+    let last = min(first + per, n);
+    var own = 0u;
+    for (var i = first; i < last; i++) {
+        own += offsets[i];
+    }
+    let wave = local / sg_size;
+    let num_waves = 256u / sg_size;
+    var inc = subgroupInclusiveAdd(own);
+    if sg_id == sg_size - 1u {
+        wave_sums[wave] = inc;
+    }
+    workgroupBarrier();
+    if num_waves <= sg_size {
+        if wave == 0u {
+            var w = 0u;
+            if sg_id < num_waves {
+                w = wave_sums[sg_id];
+            }
+            let w_inc = subgroupInclusiveAdd(w);
+            if sg_id < num_waves {
+                wave_sums[sg_id] = w_inc;
+            }
+        }
+    } else if local == 0u {
+        var acc = wave_sums[0u];
+        for (var w = 1u; w < num_waves; w++) {
+            acc += wave_sums[w];
+            wave_sums[w] = acc;
+        }
+    }
+    workgroupBarrier();
+    if wave > 0u {
+        inc += wave_sums[wave - 1u];
+    }
+    var at = inc - own;
+    for (var i = first; i < last; i++) {
+        let count = offsets[i];
+        offsets[i] = at;
+        at += count;
+    }
+    if local == 255u {
+        args[0] = inc * 3u;
+        args[1] = 1u;
+        args[2] = 0u;
+        args[3] = 0u;
+        args[4] = 0u;
+    }
+}
+";
+
+/// Step 1 `mark` + `sum` fallback without subgroup extensions.
+const KEEP_FALLBACK_WGSL: &str = "
 var<workgroup> marked: array<atomic<u32>, 8>;
 var<workgroup> kept: atomic<u32>;
 
@@ -247,30 +481,6 @@ fn sum(@builtin(local_invocation_index) local: u32) {
         args[3] = 0u;
         args[4] = 0u;
     }
-}
-
-// Each kept triangle writes its corners and its row at its place.
-@compute @workgroup_size(256)
-fn place(@builtin(local_invocation_index) local: u32, @builtin(workgroup_id) group: vec3<u32>) {
-    let block = group.x + group.y * setup.blocks_x;
-    let t = block * BLOCK + local;
-    if block >= setup.block_count || t >= setup.triangle_count {
-        return;
-    }
-    let word = marks[block * 8u + local / 32u];
-    let bit = local % 32u;
-    if ((word >> bit) & 1u) == 0u {
-        return;
-    }
-    var before = countOneBits(word & ((1u << bit) - 1u));
-    for (var w = 0u; w < local / 32u; w++) {
-        before += countOneBits(marks[block * 8u + w]);
-    }
-    let at = offsets[block] + before;
-    indices[at * 3u] = corner(t, 0u);
-    indices[at * 3u + 1u] = corner(t, 1u);
-    indices[at * 3u + 2u] = corner(t, 2u);
-    rows[at] = t;
 }
 ";
 
@@ -613,6 +823,7 @@ fn build(
     wait: crate::Wait,
     indexed: bool,
     here: bool,
+    subgroups: crate::wgsl::SubgroupCaps,
 ) -> Result<RasterPipelines, String> {
     let guard = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let module = |label: &str, parts: &[&str]| {
@@ -669,13 +880,22 @@ fn build(
     let c = wgpu::ShaderStages::COMPUTE;
 
     let keep_mask = MASK_WGSL.replace("{mask}", "9");
+    let (keep_enable, keep_impl) = if subgroups.exact_wave_32() {
+        (subgroups.directive(), KEEP_SG32_WGSL)
+    } else if subgroups.wave_parallel_256() {
+        (subgroups.directive(), KEEP_SG_GENERAL_WGSL)
+    } else {
+        ("", KEEP_FALLBACK_WGSL)
+    };
     let keep_module = module(
         "entelechy rasterize keep",
         &[
+            keep_enable,
             SETUP_WGSL,
             TRIANGLES_WGSL,
             &keep_mask,
-            KEEP_WGSL,
+            KEEP_COMMON_WGSL,
+            keep_impl,
             if here { HERE_WGSL } else { NOT_HERE_WGSL },
         ],
     );
@@ -902,6 +1122,7 @@ pub(crate) fn rasterize(
             gpu.wait,
             gpu.primitive_index,
             gpu.int64_atomics,
+            gpu.subgroups,
         )
     }) {
         Ok(pipelines) => pipelines,

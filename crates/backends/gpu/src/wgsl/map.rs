@@ -68,8 +68,52 @@ pub fn emit_full_filtered(
     half: Half,
     float32_filterable: bool,
 ) -> String {
+    emit_full_with_subgroups(
+        module,
+        packs,
+        textured,
+        longs,
+        half,
+        float32_filterable,
+        SubgroupCaps::default(),
+    )
+}
+
+/// Whether `module` is a `group N` Kernel that runs its exchanges in a single
+/// hardware subgroup via `subgroupShuffle` (zero workgroup memory, zero
+/// barriers) given `subgroups`.
+pub fn uses_subgroup_group(module: &Module, subgroups: SubgroupCaps) -> bool {
+    let Mode::Group { size } = module.manifest.mode else {
+        return false;
+    };
+    if !subgroups.fits_single_wave(size) {
+        return false;
+    }
+    let mut met = Vec::new();
+    exchanged(&module.entry.body, &mut met);
+    met.into_iter()
+        .all(|ty| type_words(module, ty) <= SUBGROUP_SHUFFLE_MAX_WORDS)
+}
+
+/// Emits the module's compute shader with packed input groups, hardware
+/// `textured` inputs, `longs` mode, scatter `half`, `float32_filterable`, and
+/// hardware `subgroups` capabilities.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_full_with_subgroups(
+    module: &Module,
+    packs: &[Vec<usize>],
+    textured: &[usize],
+    longs: Longs,
+    half: Half,
+    float32_filterable: bool,
+    subgroups: SubgroupCaps,
+) -> String {
     let manifest = &module.manifest;
+    let subgroup_group = uses_subgroup_group(module, subgroups);
     let mut out = String::new();
+    if subgroup_group {
+        out.push_str(subgroups.directive());
+    }
     emit_preamble(
         &mut out,
         module,
@@ -79,6 +123,9 @@ pub fn emit_full_filtered(
         longs,
         float32_filterable,
     );
+    if subgroup_group && longs == Longs::Native && module.holds(Type::Long) {
+        out.push_str(SUBGROUP_I64_HELPERS);
+    }
     // One store per written output; a scatter stores the entry's pairs.
     let scattering = matches!(manifest.mode, Mode::Scatter { .. });
     for (k, port) in manifest
@@ -120,6 +167,7 @@ pub fn emit_full_filtered(
             packs,
             textured,
             longs,
+            false,
         );
         out.push('\n');
     }
@@ -132,15 +180,16 @@ pub fn emit_full_filtered(
         packs,
         textured,
         longs,
+        subgroup_group,
     );
     if let Some(merge) = &module.merge {
         emit_function(
-            &mut out, module, merge, "merge", false, packs, textured, longs,
+            &mut out, module, merge, "merge", false, packs, textured, longs, false,
         );
     }
     if let Some(init) = &module.init {
         emit_function(
-            &mut out, module, init, "init", false, packs, textured, longs,
+            &mut out, module, init, "init", false, packs, textured, longs, false,
         );
         // Ordered work: one invocation walks the rows, carrying the value.
         let _ = writeln!(
@@ -174,7 +223,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         return out;
     }
     if let Mode::Group { size } = manifest.mode {
-        emit_group_main(&mut out, module, size);
+        if subgroup_group {
+            emit_group_main_subgroup(&mut out, module, size);
+        } else {
+            emit_group_main(&mut out, module, size);
+        }
         return out;
     }
     // A map of several outputs stores them from the entry. An emitting
@@ -367,6 +420,75 @@ fn group_look() -> bool {{
     );
 }
 
+/// A group's entry point when `size` fits inside one hardware subgroup:
+/// every exchange runs register-to-register via `subgroupShuffle`, failures
+/// propagate via `subgroupAny`, and accounted groups gate and settle via
+/// `subgroupBroadcastFirst` and `subgroupAdd` — zero workgroup memory and
+/// zero `workgroupBarrier` calls.
+fn emit_group_main_subgroup(out: &mut String, module: &Module, size: u32) {
+    let _ = writeln!(
+        out,
+        "var<private> group_lane: u32;\nvar<private> group_inside: bool;\nvar<private> group_failed: bool;"
+    );
+    let head = format!(
+        "
+@compute @workgroup_size({size}, 1, 1)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(subgroup_invocation_id) sid: u32) {{
+    let w = bitcast<u32>(ctx[0].x);
+    let h = bitcast<u32>(ctx[0].y);
+    let d = bitcast<u32>(ctx[1].z);
+    let element = (wid.x + wid.y * {span}u) * {size}u + sid;
+    group_lane = sid;
+    group_inside = element < w * h * d;
+    group_failed = false;
+    current = element;
+    let row = element / w;
+    let coord = vec3<f32>(f32(element % w), f32(row % h), f32(row / h));",
+        span = MAX_GROUPS,
+    );
+    let store = if written_outputs(module) > 1 {
+        "entry(coord, element);"
+    } else {
+        "let v = entry(coord, element);
+        if (group_inside) {
+            store_out0(element, v);
+        }"
+    };
+    if !module.accounted() {
+        let _ = writeln!(
+            out,
+            "{head}
+    begin_work();
+    {store}
+}}"
+        );
+        return;
+    }
+    let _ = writeln!(
+        out,
+        "fn group_look() -> bool {{
+    _ = look();
+    return group_failed;
+}}
+{head}
+    var open_u: u32 = 0u;
+    if (sid == 0u) {{
+        open_u = u32(atomicLoad(&failure.blocks) <= failure.limit);
+    }}
+    if (subgroupBroadcastFirst(open_u) != 0u) {{
+        begin_work();
+        {store}
+        let total_left = subgroupAdd(work & {mask}u);
+        if (sid == 0u) {{
+            owed = total_left;
+            settle_left();
+        }}
+    }}
+}}",
+        mask = entelechy_ir::WORK_BLOCK - 1,
+    );
+}
+
 /// The types of the values exchanged in `body`, each once, in order.
 fn exchanged(body: &[entelechy_ir::Instruction], out: &mut Vec<Type>) {
     for instruction in body {
@@ -402,9 +524,20 @@ pub fn group_memory(module: &Module) -> u64 {
     arrays + flags
 }
 
+/// The bytes a group's workgroup holds at once on a device with `subgroups`:
+/// zero when the group runs register-only via `subgroupShuffle`, otherwise
+/// [`group_memory`].
+pub fn group_memory_for(module: &Module, subgroups: SubgroupCaps) -> u64 {
+    if uses_subgroup_group(module, subgroups) {
+        0
+    } else {
+        group_memory(module)
+    }
+}
+
 /// A value's size and alignment in a shader's memory, by WGSL's layout:
 /// a three-vector aligned as a four, a struct to its widest field.
-fn layout(module: &Module, ty: Type) -> (u64, u64) {
+pub(crate) fn layout(module: &Module, ty: Type) -> (u64, u64) {
     let scalar = |kind: entelechy_abi::Scalar| -> u64 {
         if matches!(
             kind,

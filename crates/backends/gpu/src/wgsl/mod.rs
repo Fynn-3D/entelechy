@@ -56,6 +56,156 @@ pub const SAMPLER_ANISO_CLAMP_BINDING: u32 = 99;
 /// Binding index of the 16x anisotropic Repeat (X/Y) / ClampToEdge (Z) hardware sampler.
 pub const SAMPLER_ANISO_REPEAT_BINDING: u32 = 100;
 
+/// Hardware subgroup (wave / SIMD-group) capabilities reported by a wgpu
+/// adapter. When `enabled` is false, every WGSL emitter uses pure workgroup
+/// shared-memory or scalar fallbacks with no subgroup intrinsics.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SubgroupCaps {
+    /// Whether the device enabled `wgpu::Features::SUBGROUP`.
+    pub enabled: bool,
+    /// Minimum subgroup lane count guaranteed on this adapter.
+    pub min_size: u32,
+    /// Maximum subgroup lane count possible on this adapter.
+    pub max_size: u32,
+    /// Whether the target WGSL frontend requires `enable subgroups;` (true on
+    /// browser WebGPU; false on native Naga 30, which gates subgroup builtins
+    /// by `wgpu::Features::SUBGROUP` and rejects the `enable` directive).
+    pub enable_directive: bool,
+}
+
+impl SubgroupCaps {
+    /// Leading WGSL enable directive when required by the target frontend.
+    pub const fn directive(self) -> &'static str {
+        if self.enable_directive {
+            "enable subgroups;\n"
+        } else {
+            ""
+        }
+    }
+
+    /// Whether a `group N` Kernel of `size` lanes fits inside one hardware
+    /// subgroup, so `exchange` runs register-to-register via `subgroupShuffle`
+    /// with zero workgroup memory and zero barriers.
+    pub const fn fits_single_wave(self, size: u32) -> bool {
+        self.enabled && size > 0 && size <= self.min_size
+    }
+
+    /// Whether every subgroup on this device is guaranteed to be 32 lanes wide
+    /// (Apple Silicon Metal, NVIDIA), allowing 32-bit `subgroupBallot` masks
+    /// to map 1:1 to `u32` bitmask words with zero workgroup atomics.
+    pub const fn exact_wave_32(self) -> bool {
+        self.enabled && self.min_size == 32 && self.max_size == 32
+    }
+
+    /// Whether a 256-lane workgroup decomposes into at most 64 power-of-two
+    /// hardware waves (`4 <= min_size <= max_size <= 256`).
+    pub const fn wave_parallel_256(self) -> bool {
+        self.enabled
+            && self.min_size >= 4
+            && self.max_size <= 256
+            && self.min_size <= self.max_size
+            && self.min_size.is_power_of_two()
+            && self.max_size.is_power_of_two()
+    }
+}
+
+/// Maximum scalar words per exchanged value for register-only `subgroupShuffle`
+/// in `group N` Kernels; wider arrays stay in workgroup shared memory to avoid
+/// excessive register pressure.
+pub(crate) const SUBGROUP_SHUFFLE_MAX_WORDS: usize = 16;
+
+/// WGSL helpers splitting 64-bit `i64` across a `vec2<u32>` subgroup shuffle so
+/// drivers whose hardware shuffle intrinsics only take 32-bit words (such as
+/// Apple Metal) compile cleanly.
+pub(crate) const SUBGROUP_I64_HELPERS: &str = "
+fn sg_shuffle_i64(v: i64, l: u32) -> i64 {
+    let u = bitcast<u64>(v);
+    let p = subgroupShuffle(vec2<u32>(u32(u), u32(u >> 32u)), l);
+    return bitcast<i64>(u64(p.x) | (u64(p.y) << 32u));
+}
+fn sg_shuffle_down_i64(v: i64, d: u32) -> i64 {
+    let u = bitcast<u64>(v);
+    let p = subgroupShuffleDown(vec2<u32>(u32(u), u32(u >> 32u)), d);
+    return bitcast<i64>(u64(p.x) | (u64(p.y) << 32u));
+}
+";
+
+/// Emits a WGSL subgroup shuffle expression (`subgroupShuffle` or
+/// `subgroupShuffleDown`) for any Entelechy type, decomposing booleans,
+/// native 64-bit `Long`s, matrices, and structs into 32-bit hardware shuffles.
+pub(crate) fn subgroup_shuffle_expr(
+    module: &Module,
+    ty: Type,
+    expr: &str,
+    lane: &str,
+    op: &str,
+    pairs: bool,
+) -> String {
+    let i64_fn = if op == "subgroupShuffleDown" {
+        "sg_shuffle_down_i64"
+    } else {
+        "sg_shuffle_i64"
+    };
+    match ty {
+        Type::Scalar(Scalar::Float | Scalar::Int) => format!("{op}({expr}, {lane})"),
+        Type::Scalar(Scalar::Bool) => format!("({op}(select(0u, 1u, {expr}), {lane}) != 0u)"),
+        Type::Scalar(Scalar::Long) => {
+            if pairs {
+                format!("{op}({expr}, {lane})")
+            } else {
+                format!("{i64_fn}({expr}, {lane})")
+            }
+        }
+        Type::Scalar(Scalar::Double) => unreachable!("the GPU refuses a module holding a Double"),
+        Type::Vector(Scalar::Float | Scalar::Int, _) => format!("{op}({expr}, {lane})"),
+        Type::Vector(Scalar::Bool, n) => format!(
+            "({op}(select(vec{n}<u32>(0u), vec{n}<u32>(1u), {expr}), {lane}) != vec{n}<u32>(0u))"
+        ),
+        Type::Vector(Scalar::Long, n) => {
+            let comps = ["x", "y", "z", "w"];
+            let parts = comps
+                .iter()
+                .take(usize::from(n))
+                .map(|c| format!("{i64_fn}({expr}.{c}, {lane})"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("vec{n}<i64>({parts})")
+        }
+        Type::Vector(Scalar::Double, _) => {
+            unreachable!("the GPU refuses a module holding a Double")
+        }
+        Type::Matrix(kind, n) => {
+            let col_ty = Type::Vector(kind, n);
+            let cols = (0..n)
+                .map(|c| {
+                    subgroup_shuffle_expr(module, col_ty, &format!("{expr}[{c}u]"), lane, op, pairs)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("mat{n}x{n}<{}>({cols})", scalar_type(kind))
+        }
+        Type::Struct(index) => {
+            let fields = module.structs[index as usize]
+                .fields
+                .iter()
+                .enumerate()
+                .map(|(k, field)| {
+                    subgroup_shuffle_expr(
+                        module,
+                        field.ty,
+                        &format!("{expr}{}", field_path(module, index, k)),
+                        lane,
+                        op,
+                        pairs,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("S{index}({fields})")
+        }
+    }
+}
+
 /// Which hardware `wgpu::Sampler`s a module's WGSL shader declares and binds.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SamplerSet {
