@@ -198,13 +198,24 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   triangle with any `w <= 0` whole
   ([rules](crates/core/rules/src/raster.rs), [near-plane replay](packages/raster.entpkg/tests/near.replay));
   its ports are read by field ([native replay](examples/mesh/tests/native.replay)).
+  On the GPU ([raster](crates/backends/gpu/src/raster.rs),
+  [Hi-Z](crates/backends/gpu/src/raster_hiz.rs)), dense opaque calls run a
+  2-phase conservative MAX-Z Hi-Z occlusion pre-pass (odd-dimension safe,
+  seeding `native.cover@1` from prior canvas depth) and compact surviving
+  triangles in exact row order while dispatching surviving micro-triangles
+  via `dispatch_workgroups_indirect`.
   The ray tracer (`native.trace@1` single-mesh, `native.trace@2` instanced
   multi-mesh) builds pure-Rust SAH BVHs on CPU/JIT
-  ([rules](crates/core/rules/src/trace.rs)) and dispatches hardware ray
-  queries (`EXPERIMENTAL_RAY_QUERY`, GPU-sanitized cached BLAS/TLAS) or a
-  portable GPU compute SAH BVH fallback
+  ([rules](crates/core/rules/src/trace.rs)) and on GPU
   ([gpu trace](crates/backends/gpu/src/trace.rs),
-  [trace replay](packages/geometry.entpkg/tests/trace.replay),
+  [gpu LBVH](crates/backends/gpu/src/trace_lbvh.rs)) executes batched,
+  GPU-timed hardware ray queries (`EXPERIMENTAL_RAY_QUERY`, with automatic
+  double-buffered `DynamicHwBlas` promotion for deforming meshes) or a
+  zero-readback full-GPU LBVH builder (30-bit Morton + 8-pass GPU radix
+  sort + Karras binary radix tree + race-free 2-tier in-place dynamic
+  AABB refit) with GPU-driven active-ray stream compaction and
+  `dispatch_workgroups_indirect`
+  ([trace replay](packages/geometry.entpkg/tests/trace.replay),
   [GPU parity](crates/backends/gpu/tests/parity.rs)).
 
 ### Graph, state and composition

@@ -6107,3 +6107,588 @@ fn hardware_ray_tracing_instanced_tlas_parity() {
         let _ = host.release(out_h);
     }
 }
+
+#[test]
+fn gpu_lbvh_dynamic_refit_and_indirect_ray_compaction_parity() {
+    let Some(gpu) = gpu() else { return };
+    let fallback = GpuBackend::new().unwrap().without_ray_query();
+
+    // 13x13 animated grid (169 verts, 288 tris) generated directly on GPU + 4 extra tris.
+    let grid = 13u32;
+    let vert_count = grid * grid;
+    let vert_kernel = compile(
+        "kernel test.deform_grid@1 {
+            requires { field.write; }
+            param phase: Float = 0.0;
+            output positions: Rows<Vec3>;
+            compute {
+                let i = element();
+                let gx = i % 13;
+                let gy = i / 13;
+                let fx = (float(gx) / 12.0) * 3.2 - 1.6;
+                let fy = (float(gy) / 12.0) * 3.2 - 1.6;
+                let z = 0.35 * sin(fx * 2.1 + phase) * cos(fy * 1.9 - phase * 0.7)
+                    + 0.25 * cos(phase * 0.5);
+                return vec3(fx + 0.15 * sin(phase), fy + 0.12 * cos(phase), z);
+            }
+        }",
+    )
+    .unwrap();
+
+    let mut tris: Vec<u32> = Vec::new();
+    for gy in 0..(grid - 1) {
+        for gx in 0..(grid - 1) {
+            let a = gy * grid + gx;
+            let b = a + 1;
+            let c = a + grid;
+            let d = c + 1;
+            tris.extend([a, b, d, a, d, c]);
+        }
+    }
+    // Include a degenerate triangle and a valid cross-mesh triangle to stress refit bounds.
+    tris.extend([0, 0, 0, 0, 12, 168]);
+    let tri_count = (tris.len() / 3) as u32;
+
+    // 640 rays (> COMPACT_RAY_THRESHOLD = 256): interleaved live + dead/invalid rays.
+    let mut rays = Vec::new();
+    for i in 0..640u32 {
+        if i % 2 == 1 {
+            // Dead ray variants: negative tmin, tmax < tmin, zero dir, NaN origin.
+            match (i / 2) % 4 {
+                0 => push_ray(&mut rays, [0.0, 0.0, 3.0], -0.2, [0.0, 0.0, -1.0], 10.0),
+                1 => push_ray(&mut rays, [0.0, 0.0, 3.0], 4.0, [0.0, 0.0, -1.0], 2.0),
+                2 => push_ray(&mut rays, [0.0, 0.0, 3.0], 0.01, [0.0, 0.0, 0.0], 10.0),
+                _ => push_ray(
+                    &mut rays,
+                    [f32::NAN, 0.0, 3.0],
+                    0.01,
+                    [0.0, 0.0, -1.0],
+                    10.0,
+                ),
+            }
+        } else {
+            let idx = i / 2;
+            let rx = idx % 20;
+            let ry = idx / 20;
+            let x = ((rx as f32 + 0.37) / 20.0) * 3.4 - 1.7;
+            let y = ((ry as f32 + 0.61) / 16.0) * 3.4 - 1.7;
+            push_ray(&mut rays, [x, y, 3.5], 0.01, [0.0, 0.0, -1.0], 12.0);
+        }
+    }
+    let ray_count = (rays.len() / entelechy_rules::trace::RAY_WORDS) as u32;
+
+    // All-dead 512-ray batch to exercise zero-workgroup dispatch_workgroups_indirect.
+    let mut dead_rays = Vec::new();
+    for _ in 0..512u32 {
+        push_ray(&mut dead_rays, [0.0, 0.0, 3.0], 5.0, [0.0, 0.0, -1.0], 1.0);
+    }
+
+    let run_35_frames = |backend: &GpuBackend, tag: &str| {
+        let prep = Backend::prepare(backend, &vert_kernel).unwrap();
+        let mut host = Host::new(1 << 24);
+        let rh = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::trace::ray_schema(),
+                    Domain::Rows(ray_count),
+                    rays.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let dead_rh = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::trace::ray_schema(),
+                    Domain::Rows(512),
+                    dead_rays.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let th = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::trace::triangle_schema(),
+                    Domain::Rows(tri_count),
+                    tris.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        // 35 frames: covers initial build (0), dynamic promotion/refits (1..31),
+        // periodic full GPU LBVH rebuild (32), and post-rebuild refits (33..34).
+        for frame in 0..35usize {
+            backend.evaluation_begun();
+            let phase = frame as f32 * 0.23;
+            let v_inv = Invocation {
+                inputs: vec![],
+                params: vec![entelechy_abi::Value::Float(phase)],
+                domain: Domain::Rows(vert_count),
+                context: Context::default(),
+            };
+            let vh = Backend::execute(
+                backend,
+                &*prep,
+                &vert_kernel,
+                &v_inv,
+                &mut Scope::new(&mut host, all()),
+            )
+            .unwrap()[0];
+            let t_inv = Invocation {
+                inputs: vec![rh, vh, th],
+                params: vec![entelechy_abi::Value::Int(0)],
+                domain: Domain::Rows(ray_count),
+                context: Context::default(),
+            };
+            let hit_h = Backend::execute_native(
+                backend,
+                entelechy_rules::NativeOp::Trace,
+                &t_inv,
+                &mut Scope::new(&mut host, all()),
+            )
+            .unwrap()[0];
+
+            // Verify exact CPU parity on initial build, promotion, mid-refit,
+            // pre-rebuild, periodic full rebuild (32), and post-rebuild refits.
+            if matches!(frame, 0 | 1 | 2 | 15 | 31 | 32 | 33 | 34) {
+                let gpu_hits = Backend::download(
+                    backend,
+                    host.resident(hit_h).unwrap().unwrap(),
+                    ray_count as usize * entelechy_rules::trace::HIT_WORDS * 4,
+                )
+                .unwrap();
+                let gen_verts = Backend::download(
+                    backend,
+                    host.resident(vh).unwrap().unwrap(),
+                    vert_count as usize * entelechy_rules::trace::POSITION_WORDS * 4,
+                )
+                .unwrap();
+                let cpu_hits = entelechy_rules::trace::trace_words(&rays, &gen_verts, &tris, 0);
+                assert_hits_match(
+                    &format!("{tag} refit frame {frame}"),
+                    &cpu_hits,
+                    &gpu_hits,
+                    false,
+                    &rays,
+                );
+                let decoded = decode_hits(&gpu_hits);
+                let live_hits = decoded.iter().filter(|h| h.triangle >= 0).count();
+                assert!(live_hits > 150, "{tag} frame {frame} live_hits={live_hits}");
+                // All odd-indexed rays are invalid and must miss cleanly.
+                for (idx, h) in decoded.iter().enumerate() {
+                    if idx % 2 == 1 {
+                        assert_eq!(h.triangle, -1, "{tag} frame {frame} dead ray {idx} hit");
+                    }
+                }
+            }
+            if frame == 34 {
+                // Exercise zero-active-ray indirect dispatch cleanly.
+                let dead_inv = Invocation {
+                    inputs: vec![dead_rh, vh, th],
+                    params: vec![entelechy_abi::Value::Int(0)],
+                    domain: Domain::Rows(512),
+                    context: Context::default(),
+                };
+                let dead_out = Backend::execute_native(
+                    backend,
+                    entelechy_rules::NativeOp::Trace,
+                    &dead_inv,
+                    &mut Scope::new(&mut host, all()),
+                )
+                .unwrap()[0];
+                let words = Backend::download(
+                    backend,
+                    host.resident(dead_out).unwrap().unwrap(),
+                    512 * entelechy_rules::trace::HIT_WORDS * 4,
+                )
+                .unwrap();
+                assert!(decode_hits(&words).iter().all(|h| h.triangle == -1));
+                let _ = host.release(dead_out);
+            }
+            let _ = host.release(hit_h);
+            let _ = host.release(vh);
+        }
+    };
+
+    run_35_frames(&gpu, "hw-dynamic");
+    run_35_frames(&fallback, "lbvh-refit");
+}
+
+#[test]
+fn gpu_hiz_occlusion_culling_matches_cpu_including_coplanar_and_odd_sizes() {
+    let Some(gpu) = gpu() else { return };
+    let fallback = GpuBackend::new().unwrap().without_subgroups();
+    let cpu = CpuBackend;
+
+    // Odd dimensions exercise conservative 3-wide/3-tall Hi-Z reduction at every odd mip.
+    let (width, height) = (161u32, 91u32);
+    let mut verts: Vec<u32> = Vec::new();
+    let mut tris: Vec<u32> = Vec::new();
+    let push_tri = |verts: &mut Vec<u32>,
+                    tris: &mut Vec<u32>,
+                    p0: [f32; 4],
+                    p1: [f32; 4],
+                    p2: [f32; 4],
+                    tag: f32| {
+        let base = (verts.len() / 9) as u32;
+        for (p, uv) in [(p0, [0.0f32, 0.0]), (p1, [1.0, 0.0]), (p2, [0.0, 1.0])] {
+            for f in [p[0], p[1], p[2], p[3], tag, 0.0, 1.0, uv[0], uv[1]] {
+                verts.push(f.to_bits());
+            }
+        }
+        tris.extend([base, base + 1, base + 2]);
+    };
+
+    // 1) Large foreground opaque occluder quad covering NDC [-0.73..0.73, -0.71..0.71] at z = 0.25.
+    // Chosen slightly off exact pixel centers so hardware & rule edge evaluation match bit-for-bit.
+    push_tri(
+        &mut verts,
+        &mut tris,
+        [-0.731, -0.713, 0.25, 1.0],
+        [0.733, -0.713, 0.25, 1.0],
+        [0.733, 0.711, 0.25, 1.0],
+        1.0,
+    );
+    push_tri(
+        &mut verts,
+        &mut tris,
+        [-0.731, -0.713, 0.25, 1.0],
+        [0.733, 0.711, 0.25, 1.0],
+        [-0.731, 0.711, 0.25, 1.0],
+        2.0,
+    );
+
+    // 2) Coplanar equal-depth tie-break pair with identical vertices at z = 0.25
+    //    (earlier row 0 MUST win over row 2 on both CPU and GPU!).
+    push_tri(
+        &mut verts,
+        &mut tris,
+        [-0.731, -0.713, 0.25, 1.0],
+        [0.733, -0.713, 0.25, 1.0],
+        [0.733, 0.711, 0.25, 1.0],
+        3.0,
+    );
+
+    // 3) Slanted triangle crossing the near plane (z = -0.2 to z = 0.5) — must never be culled.
+    push_tri(
+        &mut verts,
+        &mut tris,
+        [-0.95, -0.92, -0.2, 1.0],
+        [-0.76, -0.92, 0.2, 1.0],
+        [-0.85, -0.15, 0.45, 1.0],
+        4.0,
+    );
+
+    // 4) Visible foreground micro-triangles (< 8px) in front of the occluder at z = 0.12
+    //    exercising compacted small_rows + dispatch_workgroups_indirect draw_small.
+    for i in 0..48u32 {
+        let fx = -0.55 + (i % 12) as f32 * 0.092;
+        let fy = -0.35 + (i / 12) as f32 * 0.21;
+        push_tri(
+            &mut verts,
+            &mut tris,
+            [fx, fy, 0.12, 1.0],
+            [fx + 0.041, fy, 0.12, 1.0],
+            [fx + 0.013, fy + 0.057, 0.12, 1.0],
+            5.0,
+        );
+    }
+
+    // 5) Visible unoccluded border triangles touching the odd right/bottom edges (x=160, y=90).
+    push_tri(
+        &mut verts,
+        &mut tris,
+        [0.81, -0.96, 0.62, 1.0],
+        [0.999, -0.96, 0.62, 1.0],
+        [0.999, 0.96, 0.62, 1.0],
+        6.0,
+    );
+    push_tri(
+        &mut verts,
+        &mut tris,
+        [-0.96, -0.999, 0.64, 1.0],
+        [0.96, -0.999, 0.64, 1.0],
+        [0.01, -0.78, 0.64, 1.0],
+        7.0,
+    );
+
+    let visible_tri_count = (tris.len() / 3) as u32;
+    let visible_vert_count = (verts.len() / 9) as u32;
+    let visible_verts = verts.clone();
+    let visible_tris = tris.clone();
+
+    // 6) 17,500 occluded background triangles (> HIZ_TRI_THRESHOLD = 16,384) completely behind
+    //    the foreground occluder at z = 0.50..0.92, mixing large, micro (< 8px), and far-plane tris.
+    for i in 0..17_500u32 {
+        let fx = -0.64 + ((i * 37) % 100) as f32 * 0.011;
+        let fy = -0.62 + ((i * 53) % 100) as f32 * 0.011;
+        let z = 0.50 + ((i * 19) % 42) as f32 * 0.01;
+        match i % 6 {
+            0 => push_tri(
+                &mut verts,
+                &mut tris,
+                [fx, fy, z, 1.0],
+                [fx + 0.18, fy, z, 1.0],
+                [fx + 0.04, fy + 0.17, z, 1.0],
+                8.0,
+            ),
+            1 | 2 => push_tri(
+                &mut verts,
+                &mut tris,
+                [fx, fy, z, 1.0],
+                [fx + 0.025, fy, z, 1.0],
+                [fx + 0.008, fy + 0.032, z, 1.0],
+                9.0,
+            ),
+            3 => push_tri(
+                &mut verts,
+                &mut tris,
+                [fx, fy, 1.25, 1.0],
+                [fx + 0.15, fy, 1.25, 1.0],
+                [fx, fy + 0.15, 1.25, 1.0],
+                10.0,
+            ),
+            4 => push_tri(
+                &mut verts,
+                &mut tris,
+                [fx, fy, z, -1.0],
+                [fx + 0.1, fy, z, 1.0],
+                [fx, fy + 0.1, z, 1.0],
+                11.0,
+            ),
+            _ => push_tri(
+                &mut verts,
+                &mut tris,
+                [fx, fy, z, 1.0],
+                [fx + 0.09, fy, z, 1.0],
+                [fx + 0.02, fy + 0.11, z, 1.0],
+                12.0,
+            ),
+        }
+    }
+
+    let vert_count = (verts.len() / 9) as u32;
+    let tri_count = (tris.len() / 3) as u32;
+    assert!(tri_count >= 16_384, "must exceed HIZ_TRI_THRESHOLD");
+
+    let surface_bytes =
+        width as usize * height as usize * entelechy_rules::raster::SURFACE_WORDS * 4;
+    let run_surface = |backend: &dyn Backend, v: &[u32], vn: u32, t: &[u32], tn: u32| {
+        let mut host = Host::new(1 << 26);
+        let vh = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::raster::vertex_schema(),
+                    Domain::Rows(vn),
+                    v.to_vec(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let th = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::raster::triangle_schema(),
+                    Domain::Rows(tn),
+                    t.to_vec(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let inv = Invocation {
+            inputs: vec![vh, th],
+            params: vec![],
+            domain: Domain::Grid(width, height),
+            context: Context::default(),
+        };
+        let out_h = Backend::execute_native(
+            backend,
+            entelechy_rules::NativeOp::Rasterize,
+            &inv,
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap()[0];
+        if let Some(dev) = host.resident(out_h).unwrap() {
+            Backend::download(backend, dev, surface_bytes).unwrap()
+        } else {
+            host.data(out_h).unwrap().storage().to_vec()
+        }
+    };
+
+    let cpu_words = run_surface(&cpu, &verts, vert_count, &tris, tri_count);
+    let gpu_words = run_surface(&gpu, &verts, vert_count, &tris, tri_count);
+    let fb_words = run_surface(&fallback, &verts, vert_count, &tris, tri_count);
+    let gpu_no_hiz = run_surface(
+        &gpu,
+        &visible_verts,
+        visible_vert_count,
+        &visible_tris,
+        visible_tri_count,
+    );
+    assert_eq!(
+        gpu_words, fb_words,
+        "2-phase Hi-Z subgroup and fallback rasterizers must match bit-for-bit"
+    );
+    assert_eq!(
+        gpu_words, gpu_no_hiz,
+        "2-phase Hi-Z occlusion culling must match single-pass visible-only GPU output bit-for-bit"
+    );
+
+    // Every pixel must match CPU reference on triangle ID & depth (allowing rare 1-pixel
+    // exact-edge ties on the slanted boundary only if zero interior mismatches occur).
+    let sw = entelechy_rules::raster::SURFACE_WORDS;
+    let mut mismatched = 0usize;
+    let mut visible_micro = 0usize;
+    let mut visible_border = 0usize;
+    let mut occluder_wins_coplanar = 0usize;
+    let mut samples = Vec::new();
+    for p in 0..(width as usize * height as usize) {
+        let c_id = cpu_words[p * sw + 6] as i32;
+        let g_id = gpu_words[p * sw + 6] as i32;
+        let c_z = f32::from_bits(cpu_words[p * sw]);
+        let g_z = f32::from_bits(gpu_words[p * sw]);
+        if c_id != g_id || (c_z - g_z).abs() > 1e-4 {
+            if samples.len() < 12 {
+                samples.push((p % width as usize, p / width as usize, c_id, g_id, c_z, g_z));
+            }
+            mismatched += 1;
+        }
+        if g_id == 0 || g_id == 1 {
+            occluder_wins_coplanar += 1;
+        } else if (4..52).contains(&g_id) {
+            visible_micro += 1;
+        } else if g_id == 52 || g_id == 53 {
+            visible_border += 1;
+        }
+    }
+    assert!(
+        mismatched <= 4,
+        "Hi-Z rasterizer mismatched CPU on {mismatched} pixels out of {}: first={samples:?}",
+        width * height
+    );
+    assert!(
+        occluder_wins_coplanar > 4000,
+        "occluder pixels={occluder_wins_coplanar}"
+    );
+    assert!(visible_micro > 80, "visible micro pixels={visible_micro}");
+    assert!(
+        visible_border > 300,
+        "visible odd-border pixels={visible_border}"
+    );
+    assert!(
+        !(0..(width as usize * height as usize)).any(|p| gpu_words[p * sw + 6] as i32 == 2),
+        "coplanar duplicate row 2 must lose to earlier row 0"
+    );
+
+    // Also verify `NativeOp::Cover` with a pre-filled `before` depth canvas (`has_before = 1`).
+    let mut before_keys = Vec::with_capacity(width as usize * height as usize * 2);
+    let pre_z = 0.18f32.to_bits();
+    for _y in 0..height {
+        for x in 0..width {
+            if x < width / 2 {
+                // Pre-populated closer depth 0.18 on left half (row 777).
+                before_keys.extend([777u32, pre_z]);
+            } else {
+                // Empty canvas key: i64::MAX.
+                before_keys.extend([0xFFFF_FFFFu32, 0x7FFF_FFFFu32]);
+            }
+        }
+    }
+    let cover_bytes = width as usize * height as usize * 2 * 4;
+    let run_cover = |backend: &dyn Backend, v: &[u32], vn: u32, t: &[u32], tn: u32| {
+        let mut host = Host::new(1 << 26);
+        let vh = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::raster::vertex_schema(),
+                    Domain::Rows(vn),
+                    v.to_vec(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let th = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::raster::triangle_schema(),
+                    Domain::Rows(tn),
+                    t.to_vec(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let kh = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::raster::canvas_schema(),
+                    Domain::Grid(width, height),
+                    before_keys.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let inv = Invocation {
+            inputs: vec![vh, th, kh],
+            params: vec![],
+            domain: Domain::Grid(width, height),
+            context: Context::default(),
+        };
+        let out_h = Backend::execute_native(
+            backend,
+            entelechy_rules::NativeOp::Cover,
+            &inv,
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap()[0];
+        if let Some(dev) = host.resident(out_h).unwrap() {
+            Backend::download(backend, dev, cover_bytes).unwrap()
+        } else {
+            host.data(out_h).unwrap().storage().to_vec()
+        }
+    };
+    let cpu_cov = run_cover(&cpu, &verts, vert_count, &tris, tri_count);
+    let gpu_cov = run_cover(&gpu, &verts, vert_count, &tris, tri_count);
+    let gpu_cov_no_hiz = run_cover(
+        &gpu,
+        &visible_verts,
+        visible_vert_count,
+        &visible_tris,
+        visible_tri_count,
+    );
+    assert_eq!(
+        gpu_cov, gpu_cov_no_hiz,
+        "Hi-Z cover with pre-filled depth must match single-pass visible-only GPU bit-for-bit"
+    );
+    let mut cov_mismatch = 0usize;
+    let mut cov_samples = Vec::new();
+    for p in 0..(width as usize * height as usize) {
+        let c_row = cpu_cov[p * 2];
+        let g_row = gpu_cov[p * 2];
+        let c_z = f32::from_bits(cpu_cov[p * 2 + 1]);
+        let g_z = f32::from_bits(gpu_cov[p * 2 + 1]);
+        let z_diff = if cpu_cov[p * 2 + 1] == 0x7FFF_FFFF && gpu_cov[p * 2 + 1] == 0x7FFF_FFFF {
+            0.0
+        } else {
+            (c_z - g_z).abs()
+        };
+        if c_row != g_row || z_diff > 1e-4 {
+            if cov_samples.len() < 12 {
+                cov_samples.push((
+                    p % width as usize,
+                    p / width as usize,
+                    c_row,
+                    g_row,
+                    c_z,
+                    g_z,
+                ));
+            }
+            cov_mismatch += 1;
+        }
+    }
+    assert!(
+        cov_mismatch <= 4,
+        "Hi-Z cover with pre-filled depth mismatched CPU on {cov_mismatch} pixels: first={cov_samples:?}"
+    );
+}

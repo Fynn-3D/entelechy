@@ -136,47 +136,6 @@ impl BatchHub {
             .is_some()
     }
 
-    /// Allocates one aligned uniform slice inside the frame's uniform slab.
-    /// Flushes any open batch first if the slab would overflow.
-    pub(crate) fn alloc_uniform(&self, bytes: &[u8]) -> Result<UniformSlice, ExecutionError> {
-        let padded = bytes.len().max(16).div_ceil(16) * 16;
-        let align = self.uniform_align;
-        let needs_flush = {
-            let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-            if state.encoder.is_none() {
-                false
-            } else {
-                let off = state.uniform_bytes.len().div_ceil(align) * align;
-                state
-                    .uniform_slab
-                    .as_ref()
-                    .is_some_and(|slab| (off + padded) as u64 > slab.size())
-            }
-        };
-        if needs_flush {
-            self.flush()?;
-        }
-        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        if state.encoder.is_none() {
-            state.uniform_bytes.clear();
-        }
-        let off = state.uniform_bytes.len().div_ceil(align) * align;
-        let needed = (off + padded) as u64;
-        self.ensure_uniform_slab(&mut state, needed);
-        state.uniform_bytes.resize(off + padded, 0);
-        state.uniform_bytes[off..off + bytes.len()].copy_from_slice(bytes);
-        let buffer = state
-            .uniform_slab
-            .as_ref()
-            .expect("uniform slab initialized")
-            .clone();
-        Ok(UniformSlice {
-            buffer,
-            offset: off as u64,
-            size: padded as u64,
-        })
-    }
-
     /// Allocates all uniform slices for one node atomically inside the same
     /// uniform slab so no slice can be split across a flush.
     pub(crate) fn alloc_uniforms(

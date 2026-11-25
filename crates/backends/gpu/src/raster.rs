@@ -31,10 +31,14 @@ use entelechy_rules::raster::{SURFACE_WORDS, check_rasterize, surface_schema};
 use entelechy_rules::{ExecutionError, NativeOp};
 
 use crate::failure::Scopes;
+use crate::raster_hiz::{
+    self, HIZ_TRI_THRESHOLD, HizPipelines, build_hiz_pipelines, encode_hiz_pyramid, hiz_dims,
+    hiz_level_payloads, take_hiz_texture,
+};
 use crate::{DeviceImage, WgpuBackend};
 
-/// What every stage reads: the canvas, the counts, the cutout, and how
-/// small a triangle the sorting pass draws itself.
+/// What every stage reads: the canvas, the counts, the cutout, how small a
+/// triangle the indirect micro-triangle pass draws itself, and Hi-Z state.
 const SETUP_WGSL: &str = "
 struct Setup {
     size: vec2<f32>,
@@ -47,7 +51,11 @@ struct Setup {
     cutout: f32,
     masked: u32,
     small: u32,
-    pad: u32,
+    hiz_mips: u32,
+    occ_only: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 };
 @group(0) @binding(0) var<uniform> setup: Setup;
 @group(0) @binding(1) var<storage, read> vertices: array<u32>;
@@ -125,14 +133,17 @@ fn uv_of(v: u32) -> vec2<f32> {
 }
 ";
 
-/// Step 1: common bindings, `usable` and `sort` shared across subgroup and
-/// fallback compaction passes.
+/// Step 1: common bindings, `usable`, conservative Hi-Z culling, and `sort`
+/// shared across subgroup and fallback compaction passes.
+/// Keeps storage buffers at 8 (core WebGPU baseline) plus 1 sampled Hi-Z texture.
 const KEEP_COMMON_WGSL: &str = "
 @group(0) @binding(3) var<storage, read_write> marks: array<u32>;
 @group(0) @binding(4) var<storage, read_write> offsets: array<u32>;
 @group(0) @binding(5) var<storage, read_write> indices: array<u32>;
 @group(0) @binding(6) var<storage, read_write> rows: array<u32>;
-@group(0) @binding(7) var<storage, read_write> args: array<u32>;
+@group(0) @binding(7) var<storage, read_write> args: array<atomic<u32>>;
+@group(0) @binding(8) var<storage, read_write> small_rows: array<u32>;
+@group(0) @binding(9) var hiz: texture_2d<f32>;
 
 const BLOCK: u32 = 256u;
 
@@ -147,9 +158,42 @@ fn usable(v: u32) -> bool {
         && bitcast<f32>(vertices[base + 3u]) > 0.0;
 }
 
-// How a triangle is drawn: 0 not at all (a corner not usable, no area,
-// no pixel center inside its box on the canvas), 1 by the device's
-// rasterizer, 2 here and now, its box being small.
+fn finite_f32(v: f32) -> bool {
+    return (bitcast<u32>(v) & 0x7F800000u) != 0x7F800000u;
+}
+
+// Conservative MAX-Z pyramid test: returns true only when the triangle's
+// minimum vertex depth is strictly behind every pixel covered by its screen
+// bbox (with safety margin so coplanar earlier-row-wins tie-breaks and
+// hardware/software interpolation differences are never violated).
+fn hiz_occluded(ux0: u32, uy0: u32, ux1: u32, uy1: u32, min_z: f32) -> bool {
+    if setup.hiz_mips == 0u || !(min_z > 0.0) {
+        return false;
+    }
+    let span = max(ux1 - ux0, uy1 - uy0);
+    var mip = 0u;
+    if span > 2u {
+        mip = min((32u - countLeadingZeros(span - 1u)) - 1u, setup.hiz_mips - 1u);
+    }
+    let shift = mip + 1u;
+    let dim = textureDimensions(hiz, i32(mip));
+    let tx0 = min(ux0 >> shift, dim.x - 1u);
+    let tx1 = min(ux1 >> shift, dim.x - 1u);
+    let ty0 = min(uy0 >> shift, dim.y - 1u);
+    let ty1 = min(uy1 >> shift, dim.y - 1u);
+    var hiz_max = 0.0;
+    for (var ty = ty0; ty <= ty1; ty++) {
+        for (var tx = tx0; tx <= tx1; tx++) {
+            let d = textureLoad(hiz, vec2<i32>(i32(tx), i32(ty)), i32(mip)).x;
+            hiz_max = max(hiz_max, d);
+        }
+    }
+    return min_z > hiz_max + 2e-5;
+}
+
+// How a triangle is drawn: 0 not at all (unusable, degenerate, offscreen,
+// frustum-Z or Hi-Z occluded), 1 by the device's rasterizer, 2 by the
+// indirect micro-triangle pass.
 fn sort(t: u32) -> u32 {
     let ia = corner(t, 0u);
     let ib = corner(t, 1u);
@@ -160,7 +204,8 @@ fn sort(t: u32) -> u32 {
     let a = screen(ia);
     let b = screen(ib);
     let c = screen(ic);
-    if !(abs(edge(a.xy, b.xy, c.xy)) > 0.0) {
+    let twice_area = abs(edge(a.xy, b.xy, c.xy));
+    if !(twice_area > 0.0) {
         return 0u;
     }
     let x0 = max(ceil(min(min(a.x, b.x), c.x) - 0.5), 0.0);
@@ -170,12 +215,51 @@ fn sort(t: u32) -> u32 {
     if !(x1 >= x0 && y1 >= y0) {
         return 0u;
     }
+    let finite_z = finite_f32(a.z) && finite_f32(b.z) && finite_f32(c.z);
+    if finite_z {
+        let min_z = min(a.z, min(b.z, c.z));
+        let max_z = max(a.z, max(b.z, c.z));
+        if max_z < -1e-5 || min_z > 1.0 + 1e-5 {
+            return 0u;
+        }
+        if setup.occ_only != 0u {
+            // Solid occluders only (>= 16 px^2 screen area and >= 4x4 pixel box).
+            if twice_area >= 32.0 && (x1 - x0) >= 3.0 && (y1 - y0) >= 3.0 {
+                return 1u;
+            }
+            return 0u;
+        }
+        if hiz_occluded(u32(x0), u32(y0), u32(x1), u32(y1), min_z) {
+            return 0u;
+        }
+    } else if setup.occ_only != 0u {
+        return 0u;
+    }
     let small = f32(setup.small);
     if x1 - x0 < small && y1 - y0 < small {
-        draw_here(t, ia, ib, ic, a, b, c, vec4<u32>(u32(x0), u32(y0), u32(x1), u32(y1)));
         return 2u;
     }
     return 1u;
+}
+
+fn write_indirect_args(total_kept: u32) {
+    // Words 0..5: DrawIndexedIndirectArgs / DrawIndirectArgs (byte offset 0).
+    atomicStore(&args[0u], total_kept * 3u);
+    atomicStore(&args[1u], 1u);
+    atomicStore(&args[2u], 0u);
+    atomicStore(&args[3u], 0u);
+    atomicStore(&args[4u], 0u);
+    // Words 8..11: DispatchIndirectArgs for indirect micro-triangles (byte offset 32).
+    // Word 11: compacted small_count; word 12: dispatch X stride.
+    let sc = atomicLoad(&args[11u]);
+    let groups = (sc + 63u) / 64u;
+    let gx = min(groups, 65535u);
+    let safe_gx = max(gx, 1u);
+    let gy = select(1u, (groups + safe_gx - 1u) / safe_gx, groups > 0u);
+    atomicStore(&args[8u], gx);
+    atomicStore(&args[9u], gy);
+    atomicStore(&args[10u], 1u);
+    atomicStore(&args[12u], gx);
 }
 
 var<workgroup> place_marks: array<u32, 8>;
@@ -211,10 +295,13 @@ fn place(@builtin(local_invocation_index) local: u32, @builtin(workgroup_id) gro
 ";
 
 /// Step 1 `mark` + `sum` for 32-lane hardware subgroups (Apple Metal, NVIDIA):
-/// `subgroupBallot` produces each 32-bit mark word with zero workgroup atomics
-/// and 1 barrier, and `subgroupInclusiveAdd` scans block sums in 2 barriers.
+/// `subgroupBallot` produces each 32-bit mark word and compacts surviving
+/// micro-triangles with zero workgroup atomics and 1 global atomic per block.
 const KEEP_SG32_WGSL: &str = "
 var<workgroup> wave_counts: array<u32, 8>;
+var<workgroup> wave_small: array<u32, 8>;
+var<workgroup> wave_small_off: array<u32, 8>;
+var<workgroup> wg_small_base: u32;
 
 @compute @workgroup_size(256)
 fn mark(
@@ -224,25 +311,50 @@ fn mark(
 ) {
     let block = group.x + group.y * setup.blocks_x;
     let t = block * BLOCK + local;
-    let keep = block < setup.block_count && t < setup.triangle_count && sort(t) == 1u;
+    var cls = 0u;
+    if block < setup.block_count && t < setup.triangle_count {
+        cls = sort(t);
+    }
+    let keep = cls == 1u;
+    let is_small = cls == 2u;
     let ballot = subgroupBallot(keep).x;
+    let s_ballot = subgroupBallot(is_small).x;
     let wave = local / 32u;
     if sg_id == 0u {
         if block < setup.block_count {
             marks[block * 8u + wave] = ballot;
         }
         wave_counts[wave] = countOneBits(ballot);
+        wave_small[wave] = countOneBits(s_ballot);
     }
     workgroupBarrier();
     if wave == 0u {
         var c = 0u;
+        var sc = 0u;
         if sg_id < 8u {
             c = wave_counts[sg_id];
+            sc = wave_small[sg_id];
         }
         let total = subgroupAdd(c);
+        let s_inc = subgroupInclusiveAdd(sc);
+        if sg_id < 8u {
+            wave_small_off[sg_id] = s_inc - sc;
+        }
         if sg_id == 0u && block < setup.block_count {
             offsets[block] = total;
         }
+        if sg_id == 7u {
+            if s_inc > 0u {
+                wg_small_base = atomicAdd(&args[11u], s_inc);
+            } else {
+                wg_small_base = 0u;
+            }
+        }
+    }
+    workgroupBarrier();
+    if is_small {
+        let lane_rank = countOneBits(s_ballot & ((1u << sg_id) - 1u));
+        small_rows[wg_small_base + wave_small_off[wave] + lane_rank] = t;
     }
 }
 
@@ -298,11 +410,7 @@ fn sum(
         at += count;
     }
     if local == 255u {
-        args[0] = inc * 3u;
-        args[1] = 1u;
-        args[2] = 0u;
-        args[3] = 0u;
-        args[4] = 0u;
+        write_indirect_args(inc);
     }
 }
 ";
@@ -313,6 +421,8 @@ fn sum(
 const KEEP_SG_GENERAL_WGSL: &str = "
 var<workgroup> marked: array<atomic<u32>, 8>;
 var<workgroup> kept: atomic<u32>;
+var<workgroup> small_cnt: atomic<u32>;
+var<workgroup> small_base: u32;
 
 @compute @workgroup_size(256)
 fn mark(
@@ -325,19 +435,37 @@ fn mark(
     }
     if local == 0u {
         atomicStore(&kept, 0u);
+        atomicStore(&small_cnt, 0u);
     }
     workgroupBarrier();
     let block = group.x + group.y * setup.blocks_x;
     let t = block * BLOCK + local;
-    let keep = block < setup.block_count && t < setup.triangle_count && sort(t) == 1u;
+    var cls = 0u;
+    if block < setup.block_count && t < setup.triangle_count {
+        cls = sort(t);
+    }
+    let keep = cls == 1u;
+    let is_small = cls == 2u;
     if keep {
         atomicOr(&marked[local / 32u], 1u << (local % 32u));
+    }
+    var local_rank = 0u;
+    if is_small {
+        local_rank = atomicAdd(&small_cnt, 1u);
     }
     let wave_kept = subgroupAdd(u32(keep));
     if sg_id == 0u && wave_kept > 0u {
         atomicAdd(&kept, wave_kept);
     }
     workgroupBarrier();
+    if local == 0u {
+        let sc = atomicLoad(&small_cnt);
+        if sc > 0u {
+            small_base = atomicAdd(&args[11u], sc);
+        } else {
+            small_base = 0u;
+        }
+    }
     if block < setup.block_count {
         if local < 8u {
             marks[block * 8u + local] = atomicLoad(&marked[local]);
@@ -345,6 +473,10 @@ fn mark(
         if local == 0u {
             offsets[block] = atomicLoad(&kept);
         }
+    }
+    workgroupBarrier();
+    if is_small {
+        small_rows[small_base + local_rank] = t;
     }
 }
 
@@ -400,11 +532,7 @@ fn sum(
         at += count;
     }
     if local == 255u {
-        args[0] = inc * 3u;
-        args[1] = 1u;
-        args[2] = 0u;
-        args[3] = 0u;
-        args[4] = 0u;
+        write_indirect_args(inc);
     }
 }
 ";
@@ -413,9 +541,11 @@ fn sum(
 const KEEP_FALLBACK_WGSL: &str = "
 var<workgroup> marked: array<atomic<u32>, 8>;
 var<workgroup> kept: atomic<u32>;
+var<workgroup> small_cnt: atomic<u32>;
+var<workgroup> small_base: u32;
 
 // Each block of triangles marks the ones the device draws, a bit each,
-// and counts them.
+// counts them, and compacts surviving micro-triangles for indirect dispatch.
 @compute @workgroup_size(256)
 fn mark(@builtin(local_invocation_index) local: u32, @builtin(workgroup_id) group: vec3<u32>) {
     if local < 8u {
@@ -423,15 +553,32 @@ fn mark(@builtin(local_invocation_index) local: u32, @builtin(workgroup_id) grou
     }
     if local == 0u {
         atomicStore(&kept, 0u);
+        atomicStore(&small_cnt, 0u);
     }
     workgroupBarrier();
     let block = group.x + group.y * setup.blocks_x;
     let t = block * BLOCK + local;
-    if block < setup.block_count && t < setup.triangle_count && sort(t) == 1u {
+    var cls = 0u;
+    if block < setup.block_count && t < setup.triangle_count {
+        cls = sort(t);
+    }
+    if cls == 1u {
         atomicOr(&marked[local / 32u], 1u << (local % 32u));
         atomicAdd(&kept, 1u);
     }
+    var local_rank = 0u;
+    if cls == 2u {
+        local_rank = atomicAdd(&small_cnt, 1u);
+    }
     workgroupBarrier();
+    if local == 0u {
+        let sc = atomicLoad(&small_cnt);
+        if sc > 0u {
+            small_base = atomicAdd(&args[11u], sc);
+        } else {
+            small_base = 0u;
+        }
+    }
     if block < setup.block_count {
         if local < 8u {
             marks[block * 8u + local] = atomicLoad(&marked[local]);
@@ -439,6 +586,10 @@ fn mark(@builtin(local_invocation_index) local: u32, @builtin(workgroup_id) grou
         if local == 0u {
             offsets[block] = atomicLoad(&kept);
         }
+    }
+    workgroupBarrier();
+    if cls == 2u {
+        small_rows[small_base + local_rank] = t;
     }
 }
 
@@ -474,23 +625,18 @@ fn sum(@builtin(local_invocation_index) local: u32) {
         at += count;
     }
     if local == 255u {
-        // An indexed draw reads five words, a pulled one the first four.
-        args[0] = sums[255] * 3u;
-        args[1] = 1u;
-        args[2] = 0u;
-        args[3] = 0u;
-        args[4] = 0u;
+        write_indirect_args(sums[255]);
     }
 }
 ";
 
-/// Step 1's own drawing, where the device takes 64-bit atomics: every
-/// pixel center a small triangle covers, by the rule's edges and depth,
-/// keeps the greatest complement of the key `depth << 32 | row`, so the
-/// nearest fragment and, of two at one depth, the earlier row, and a
-/// cleared zero is none.
-const HERE_WGSL: &str = "
-@group(0) @binding(8) var<storage, read_write> keys: array<atomic<u64>>;
+/// GPU-driven indirect micro-triangle pass (`dispatch_workgroups_indirect`),
+/// compiled only where the device supports 64-bit atomics: draws compacted
+/// non-occluded `< SMALL` triangles into `keys` with full SIMD occupancy.
+const DRAW_SMALL_WGSL: &str = "
+@group(0) @binding(3) var<storage, read> small_rows: array<u32>;
+@group(0) @binding(4) var<storage, read> args: array<u32>;
+@group(0) @binding(5) var<storage, read_write> keys: array<atomic<u64>>;
 
 fn draw_here(t: u32, ia: u32, ib_: u32, ic_: u32, a: vec4<f32>, b_: vec4<f32>, c_: vec4<f32>, box: vec4<u32>) {
     var ib = ib_;
@@ -534,12 +680,31 @@ fn draw_here(t: u32, ia: u32, ib_: u32, ic_: u32, a: vec4<f32>, b_: vec4<f32>, c
         }
     }
 }
-";
 
-/// Where the device has no 64-bit atomics: nothing is drawn in step 1
-/// (`small` is zero there).
-const NOT_HERE_WGSL: &str = "
-fn draw_here(t: u32, ia: u32, ib: u32, ic: u32, a: vec4<f32>, b: vec4<f32>, c: vec4<f32>, box: vec4<u32>) {}
+@compute @workgroup_size(64)
+fn main(
+    @builtin(local_invocation_index) local: u32,
+    @builtin(workgroup_id) group: vec3<u32>,
+) {
+    let small_count = args[11u];
+    let stride = args[12u];
+    let idx = (group.x + group.y * stride) * 64u + local;
+    if idx >= small_count {
+        return;
+    }
+    let t = small_rows[idx];
+    let ia = corner(t, 0u);
+    let ib = corner(t, 1u);
+    let ic = corner(t, 2u);
+    let a = screen(ia);
+    let b = screen(ib);
+    let c = screen(ic);
+    let x0 = max(ceil(min(min(a.x, b.x), c.x) - 0.5), 0.0);
+    let y0 = max(ceil(min(min(a.y, b.y), c.y) - 0.5), 0.0);
+    let x1 = min(floor(max(max(a.x, b.x), c.x) - 0.5), setup.size.x - 1.0);
+    let y1 = min(floor(max(max(a.y, b.y), c.y) - 0.5), setup.size.y - 1.0);
+    draw_here(t, ia, ib, ic, a, b, c, vec4<u32>(u32(x0), u32(y0), u32(x1), u32(y1)));
+}
 ";
 
 /// Step 2 where a fragment knows its primitive: the kept triangles drawn
@@ -600,6 +765,11 @@ fn vs(@builtin(vertex_index) at: u32) -> Plain {
     out.clip = clip_of(indices[at]);
     out.place = at / 3u;
     return out;
+}
+
+@vertex
+fn vs_depth(@builtin(vertex_index) at: u32) -> @builtin(position) vec4<f32> {
+    return clip_of(indices[at]);
 }
 
 @vertex
@@ -799,9 +969,13 @@ pub(crate) struct RasterPipelines {
     mark: wgpu::ComputePipeline,
     sum: wgpu::ComputePipeline,
     place: wgpu::ComputePipeline,
+    draw_small_layout: Option<wgpu::BindGroupLayout>,
+    draw_small: Option<wgpu::ComputePipeline>,
     draw_layout: wgpu::BindGroupLayout,
     draw: wgpu::RenderPipeline,
     draw_cut: wgpu::RenderPipeline,
+    draw_occ: wgpu::RenderPipeline,
+    hiz: HizPipelines,
     resolve_layout: wgpu::BindGroupLayout,
     resolve: wgpu::ComputePipeline,
     /// The resolving pass of `native.cover`: keys, not a surface.
@@ -810,8 +984,8 @@ pub(crate) struct RasterPipelines {
     empty_mask: wgpu::Buffer,
     /// Whether the draw is indexed: see [`GpuBackend::primitive_index`].
     indexed: bool,
-    /// Whether the sorting pass draws small triangles itself: where the
-    /// device lands 64-bit atomics.
+    /// Whether the indirect micro-triangle pass draws small triangles itself:
+    /// where the device lands 64-bit atomics.
     here: bool,
 }
 
@@ -879,7 +1053,6 @@ fn build(
         };
     let c = wgpu::ShaderStages::COMPUTE;
 
-    let keep_mask = MASK_WGSL.replace("{mask}", "9");
     let (keep_enable, keep_impl) = if subgroups.exact_wave_32() {
         (subgroups.directive(), KEEP_SG32_WGSL)
     } else if subgroups.wave_parallel_256() {
@@ -893,10 +1066,8 @@ fn build(
             keep_enable,
             SETUP_WGSL,
             TRIANGLES_WGSL,
-            &keep_mask,
             KEEP_COMMON_WGSL,
             keep_impl,
-            if here { HERE_WGSL } else { NOT_HERE_WGSL },
         ],
     );
     let (keep_layout, keep_pipeline_layout) = layout(
@@ -911,7 +1082,16 @@ fn build(
             storage(6, c, false),
             storage(7, c, false),
             storage(8, c, false),
-            storage(9, c, true),
+            wgpu::BindGroupLayoutEntry {
+                binding: 9,
+                visibility: c,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
         ],
     );
     let mark = compute(
@@ -932,6 +1112,30 @@ fn build(
         &keep_module,
         "place",
     );
+
+    let (draw_small_layout, draw_small) = if here {
+        let small_mask = MASK_WGSL.replace("{mask}", "6");
+        let small_mod = module(
+            "entelechy rasterize draw_small",
+            &[SETUP_WGSL, TRIANGLES_WGSL, &small_mask, DRAW_SMALL_WGSL],
+        );
+        let (sl, spl) = layout(
+            "entelechy rasterize draw_small",
+            &[
+                uniform(c),
+                storage(1, c, true),
+                storage(2, c, true),
+                storage(3, c, true),
+                storage(4, c, true),
+                storage(5, c, false),
+                storage(6, c, true),
+            ],
+        );
+        let sp = compute("entelechy rasterize draw_small", &spl, &small_mod, "main");
+        (Some(sl), Some(sp))
+    } else {
+        (None, None)
+    };
 
     let feed = if indexed { INDEXED_WGSL } else { PULLED_WGSL };
     // An `enable` directive comes first in a module.
@@ -954,9 +1158,13 @@ fn build(
             storage(3, wgpu::ShaderStages::FRAGMENT, true),
         ],
     );
-    let render = |vertex: &str, fragment: &str| {
+    let render = |vertex: &str, fragment: Option<&str>| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("entelechy rasterize draw"),
+            label: Some(if fragment.is_some() {
+                "entelechy rasterize draw"
+            } else {
+                "entelechy rasterize occ"
+            }),
             layout: Some(&draw_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &draw_module,
@@ -981,9 +1189,9 @@ fn build(
                 bias: Default::default(),
             }),
             multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
+            fragment: fragment.map(|ep| wgpu::FragmentState {
                 module: &draw_module,
-                entry_point: Some(fragment),
+                entry_point: Some(ep),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: PLACE_FORMAT,
@@ -995,8 +1203,10 @@ fn build(
             cache: None,
         })
     };
-    let draw = render("vs", "fs");
-    let draw_cut = render("vs_cut", "fs_cut");
+    let draw = render("vs", Some("fs"));
+    let draw_cut = render("vs_cut", Some("fs_cut"));
+    let draw_occ = render(if indexed { "vs" } else { "vs_depth" }, None);
+    let hiz = build_hiz_pipelines(device);
 
     let resolve_module = module(
         "entelechy rasterize resolve",
@@ -1053,9 +1263,13 @@ fn build(
         mark,
         sum,
         place,
+        draw_small_layout,
+        draw_small,
         draw_layout,
         draw,
         draw_cut,
+        draw_occ,
+        hiz,
         resolve_layout,
         resolve,
         cover,
@@ -1162,27 +1376,48 @@ pub(crate) fn rasterize(
     let block_count = triangle_count.div_ceil(BLOCK);
     let blocks_x = block_count.clamp(1, MOST_GROUPS);
     let blocks_y = block_count.div_ceil(blocks_x).max(1);
-    let setup: [u32; 12] = [
-        (width as f32).to_bits(),
-        (height as f32).to_bits(),
-        vertex_count,
-        triangle_count,
-        blocks_x,
-        block_count,
-        mask_size.width(),
-        mask_size.height(),
-        alpha.to_bits(),
-        u32::from(mask.is_some()),
-        if pipelines.here { SMALL } else { 0 },
-        0,
-    ];
-    let mut setup_bytes = [0u8; 48];
-    for (slot, word) in setup_bytes.chunks_exact_mut(4).zip(setup) {
-        slot.copy_from_slice(&word.to_le_bytes());
-    }
-    // The keys the sorting pass draws small triangles into, a pixel each,
+    let use_hiz = triangle_count >= HIZ_TRI_THRESHOLD && mask.is_none();
+    let (_, _, hiz_mip_count) = if use_hiz {
+        hiz_dims(width, height)
+    } else {
+        (1, 1, 0)
+    };
+    let encode_setup_bytes = |small: u32, hiz_mips: u32, occ_only: u32| -> [u8; 64] {
+        let words: [u32; 16] = [
+            (width as f32).to_bits(),
+            (height as f32).to_bits(),
+            vertex_count,
+            triangle_count,
+            blocks_x,
+            block_count,
+            mask_size.width(),
+            mask_size.height(),
+            alpha.to_bits(),
+            u32::from(mask.is_some()),
+            small,
+            hiz_mips,
+            occ_only,
+            0,
+            0,
+            0,
+        ];
+        let mut bytes = [0u8; 64];
+        for (slot, word) in bytes.chunks_exact_mut(4).zip(words) {
+            slot.copy_from_slice(&word.to_le_bytes());
+        }
+        bytes
+    };
+    let main_setup_bytes =
+        encode_setup_bytes(if pipelines.here { SMALL } else { 0 }, hiz_mip_count, 0);
+    let occ_setup_bytes = encode_setup_bytes(0, 0, 1);
+    let hiz_payloads = if use_hiz {
+        hiz_level_payloads(width, height, before.is_some())
+    } else {
+        Vec::new()
+    };
+    // The keys the indirect micro-triangle pass draws into, a pixel each,
     // cleared to none. Check page pacing and bind `before` BEFORE allocating
-    // from the batch uniform slab so no flush can happen after `setup_slice`.
+    // from the batch uniform slab so no flush can happen after allocating slices.
     let pixels = u64::from(width) * u64::from(height);
     let est_ops = u64::from(triangle_count)
         .saturating_mul(64)
@@ -1204,11 +1439,29 @@ pub(crate) fn rasterize(
     if !batched {
         gpu.batch.flush()?;
     }
-    let setup_slice = if batched {
-        gpu.batch.alloc_uniform(&setup_bytes)?
+    let mut all_uniform_payloads: Vec<&[u8]> = Vec::with_capacity(2 + hiz_payloads.len());
+    all_uniform_payloads.push(&main_setup_bytes);
+    if use_hiz {
+        all_uniform_payloads.push(&occ_setup_bytes);
+        for p in &hiz_payloads {
+            all_uniform_payloads.push(p.as_slice());
+        }
+    }
+    let mut unbatched_uniforms = Vec::new();
+    let uniform_slices = if batched {
+        gpu.batch.alloc_uniforms(&all_uniform_payloads)?
     } else {
-        crate::batch::UniformSlice::entire(gpu.take_uniform(&setup_bytes))
+        let mut slices = Vec::with_capacity(all_uniform_payloads.len());
+        for p in &all_uniform_payloads {
+            let buf = gpu.take_uniform(p);
+            unbatched_uniforms.push(buf.clone());
+            slices.push(crate::batch::UniformSlice::entire(buf));
+        }
+        slices
     };
+    let setup_slice = &uniform_slices[0];
+    let occ_setup_slice = use_hiz.then(|| &uniform_slices[1]);
+    let hiz_level_slices = if use_hiz { &uniform_slices[2..] } else { &[] };
 
     // The keeping pass's buffers, from the pile and back to it.
     let spare = gpu.spare();
@@ -1223,7 +1476,18 @@ pub(crate) fn rasterize(
     let offsets = scratch(u64::from(block_count), wgpu::BufferUsages::empty());
     let indices = scratch(u64::from(triangle_count) * 3, wgpu::BufferUsages::INDEX);
     let rows = scratch(u64::from(triangle_count), wgpu::BufferUsages::empty());
-    let args = scratch(8, wgpu::BufferUsages::INDIRECT);
+    let args = scratch(
+        16,
+        wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+    );
+    let small_rows = scratch(
+        if pipelines.here {
+            u64::from(triangle_count)
+        } else {
+            4
+        },
+        wgpu::BufferUsages::empty(),
+    );
     let keys = scratch(
         if pipelines.here { pixels * 2 } else { 4 },
         wgpu::BufferUsages::COPY_DST,
@@ -1235,6 +1499,50 @@ pub(crate) fn rasterize(
             resource: buffer.as_entire_binding(),
         }
     }
+    let places = target(gpu, "surface places", width, height, PLACE_FORMAT);
+    let depth = target(gpu, "surface depth", width, height, DEPTH_FORMAT);
+    let places_view = places.create_view(&Default::default());
+    let depth_view = depth.create_view(&Default::default());
+    let hiz_tex = use_hiz.then(|| take_hiz_texture(gpu, width, height));
+    let hiz_full_view = hiz_tex.as_ref().map(|tex| {
+        tex.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("surface hiz full"),
+            format: Some(raster_hiz::HIZ_FORMAT),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            aspect: wgpu::TextureAspect::All,
+            base_mip_level: 0,
+            mip_level_count: Some(hiz_mip_count),
+            base_array_layer: 0,
+            array_layer_count: Some(1),
+            usage: None,
+        })
+    });
+    let keep_hiz_view = hiz_full_view.as_ref().unwrap_or(&pipelines.hiz.empty_view);
+
+    let occ_keep_group = occ_setup_slice.map(|occ_u| {
+        gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("entelechy rasterize occ keep"),
+            layout: &pipelines.keep_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: occ_u.binding(),
+                },
+                entry(1, &vertex_buffer),
+                entry(2, &triangle_buffer),
+                entry(3, &marks),
+                entry(4, &offsets),
+                entry(5, &indices),
+                entry(6, &rows),
+                entry(7, &args),
+                entry(8, &small_rows),
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::TextureView(&pipelines.hiz.empty_view),
+                },
+            ],
+        })
+    });
     let keep_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("entelechy rasterize keep"),
         layout: &pipelines.keep_layout,
@@ -1250,9 +1558,45 @@ pub(crate) fn rasterize(
             entry(5, &indices),
             entry(6, &rows),
             entry(7, &args),
-            entry(8, &keys),
-            entry(9, &mask_buffer),
+            entry(8, &small_rows),
+            wgpu::BindGroupEntry {
+                binding: 9,
+                resource: wgpu::BindingResource::TextureView(keep_hiz_view),
+            },
         ],
+    });
+    let draw_small_group = pipelines.draw_small_layout.as_ref().map(|sl| {
+        gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("entelechy rasterize draw_small"),
+            layout: sl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: setup_slice.binding(),
+                },
+                entry(1, &vertex_buffer),
+                entry(2, &triangle_buffer),
+                entry(3, &small_rows),
+                entry(4, &args),
+                entry(5, &keys),
+                entry(6, &mask_buffer),
+            ],
+        })
+    });
+    let occ_draw_group = occ_setup_slice.map(|occ_u| {
+        gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("entelechy rasterize occ draw"),
+            layout: &pipelines.draw_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: occ_u.binding(),
+                },
+                entry(1, &vertex_buffer),
+                entry(2, &indices),
+                entry(3, &mask_buffer),
+            ],
+        })
     });
     let draw_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("entelechy rasterize draw"),
@@ -1267,10 +1611,6 @@ pub(crate) fn rasterize(
             entry(3, &mask_buffer),
         ],
     });
-    let places = target(gpu, "surface places", width, height, PLACE_FORMAT);
-    let depth = target(gpu, "surface depth", width, height, DEPTH_FORMAT);
-    let places_view = places.create_view(&Default::default());
-    let depth_view = depth.create_view(&Default::default());
 
     // A surface, or two words a key.
     let (schema, words) = match before {
@@ -1316,14 +1656,75 @@ pub(crate) fn rasterize(
             })
     };
     let drawing = triangle_count > 0;
+
+    // Phase 1 + Phase 2 (dense opaque draws): depth-only occluder pre-pass +
+    // conservative MAX-Z Hi-Z mip pyramid.
+    if use_hiz {
+        encoder.clear_buffer(&args, 0, None);
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("entelechy rasterize occ"),
+                timestamp_writes: timing_set
+                    .as_ref()
+                    .map(|timing| timing.compute(Some(0), None)),
+            });
+            pass.set_bind_group(0, occ_keep_group.as_ref().expect("occ keep"), &[]);
+            pass.set_pipeline(&pipelines.mark);
+            pass.dispatch_workgroups(blocks_x, blocks_y, 1);
+            pass.set_pipeline(&pipelines.sum);
+            pass.dispatch_workgroups(1, 1, 1);
+            pass.set_pipeline(&pipelines.place);
+            pass.dispatch_workgroups(blocks_x, blocks_y, 1);
+        }
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("entelechy rasterize occ draw"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&pipelines.draw_occ);
+            pass.set_bind_group(0, occ_draw_group.as_ref().expect("occ draw"), &[]);
+            if pipelines.indexed {
+                pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed_indirect(&args, 0);
+            } else {
+                pass.draw_indirect(&args, 0);
+            }
+        }
+        encode_hiz_pyramid(
+            &gpu.device,
+            &pipelines.hiz,
+            &mut encoder,
+            &depth_view,
+            before_buffer.as_ref().unwrap_or(&keys),
+            hiz_tex.as_ref().expect("hiz texture"),
+            width,
+            height,
+            hiz_level_slices,
+        );
+    }
+
+    // Phase 3: main visibility culling + compaction + indirect micro-triangles.
     if pipelines.here {
         encoder.clear_buffer(&keys, 0, None);
     }
     if drawing {
+        encoder.clear_buffer(&args, 0, None);
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("entelechy rasterize keep"),
-            timestamp_writes: timing_set
-                .as_ref()
+            timestamp_writes: (!use_hiz)
+                .then_some(())
+                .and(timing_set.as_ref())
                 .map(|timing| timing.compute(Some(0), None)),
         });
         pass.set_bind_group(0, &keep_group, &[]);
@@ -1333,7 +1734,13 @@ pub(crate) fn rasterize(
         pass.dispatch_workgroups(1, 1, 1);
         pass.set_pipeline(&pipelines.place);
         pass.dispatch_workgroups(blocks_x, blocks_y, 1);
+        if let (Some(ds_pipe), Some(ds_group)) = (&pipelines.draw_small, &draw_small_group) {
+            pass.set_pipeline(ds_pipe);
+            pass.set_bind_group(0, ds_group, &[]);
+            pass.dispatch_workgroups_indirect(&args, 32);
+        }
     }
+    // Phase 4: hardware visibility rasterization of surviving triangles in exact row order.
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("entelechy rasterize draw"),
@@ -1376,6 +1783,7 @@ pub(crate) fn rasterize(
             }
         }
     }
+    // Phase 5: resolve surface / cover keys.
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("entelechy rasterize resolve"),
@@ -1392,6 +1800,10 @@ pub(crate) fn rasterize(
         pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
     }
     let timing = gpu.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
+    let mut keep_textures = vec![places, depth];
+    if let Some(hiz) = hiz_tex {
+        keep_textures.push(hiz);
+    }
     if batched {
         gpu.frames.note_batched_run();
         let page_budget = gpu
@@ -1401,8 +1813,8 @@ pub(crate) fn rasterize(
         gpu.batch.finish_node(
             encoder,
             est_ops,
-            vec![marks, offsets, indices, rows, args, keys],
-            vec![places, depth],
+            vec![marks, offsets, indices, rows, args, small_rows, keys],
+            keep_textures,
             page_budget,
         )?;
         if gpu.wait.parks_with_host() && gpu.page_queue.full(0, gpu.page_pace_ops_budget()) {
@@ -1427,18 +1839,13 @@ pub(crate) fn rasterize(
                 error.said()
             )));
         }
-        for texture in [places, depth] {
+        for texture in keep_textures {
             gpu.targets().keep(texture);
         }
-        for buffer in [
-            setup_slice.buffer,
-            marks,
-            offsets,
-            indices,
-            rows,
-            args,
-            keys,
-        ] {
+        for buffer in unbatched_uniforms
+            .into_iter()
+            .chain([marks, offsets, indices, rows, args, small_rows, keys])
+        {
             spare.keep(buffer, None);
         }
     }

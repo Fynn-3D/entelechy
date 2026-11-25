@@ -18,21 +18,143 @@ use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
 use entelechy_abi::{Domain, Handle, Invocation, Scope};
-#[cfg(not(target_arch = "wasm32"))]
-use entelechy_rules::trace::INSTANCE_WORDS;
 use entelechy_rules::trace::{
-    self, BuiltBvh, HIT_WORDS, MeshSlice, POSITION_WORDS, TRIANGLE_WORDS, check_trace,
-    check_trace_instances, hit_schema,
+    self, BuiltBvh, HIT_WORDS, POSITION_WORDS, TRIANGLE_WORDS, check_trace, check_trace_instances,
+    hit_schema,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use entelechy_rules::trace::{INSTANCE_WORDS, MeshSlice};
 use entelechy_rules::{ExecutionError, NativeOp};
 
+use crate::batch::UniformSlice;
 use crate::failure::Scopes;
+use crate::trace_lbvh::{self, GpuLbvhMesh, LBVH_REFIT_PERIOD, LbvhPipelines};
 use crate::{DeviceImage, WgpuBackend, wgsl};
 
 const TRACE_WORKGROUP: u32 = 64;
+const COMPACT_RAY_THRESHOLD: u32 = 256;
 const _: () = assert!(wgsl::MAX_GROUPS * TRACE_WORKGROUP == 4_194_240);
 const CACHE_MAX_ENTRIES: usize = 32;
 const CACHE_MAX_AGE: u64 = 16;
+
+/// GPU-driven active-ray stream compaction shader shared by both Hardware RT
+/// and Compute BVH paths: writes MISS for dead/invalid rays (`tmax <= tmin` or
+/// non-finite) and packs live ray indices into `active_rays[1..]` (with count
+/// in `active_rays[0]`) plus `[gx, gy, 1]` into `indirect_args` for
+/// `dispatch_workgroups_indirect`.
+const COMPACT_RAYS_WGSL: &str = "
+struct CompactSetup {
+    ray_count: u32,
+    flags: u32,
+    pad0: u32,
+    pad1: u32,
+};
+@group(0) @binding(0) var<uniform> setup: CompactSetup;
+@group(0) @binding(1) var<storage, read> rays: array<u32>;
+@group(0) @binding(2) var<storage, read_write> hits: array<u32>;
+// active_rays[0] = active_count, active_rays[1 + slot] = original ray index r
+@group(0) @binding(3) var<storage, read_write> active_rays: array<atomic<u32>>;
+@group(0) @binding(4) var<storage, read_write> indirect_args: array<u32>;
+
+fn is_finite_bits(w: u32) -> bool {
+    return (w & 0x7F800000u) != 0x7F800000u;
+}
+
+fn is_nan_bits(w: u32) -> bool {
+    return (w & 0x7FFFFFFFu) > 0x7F800000u;
+}
+
+fn write_miss(r: u32) {
+    let b = r * 7u;
+    hits[b] = 0xBF800000u;
+    hits[b + 1u] = 0u;
+    hits[b + 2u] = 0u;
+    hits[b + 3u] = 0xFFFFFFFFu;
+    hits[b + 4u] = 0xFFFFFFFFu;
+    hits[b + 5u] = 0u;
+    hits[b + 6u] = 0u;
+}
+
+@compute @workgroup_size(1, 1, 1)
+fn clear_args() {
+    atomicStore(&active_rays[0u], 0u);
+}
+
+var<workgroup> wg_scan: array<u32, 64>;
+var<workgroup> wg_base: u32;
+
+@compute @workgroup_size(64, 1, 1)
+fn compact_rays(
+    @builtin(local_invocation_index) local: u32,
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+) {
+    let r = gid.x + gid.y * (nwg.x * 64u);
+    var alive = 0u;
+    if r < setup.ray_count {
+        let cull_both = (setup.flags & 6u) == 6u;
+        let rb = r * 8u;
+        let ox_w = rays[rb];
+        let oy_w = rays[rb + 1u];
+        let oz_w = rays[rb + 2u];
+        let tmin_w = rays[rb + 3u];
+        let dx_w = rays[rb + 4u];
+        let dy_w = rays[rb + 5u];
+        let dz_w = rays[rb + 6u];
+        let tmax_w = rays[rb + 7u];
+        let valid_f = !cull_both
+            && is_finite_bits(ox_w) && is_finite_bits(oy_w) && is_finite_bits(oz_w)
+            && is_finite_bits(dx_w) && is_finite_bits(dy_w) && is_finite_bits(dz_w)
+            && is_finite_bits(tmin_w) && !is_nan_bits(tmax_w);
+        if valid_f {
+            let tmin = bitcast<f32>(tmin_w);
+            let tmax = bitcast<f32>(tmax_w);
+            if tmin >= 0.0 && tmax > tmin {
+                alive = 1u;
+            }
+        }
+        if alive == 0u {
+            write_miss(r);
+        }
+    }
+    wg_scan[local] = alive;
+    workgroupBarrier();
+    for (var d = 1u; d < 64u; d <<= 1u) {
+        var add = 0u;
+        if local >= d {
+            add = wg_scan[local - d];
+        }
+        workgroupBarrier();
+        wg_scan[local] += add;
+        workgroupBarrier();
+    }
+    if local == 63u {
+        let total = wg_scan[63u];
+        if total > 0u {
+            wg_base = atomicAdd(&active_rays[0u], total);
+        } else {
+            wg_base = 0u;
+        }
+    }
+    workgroupBarrier();
+    if alive != 0u {
+        let rank = wg_scan[local] - 1u;
+        atomicStore(&active_rays[1u + wg_base + rank], r);
+    }
+}
+
+@compute @workgroup_size(1, 1, 1)
+fn finalize_args() {
+    let active_cnt = atomicLoad(&active_rays[0u]);
+    let groups = (active_cnt + 63u) / 64u;
+    let gx = min(groups, 65535u);
+    let safe_gx = max(gx, 1u);
+    let gy = select(1u, (groups + safe_gx - 1u) / safe_gx, groups > 0u);
+    indirect_args[0u] = gx;
+    indirect_args[1u] = gy;
+    indirect_args[2u] = 1u;
+}
+";
 
 /// Clear-to-miss shader used whenever a scene has zero triangles or zero active
 /// instances so no empty acceleration structure is ever submitted to the device.
@@ -47,8 +169,11 @@ struct ClearSetup {
 @group(0) @binding(1) var<storage, read_write> hits: array<u32>;
 
 @compute @workgroup_size(64, 1, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let r = gid.x + gid.y * 4194240u;
+fn main(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+) {
+    let r = gid.x + gid.y * (nwg.x * 64u);
     if r >= setup.ray_count {
         return;
     }
@@ -169,7 +294,7 @@ struct Setup {
     mask: u32,
     instanced: u32,
     mesh_count: u32,
-    instance_count: u32,
+    indirect: u32,
 };
 
 @group(0) @binding(0) var<uniform> setup: Setup;
@@ -180,6 +305,7 @@ struct Setup {
 @group(0) @binding(5) var<storage, read> triangles: array<u32>;
 @group(0) @binding(6) var<storage, read> meshes: array<u32>;
 @group(0) @binding(7) var<storage, read> instances: array<u32>;
+@group(0) @binding(8) var<storage, read> active_rays: array<u32>;
 
 fn is_finite_bits(w: u32) -> bool {
     return (w & 0x7F800000u) != 0x7F800000u;
@@ -256,9 +382,19 @@ fn hit_is_front(inst_row: u32, tri_local: u32, world_dir: vec3<f32>) -> bool {
 }
 
 @compute @workgroup_size(64, 1, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let r = gid.x + gid.y * 4194240u;
-    if r >= setup.ray_count {
+fn main(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+) {
+    let slot = gid.x + gid.y * (nwg.x * 64u);
+    var r = slot;
+    if setup.indirect != 0u {
+        let active_cnt = active_rays[0u];
+        if slot >= active_cnt {
+            return;
+        }
+        r = active_rays[1u + slot];
+    } else if r >= setup.ray_count {
         return;
     }
     let rb = r * 8u;
@@ -368,7 +504,7 @@ struct Setup {
     mask: u32,
     instanced: u32,
     tlas_nodes: u32,
-    pad: u32,
+    indirect: u32,
 };
 
 // Packed per-mesh descriptor for GPU Compute BVH:
@@ -414,6 +550,9 @@ fn inv_dir_of(d: vec3<f32>) -> vec3<f32> {
 }
 
 fn slab_hit(origin: vec3<f32>, inv_d: vec3<f32>, bmin: vec3<f32>, bmax: vec3<f32>, tmin: f32, tmax: f32) -> vec2<f32> {
+    if bmin.x > bmax.x {
+        return vec2<f32>(0.0, 0.0);
+    }
     let t0 = (bmin - origin) * inv_d;
     let t1 = (bmax - origin) * inv_d;
     let lo = min(t0, t1);
@@ -480,7 +619,7 @@ fn traverse_blas(
         let nb = (node_base + stack[sp]) * 8u;
         let left_or_first = bvh_nodes[nb + 3u];
         let count = bvh_nodes[nb + 7u];
-        if count > 0u {
+        if count > 0u && (count & 0x80000000u) == 0u {
             for (var k = 0u; k < count; k = k + 1u) {
                 let local_t = bvh_ordered[ord_base + left_or_first + k];
                 let tb = (t_off + local_t) * 3u;
@@ -535,7 +674,7 @@ fn traverse_blas(
             }
         } else {
             let l_idx = left_or_first;
-            let r_idx = l_idx + 1u;
+            let r_idx = select(l_idx + 1u, count & 0x7FFFFFFFu, (count & 0x80000000u) != 0u);
             let lb = (node_base + l_idx) * 8u;
             let rb_n = (node_base + r_idx) * 8u;
             let lh = slab_hit(
@@ -584,9 +723,19 @@ fn traverse_blas(
 }
 
 @compute @workgroup_size(64, 1, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let r = gid.x + gid.y * 4194240u;
-    if r >= setup.ray_count {
+fn main(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+) {
+    let slot = gid.x + gid.y * (nwg.x * 64u);
+    var r = slot;
+    if setup.instanced == 0u && setup.indirect != 0u {
+        let active_cnt = tlas_nodes[0u];
+        if slot >= active_cnt {
+            return;
+        }
+        r = tlas_nodes[1u + slot];
+    } else if r >= setup.ray_count {
         return;
     }
     let rb = r * 8u;
@@ -645,7 +794,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let nb = tstack[tsp] * 8u;
                 let left_or_first = tlas_nodes[nb + 3u];
                 let count = tlas_nodes[nb + 7u];
-                if count > 0u {
+                if count > 0u && (count & 0x80000000u) == 0u {
                     for (var k = 0u; k < count; k = k + 1u) {
                         let pidx = tlas_ordered[left_or_first + k];
                         let ib = pidx * 24u;
@@ -690,7 +839,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     }
                 } else {
                     let l_idx = left_or_first;
-                    let r_idx = l_idx + 1u;
+                    let r_idx = select(l_idx + 1u, count & 0x7FFFFFFFu, (count & 0x80000000u) != 0u);
                     let lb = l_idx * 8u;
                     let rb_n = r_idx * 8u;
                     let lh = slab_hit(
@@ -752,12 +901,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 ";
 
+/// Pipelines for GPU-driven active-ray compaction + `dispatch_workgroups_indirect`.
+struct CompactPipelines {
+    layout: wgpu::BindGroupLayout,
+    clear_args: wgpu::ComputePipeline,
+    compact_rays: wgpu::ComputePipeline,
+    finalize_args: wgpu::ComputePipeline,
+}
+
 /// Pipelines for the Hardware RT Core path (`enable wgpu_ray_query;`).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct HwTracePipelines {
     sanitize_layout: wgpu::BindGroupLayout,
     sanitize_verts: wgpu::ComputePipeline,
     sanitize_tris: wgpu::ComputePipeline,
+    compact: CompactPipelines,
     trace_layout: wgpu::BindGroupLayout,
     trace: wgpu::ComputePipeline,
     clear_layout: wgpu::BindGroupLayout,
@@ -765,8 +923,10 @@ pub(crate) struct HwTracePipelines {
     empty_buf: wgpu::Buffer,
 }
 
-/// Pipelines for the portable GPU Compute BVH fallback path.
+/// Pipelines for the portable GPU Compute BVH + Full-GPU LBVH path.
 pub(crate) struct BvhTracePipelines {
+    lbvh: LbvhPipelines,
+    compact: CompactPipelines,
     trace_layout: wgpu::BindGroupLayout,
     trace: wgpu::ComputePipeline,
     clear_layout: wgpu::BindGroupLayout,
@@ -781,24 +941,34 @@ struct CachedSingleHw {
     last_eval: u64,
 }
 
+/// Pre-allocated double-buffered dynamic BLAS/TLAS ring (`PREFER_FAST_BUILD | ALLOW_UPDATE`,
+/// `PreferUpdate`) reused across animated frames with zero GPU buffer/AS allocations.
+#[cfg(not(target_arch = "wasm32"))]
+struct DynamicHwSlot {
+    clean_verts: wgpu::Buffer,
+    clean_tris: wgpu::Buffer,
+    blas: Arc<wgpu::Blas>,
+    tlas: Arc<wgpu::Tlas>,
+    size_desc: wgpu::BlasTriangleGeometrySizeDescriptor,
+    built_verts_id: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct DynamicHwBlas {
+    slots: [DynamicHwSlot; 2],
+    cursor: usize,
+    last_eval: u64,
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 struct CachedMeshSetHw {
     blases: Vec<Option<Arc<wgpu::Blas>>>,
-    slices: Vec<MeshSlice>,
     last_eval: u64,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 struct CachedInstancedHw {
     tlas: Option<Arc<wgpu::Tlas>>,
-    last_eval: u64,
-}
-
-struct CachedSingleBvh {
-    nodes: wgpu::Buffer,
-    ordered: wgpu::Buffer,
-    mesh_desc: wgpu::Buffer,
-    empty: bool,
     last_eval: u64,
 }
 
@@ -823,16 +993,40 @@ struct CacheInner {
     #[cfg(not(target_arch = "wasm32"))]
     hw_single: HashMap<(u64, u64), CachedSingleHw>,
     #[cfg(not(target_arch = "wasm32"))]
+    hw_seen_tris: HashMap<u64, u64>,
+    #[cfg(not(target_arch = "wasm32"))]
+    hw_dynamic: HashMap<(u64, u32, u32), DynamicHwBlas>,
+    #[cfg(not(target_arch = "wasm32"))]
     hw_meshes: HashMap<(u64, u64, u64), CachedMeshSetHw>,
     #[cfg(not(target_arch = "wasm32"))]
     hw_instanced: HashMap<(u64, u64, u64, u64), CachedInstancedHw>,
-    bvh_single: HashMap<(u64, u64), CachedSingleBvh>,
+    lbvh_single: HashMap<(u64, u32, u32), GpuLbvhMesh>,
     bvh_meshes: HashMap<(u64, u64, u64), CachedMeshSetBvh>,
     bvh_instanced: HashMap<(u64, u64, u64, u64), CachedInstancedBvh>,
 }
 
+/// Evicts the single oldest entry strictly older than `eval_now` so resources
+/// recorded into the currently open frame batch are never dropped mid-frame.
+fn evict_oldest_before<K: Eq + std::hash::Hash + Clone, V>(
+    map: &mut HashMap<K, V>,
+    eval_now: u64,
+    last_eval: impl Fn(&V) -> u64,
+) {
+    if map.len() < CACHE_MAX_ENTRIES {
+        return;
+    }
+    let victim = map
+        .iter()
+        .filter(|(_, v)| last_eval(v) < eval_now)
+        .min_by_key(|(_, v)| last_eval(v))
+        .map(|(k, _)| k.clone());
+    if let Some(k) = victim {
+        map.remove(&k);
+    }
+}
+
 /// Bounded per-device cache of hardware BLAS/TLAS acceleration structures and
-/// GPU Compute BVH buffers, keyed by immutable [`DeviceImage::id`]s and aged
+/// GPU Compute LBVH/BVH buffers, keyed by immutable [`DeviceImage::id`]s and aged
 /// once per graph evaluation.
 #[derive(Default)]
 pub(crate) struct TraceCache {
@@ -852,14 +1046,20 @@ impl TraceCache {
                 .hw_single
                 .retain(|_, v| now.saturating_sub(v.last_eval) <= CACHE_MAX_AGE);
             inner
+                .hw_dynamic
+                .retain(|_, v| now.saturating_sub(v.last_eval) <= CACHE_MAX_AGE);
+            inner
                 .hw_meshes
                 .retain(|_, v| now.saturating_sub(v.last_eval) <= CACHE_MAX_AGE);
             inner
                 .hw_instanced
                 .retain(|_, v| now.saturating_sub(v.last_eval) <= CACHE_MAX_AGE);
+            if inner.hw_seen_tris.len() > CACHE_MAX_ENTRIES * 4 {
+                inner.hw_seen_tris.clear();
+            }
         }
         inner
-            .bvh_single
+            .lbvh_single
             .retain(|_, v| now.saturating_sub(v.last_eval) <= CACHE_MAX_AGE);
         inner
             .bvh_meshes
@@ -897,6 +1097,44 @@ fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
             min_binding_size: None,
         },
         count: None,
+    }
+}
+
+fn make_compact_pipelines(device: &wgpu::Device) -> CompactPipelines {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("entelechy trace compact"),
+        source: wgpu::ShaderSource::Wgsl(COMPACT_RAYS_WGSL.into()),
+    });
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("entelechy trace compact"),
+        entries: &[
+            uniform_entry(0),
+            storage_entry(1, true),
+            storage_entry(2, false),
+            storage_entry(3, false),
+            storage_entry(4, false),
+        ],
+    });
+    let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("entelechy trace compact"),
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    let mk = |ep: &str| {
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(ep),
+            layout: Some(&pl),
+            module: &module,
+            entry_point: Some(ep),
+            compilation_options: Default::default(),
+            cache: None,
+        })
+    };
+    CompactPipelines {
+        layout,
+        clear_args: mk("clear_args"),
+        compact_rays: mk("compact_rays"),
+        finalize_args: mk("finalize_args"),
     }
 }
 
@@ -989,6 +1227,7 @@ fn build_hw_pipelines(
             storage_entry(5, true),
             storage_entry(6, true),
             storage_entry(7, true),
+            storage_entry(8, true),
         ],
     });
     let trace_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1004,6 +1243,7 @@ fn build_hw_pipelines(
         compilation_options: Default::default(),
         cache: None,
     });
+    let compact = make_compact_pipelines(device);
     let (clear_layout, clear) = make_clear_pipeline(device);
     let empty_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("entelechy trace empty"),
@@ -1021,6 +1261,7 @@ fn build_hw_pipelines(
         sanitize_layout,
         sanitize_verts,
         sanitize_tris,
+        compact,
         trace_layout,
         trace,
         clear_layout,
@@ -1034,6 +1275,8 @@ fn build_bvh_pipelines(
     wait: crate::Wait,
 ) -> Result<BvhTracePipelines, String> {
     let guard = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let lbvh = LbvhPipelines::build(device);
+    let compact = make_compact_pipelines(device);
     let trace_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("entelechy trace bvh"),
         source: wgpu::ShaderSource::Wgsl(BVH_TRACE_WGSL.into()),
@@ -1081,6 +1324,8 @@ fn build_bvh_pipelines(
         ));
     }
     Ok(BvhTracePipelines {
+        lbvh,
+        compact,
         trace_layout,
         trace,
         clear_layout,
@@ -1229,56 +1474,185 @@ pub(crate) type HwTraceSlot = HwTracePipelines;
 #[cfg(target_arch = "wasm32")]
 pub(crate) type HwTraceSlot = ();
 
-#[cfg(not(target_arch = "wasm32"))]
-fn build_sanitized_blas(
+fn alloc_uniform_slices(
     gpu: &WgpuBackend,
-    pipelines: &HwTracePipelines,
-    encoder: &mut wgpu::CommandEncoder,
-    src_verts: &wgpu::Buffer,
-    src_tris: &wgpu::Buffer,
-    slice: MeshSlice,
-    keep_buffers: &mut Vec<wgpu::Buffer>,
-) -> Option<(
-    Arc<wgpu::Blas>,
-    wgpu::BlasTriangleGeometrySizeDescriptor,
-    wgpu::Buffer,
-    wgpu::Buffer,
-)> {
-    if slice.vertex_count == 0 || slice.triangle_count == 0 {
-        return None;
+    batched: bool,
+    payloads: &[&[u8]],
+    temp_buffers: &mut Vec<wgpu::Buffer>,
+) -> Result<Vec<UniformSlice>, ExecutionError> {
+    if payloads.is_empty() {
+        return Ok(Vec::new());
     }
-    let v_cnt = slice.vertex_count as u32;
-    let t_cnt = slice.triangle_count as u32;
-    let clean_verts = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("entelechy blas verts"),
-        size: (u64::from(v_cnt) * 12).max(16),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::BLAS_INPUT,
-        mapped_at_creation: false,
+    if batched {
+        gpu.batch.alloc_uniforms(payloads)
+    } else {
+        let mut slices = Vec::with_capacity(payloads.len());
+        for bytes in payloads {
+            let buf = gpu.take_uniform(bytes);
+            temp_buffers.push(buf.clone());
+            slices.push(UniformSlice::entire(buf));
+        }
+        Ok(slices)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_compact_rays(
+    gpu: &WgpuBackend,
+    compact: &CompactPipelines,
+    encoder: &mut wgpu::CommandEncoder,
+    compact_u: &UniformSlice,
+    rays_buf: &wgpu::Buffer,
+    output_buffer: &wgpu::Buffer,
+    ray_count: u32,
+    timing_set: Option<&crate::timing::Timing>,
+    opened_ts: &mut bool,
+    temp_buffers: &mut Vec<wgpu::Buffer>,
+) -> (wgpu::Buffer, wgpu::Buffer) {
+    let active_bytes = ((u64::from(ray_count) + 1) * 4).max(16).div_ceil(16) * 16;
+    let active_rays = gpu
+        .spare()
+        .take(&gpu.device, active_bytes, wgpu::BufferUsages::STORAGE);
+    let indirect_args = gpu.spare().take(
+        &gpu.device,
+        16,
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT,
+    );
+    let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("entelechy trace compact"),
+        layout: &compact.layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: compact_u.binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: rays_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: output_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: active_rays.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: indirect_args.as_entire_binding(),
+            },
+        ],
     });
-    let clean_tris = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("entelechy blas tris"),
-        size: (u64::from(t_cnt) * 12).max(16),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::BLAS_INPUT,
-        mapped_at_creation: false,
-    });
+    let ts_open = if !*opened_ts {
+        *opened_ts = true;
+        timing_set.map(|t| t.compute(Some(0), None))
+    } else {
+        None
+    };
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("entelechy trace compact"),
+            timestamp_writes: ts_open,
+        });
+        pass.set_bind_group(0, &group, &[]);
+        pass.set_pipeline(&compact.clear_args);
+        pass.dispatch_workgroups(1, 1, 1);
+        pass.set_pipeline(&compact.compact_rays);
+        let (gx, gy) = wgsl::folded(ray_count.div_ceil(TRACE_WORKGROUP).max(1));
+        pass.dispatch_workgroups(gx, gy, 1);
+        pass.set_pipeline(&compact.finalize_args);
+        pass.dispatch_workgroups(1, 1, 1);
+    }
+    temp_buffers.push(active_rays.clone());
+    temp_buffers.push(indirect_args.clone());
+    (active_rays, indirect_args)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_trace_encoder(
+    gpu: &WgpuBackend,
+    mut encoder: wgpu::CommandEncoder,
+    batched: bool,
+    scopes: Option<Scopes>,
+    timing_set: Option<crate::timing::Timing>,
+    est_ops: u64,
+    temp_buffers: Vec<wgpu::Buffer>,
+) -> Result<(), ExecutionError> {
+    let timing = gpu.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
+    if batched {
+        gpu.frames.note_batched_run();
+        let page_budget = gpu
+            .wait
+            .parks_with_host()
+            .then(|| gpu.page_pace_ops_budget());
+        gpu.batch
+            .finish_node(encoder, est_ops, temp_buffers, Vec::new(), page_budget)?;
+        if gpu.wait.parks_with_host() && gpu.page_queue.full(0, gpu.page_pace_ops_budget()) {
+            gpu.batch.flush()?;
+            gpu.drain_page()?;
+        }
+    } else {
+        let submission = gpu.submit(encoder.finish());
+        if gpu.wait.parks_with_host() && !gpu.measured() {
+            gpu.page_queue.note(est_ops);
+            if gpu.page_queue.full(0, gpu.page_pace_ops_budget()) {
+                gpu.drain_page()?;
+            }
+        }
+        gpu.settle_measured(submission, timing);
+        if let Some(scopes) = scopes {
+            if gpu.wait.parks_with_host() && !gpu.measured() {
+                gpu.defer_check(Box::new(scopes.pop_later(gpu.wait, gpu.spent.clone())));
+            } else if let Err(error) = scopes.pop(gpu.wait, "") {
+                return Err(ExecutionError::Device(format!("trace: {}", error.said())));
+            }
+        }
+        for buf in temp_buffers {
+            gpu.spare().keep(buf, None);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn sanitize_setup_bytes(slice: MeshSlice) -> [u8; 16] {
     let setup: [u32; 4] = [
         slice.vertex_offset as u32,
-        v_cnt,
+        slice.vertex_count as u32,
         slice.triangle_offset as u32,
-        t_cnt,
+        slice.triangle_count as u32,
     ];
-    let mut setup_bytes = [0u8; 16];
-    for (slot, w) in setup_bytes.chunks_exact_mut(4).zip(setup) {
+    let mut bytes = [0u8; 16];
+    for (slot, w) in bytes.chunks_exact_mut(4).zip(setup) {
         slot.copy_from_slice(&w.to_le_bytes());
     }
-    let setup_buf = gpu.take_uniform(&setup_bytes);
-    let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+    bytes
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+fn encode_sanitize_into(
+    device: &wgpu::Device,
+    pipelines: &HwTracePipelines,
+    encoder: &mut wgpu::CommandEncoder,
+    setup_u: &UniformSlice,
+    src_verts: &wgpu::Buffer,
+    src_tris: &wgpu::Buffer,
+    clean_verts: &wgpu::Buffer,
+    clean_tris: &wgpu::Buffer,
+    v_cnt: u32,
+    t_cnt: u32,
+    timing_set: Option<&crate::timing::Timing>,
+    opened_ts: &mut bool,
+) {
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("entelechy trace sanitize"),
         layout: &pipelines.sanitize_layout,
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: setup_buf.as_entire_binding(),
+                resource: setup_u.binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
@@ -1298,20 +1672,39 @@ fn build_sanitized_blas(
             },
         ],
     });
-    {
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("entelechy trace sanitize"),
-            timestamp_writes: None,
-        });
-        pass.set_bind_group(0, &group, &[]);
-        pass.set_pipeline(&pipelines.sanitize_verts);
-        let (vx, vy) = wgsl::folded(v_cnt.div_ceil(TRACE_WORKGROUP));
-        pass.dispatch_workgroups(vx, vy, 1);
-        pass.set_pipeline(&pipelines.sanitize_tris);
-        let (tx, ty) = wgsl::folded(t_cnt.div_ceil(TRACE_WORKGROUP));
-        pass.dispatch_workgroups(tx, ty, 1);
-    }
-    keep_buffers.push(setup_buf);
+    let ts_open = if !*opened_ts {
+        *opened_ts = true;
+        timing_set.map(|t| t.compute(Some(0), None))
+    } else {
+        None
+    };
+    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+        label: Some("entelechy trace sanitize"),
+        timestamp_writes: ts_open,
+    });
+    pass.set_bind_group(0, &group, &[]);
+    pass.set_pipeline(&pipelines.sanitize_verts);
+    let (vx, vy) = wgsl::folded(v_cnt.div_ceil(TRACE_WORKGROUP));
+    pass.dispatch_workgroups(vx, vy, 1);
+    pass.set_pipeline(&pipelines.sanitize_tris);
+    let (tx, ty) = wgsl::folded(t_cnt.div_ceil(TRACE_WORKGROUP));
+    pass.dispatch_workgroups(tx, ty, 1);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn alloc_dynamic_hw_slot(device: &wgpu::Device, v_cnt: u32, t_cnt: u32) -> DynamicHwSlot {
+    let clean_verts = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("entelechy dyn blas verts"),
+        size: (u64::from(v_cnt) * 12).max(16),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::BLAS_INPUT,
+        mapped_at_creation: false,
+    });
+    let clean_tris = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("entelechy dyn blas tris"),
+        size: (u64::from(t_cnt) * 12).max(16),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::BLAS_INPUT,
+        mapped_at_creation: false,
+    });
     let size_desc = wgpu::BlasTriangleGeometrySizeDescriptor {
         vertex_format: wgpu::VertexFormat::Float32x3,
         vertex_count: v_cnt,
@@ -1319,7 +1712,70 @@ fn build_sanitized_blas(
         index_count: Some(t_cnt * 3),
         flags: wgpu::AccelerationStructureGeometryFlags::empty(),
     };
-    let blas = Arc::new(gpu.device.create_blas(
+    let blas = Arc::new(device.create_blas(
+        &wgpu::CreateBlasDescriptor {
+            label: Some("entelechy dyn blas"),
+            flags: wgpu::AccelerationStructureFlags::PREFER_FAST_BUILD
+                | wgpu::AccelerationStructureFlags::ALLOW_UPDATE,
+            update_mode: wgpu::AccelerationStructureUpdateMode::PreferUpdate,
+        },
+        wgpu::BlasGeometrySizeDescriptors::Triangles {
+            descriptors: vec![size_desc.clone()],
+        },
+    ));
+    let mut tlas_raw = device.create_tlas(&wgpu::CreateTlasDescriptor {
+        label: Some("entelechy dyn tlas"),
+        max_instances: 1,
+        flags: wgpu::AccelerationStructureFlags::PREFER_FAST_BUILD,
+        update_mode: wgpu::AccelerationStructureUpdateMode::Build,
+    });
+    let identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    tlas_raw[0] = Some(wgpu::TlasInstance::new(&blas, identity, 0, 0xFF));
+    DynamicHwSlot {
+        clean_verts,
+        clean_tris,
+        blas,
+        tlas: Arc::new(tlas_raw),
+        size_desc,
+        built_verts_id: 0,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn alloc_static_blas(
+    device: &wgpu::Device,
+    slice: MeshSlice,
+) -> Option<(
+    Arc<wgpu::Blas>,
+    wgpu::BlasTriangleGeometrySizeDescriptor,
+    wgpu::Buffer,
+    wgpu::Buffer,
+)> {
+    if slice.vertex_count == 0 || slice.triangle_count == 0 {
+        return None;
+    }
+    let v_cnt = slice.vertex_count as u32;
+    let t_cnt = slice.triangle_count as u32;
+    let clean_verts = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("entelechy blas verts"),
+        size: (u64::from(v_cnt) * 12).max(16),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::BLAS_INPUT,
+        mapped_at_creation: false,
+    });
+    let clean_tris = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("entelechy blas tris"),
+        size: (u64::from(t_cnt) * 12).max(16),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::BLAS_INPUT,
+        mapped_at_creation: false,
+    });
+    let size_desc = wgpu::BlasTriangleGeometrySizeDescriptor {
+        vertex_format: wgpu::VertexFormat::Float32x3,
+        vertex_count: v_cnt,
+        index_format: Some(wgpu::IndexFormat::Uint32),
+        index_count: Some(t_cnt * 3),
+        flags: wgpu::AccelerationStructureGeometryFlags::empty(),
+    };
+    let blas = Arc::new(device.create_blas(
         &wgpu::CreateBlasDescriptor {
             label: Some("entelechy blas"),
             flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
@@ -1330,6 +1786,14 @@ fn build_sanitized_blas(
         },
     ));
     Some((blas, size_desc, clean_verts, clean_tris))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+enum SingleHwPlan {
+    Cached(Arc<wgpu::Tlas>),
+    RebuildDynamic { slot_idx: usize },
+    PromoteDynamic,
+    BuildStatic,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1401,108 +1865,65 @@ fn trace_hw(
     let verts_id = image_id(scope, verts_h).unwrap_or(0);
     let tris_id = image_id(scope, tris_h).unwrap_or(0);
 
-    gpu.batch.flush()?;
-    let scopes = Scopes::push(&gpu.device);
-    let mut encoder = gpu
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("entelechy trace hw"),
-        });
-    let mut temp_uniforms = Vec::new();
+    // Phase 1: Resolve cache & any Host/GPU reads BEFORE allocating batch uniforms or
+    // opening the shared command encoder.
+    let mut single_plan = None;
+    let mut inst_cached_tlas: Option<Option<Arc<wgpu::Tlas>>> = None;
+    let mut inst_pending_builds: Vec<(
+        MeshSlice,
+        Arc<wgpu::Blas>,
+        wgpu::BlasTriangleGeometrySizeDescriptor,
+        wgpu::Buffer,
+        wgpu::Buffer,
+    )> = Vec::new();
+    let mut inst_new_tlas: Option<Arc<wgpu::Tlas>> = None;
+    let mut meshes_buf = pipelines.empty_buf.clone();
+    let mut insts_buf = pipelines.empty_buf.clone();
+    let mut mesh_count = 0u32;
 
-    let (tlas, meshes_buf, insts_buf, mesh_count, inst_count) = if !instanced {
-        let key = (verts_id, tris_id);
-        let cached = {
-            let mut cache = gpu
-                .trace_cache
-                .inner
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
-            cache.hw_single.get_mut(&key).map(|entry| {
-                entry.last_eval = eval_now;
-                Arc::clone(&entry.tlas)
-            })
-        };
-        let tlas = if let Some(tlas) = cached {
-            tlas
-        } else {
-            let slice = MeshSlice {
-                vertex_offset: 0,
-                vertex_count: v_count as usize,
-                triangle_offset: 0,
-                triangle_count: t_count as usize,
-            };
-            let (blas, size_desc, clean_v, clean_t) = build_sanitized_blas(
-                gpu,
-                pipelines,
-                &mut encoder,
-                &verts_buf,
-                &tris_buf,
-                slice,
-                &mut temp_uniforms,
-            )
-            .expect("non-empty mesh produces BLAS");
-            let mut tlas_raw = gpu.device.create_tlas(&wgpu::CreateTlasDescriptor {
-                label: Some("entelechy trace single tlas"),
-                max_instances: 1,
-                flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
-                update_mode: wgpu::AccelerationStructureUpdateMode::Build,
-            });
-            let identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-            tlas_raw[0] = Some(wgpu::TlasInstance::new(&blas, identity, 0, 0xFF));
-            let blas_entry = wgpu::BlasBuildEntry {
-                blas: &blas,
-                geometry: wgpu::BlasGeometries::TriangleGeometries(vec![
-                    wgpu::BlasTriangleGeometry {
-                        size: &size_desc,
-                        vertex_buffer: &clean_v,
-                        first_vertex: 0,
-                        vertex_stride: 12,
-                        index_buffer: Some(&clean_t),
-                        first_index: Some(0),
-                        transform_buffer: None,
-                        transform_buffer_offset: None,
-                    },
-                ]),
-            };
-            encoder.build_acceleration_structures(
-                std::iter::once(&blas_entry),
-                std::iter::once(&tlas_raw),
-            );
-            let tlas = Arc::new(tlas_raw);
-            let mut cache = gpu
-                .trace_cache
-                .inner
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
-            if cache.hw_single.len() >= CACHE_MAX_ENTRIES {
-                cache.hw_single.clear();
+    if !instanced {
+        let dyn_key = (tris_id, v_count, t_count);
+        let static_key = (verts_id, tris_id);
+        let mut cache = gpu
+            .trace_cache
+            .inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if let Some(dyn_entry) = cache.hw_dynamic.get_mut(&dyn_key) {
+            dyn_entry.last_eval = eval_now;
+            if let Some(slot) = dyn_entry
+                .slots
+                .iter()
+                .find(|s| s.built_verts_id == verts_id)
+            {
+                single_plan = Some(SingleHwPlan::Cached(Arc::clone(&slot.tlas)));
+            } else {
+                let slot_idx = dyn_entry.cursor & 1;
+                dyn_entry.cursor = dyn_entry.cursor.wrapping_add(1);
+                single_plan = Some(SingleHwPlan::RebuildDynamic { slot_idx });
             }
-            cache.hw_single.insert(
-                key,
-                CachedSingleHw {
-                    _blas: blas,
-                    tlas: Arc::clone(&tlas),
-                    last_eval: eval_now,
-                },
-            );
-            tlas
-        };
-        (
-            Some(tlas),
-            pipelines.empty_buf.clone(),
-            pipelines.empty_buf.clone(),
-            0u32,
-            0u32,
-        )
+        } else if let Some(entry) = cache.hw_single.get_mut(&static_key) {
+            entry.last_eval = eval_now;
+            single_plan = Some(SingleHwPlan::Cached(Arc::clone(&entry.tlas)));
+        } else if tris_id != 0
+            && cache
+                .hw_seen_tris
+                .get(&tris_id)
+                .is_some_and(|&prev_v| prev_v != verts_id)
+        {
+            single_plan = Some(SingleHwPlan::PromoteDynamic);
+        } else {
+            if tris_id != 0 {
+                cache.hw_seen_tris.insert(tris_id, verts_id);
+            }
+            single_plan = Some(SingleHwPlan::BuildStatic);
+        }
     } else {
         let mh = meshes_h.expect("instanced trace has meshes");
         let ih = insts_h.expect("instanced trace has instances");
-        let m_count = scope.size(mh)?.count() as u32;
+        mesh_count = scope.size(mh)?.count() as u32;
         let i_count = scope.size(ih)?.count() as u32;
-        if m_count == 0 || i_count == 0 {
-            drop(encoder);
-            let _ = scopes.pop(gpu.wait, "");
+        if mesh_count == 0 || i_count == 0 {
             return dispatch_clear_misses(
                 gpu,
                 &pipelines.clear_layout,
@@ -1512,12 +1933,12 @@ fn trace_hw(
                 scope,
             );
         }
-        let meshes_buf = gpu.bind_input(scope, mh)?;
-        let insts_buf = gpu.bind_input(scope, ih)?;
+        meshes_buf = gpu.bind_input(scope, mh)?;
+        insts_buf = gpu.bind_input(scope, ih)?;
         let meshes_id = image_id(scope, mh).unwrap_or(0);
         let insts_id = image_id(scope, ih).unwrap_or(0);
         let tlas_key = (verts_id, tris_id, meshes_id, insts_id);
-        let cached_tlas = {
+        let cached = {
             let mut cache = gpu
                 .trace_cache
                 .inner
@@ -1528,8 +1949,8 @@ fn trace_hw(
                 entry.tlas.clone()
             })
         };
-        let tlas_opt = if let Some(tlas_opt) = cached_tlas {
-            tlas_opt
+        if let Some(tlas_opt) = cached {
+            inst_cached_tlas = Some(tlas_opt);
         } else {
             let mesh_key = (verts_id, tris_id, meshes_id);
             let cached_meshes = {
@@ -1540,28 +1961,21 @@ fn trace_hw(
                     .unwrap_or_else(|p| p.into_inner());
                 cache.hw_meshes.get_mut(&mesh_key).map(|entry| {
                     entry.last_eval = eval_now;
-                    (entry.blases.clone(), entry.slices.clone())
+                    entry.blases.clone()
                 })
             };
-            let (blases, _slices, pending_builds) = if let Some((blases, slices)) = cached_meshes {
-                (blases, slices, Vec::new())
+            let blases = if let Some(blases) = cached_meshes {
+                blases
             } else {
                 let mesh_words = read_words(gpu, scope, mh)?;
                 let slices = trace::parse_meshes(&mesh_words, v_count as usize, t_count as usize);
                 let mut blases = Vec::with_capacity(slices.len());
-                let mut builds = Vec::new();
                 for &slice in &slices {
-                    if let Some((blas, size_desc, clean_v, clean_t)) = build_sanitized_blas(
-                        gpu,
-                        pipelines,
-                        &mut encoder,
-                        &verts_buf,
-                        &tris_buf,
-                        slice,
-                        &mut temp_uniforms,
-                    ) {
+                    if let Some((blas, size_desc, clean_v, clean_t)) =
+                        alloc_static_blas(&gpu.device, slice)
+                    {
                         blases.push(Some(Arc::clone(&blas)));
-                        builds.push((blas, size_desc, clean_v, clean_t));
+                        inst_pending_builds.push((slice, blas, size_desc, clean_v, clean_t));
                     } else {
                         blases.push(None);
                     }
@@ -1571,18 +1985,15 @@ fn trace_hw(
                     .inner
                     .lock()
                     .unwrap_or_else(|p| p.into_inner());
-                if cache.hw_meshes.len() >= CACHE_MAX_ENTRIES {
-                    cache.hw_meshes.clear();
-                }
+                evict_oldest_before(&mut cache.hw_meshes, eval_now, |v| v.last_eval);
                 cache.hw_meshes.insert(
                     mesh_key,
                     CachedMeshSetHw {
                         blases: blases.clone(),
-                        slices: slices.clone(),
                         last_eval: eval_now,
                     },
                 );
-                (blases, slices, builds)
+                blases
             };
 
             let inst_words = read_words(gpu, scope, ih)?;
@@ -1623,8 +2034,6 @@ fn trace_hw(
                     r0[0], r0[1], r0[2], r0[3], r1[0], r1[1], r1[2], r1[3], r2[0], r2[1], r2[2],
                     r2[3],
                 ];
-                // Store original row index in 24-bit custom_data so the shader
-                // reads the exact original instance row and full 32-bit custom id.
                 active_instances.push(wgpu::TlasInstance::new(
                     blas,
                     transform,
@@ -1632,30 +2041,7 @@ fn trace_hw(
                     imask,
                 ));
             }
-            let built_tlas = if active_instances.is_empty() {
-                if !pending_builds.is_empty() {
-                    let entries: Vec<wgpu::BlasBuildEntry<'_>> = pending_builds
-                        .iter()
-                        .map(|(blas, size_desc, clean_v, clean_t)| wgpu::BlasBuildEntry {
-                            blas,
-                            geometry: wgpu::BlasGeometries::TriangleGeometries(vec![
-                                wgpu::BlasTriangleGeometry {
-                                    size: size_desc,
-                                    vertex_buffer: clean_v,
-                                    first_vertex: 0,
-                                    vertex_stride: 12,
-                                    index_buffer: Some(clean_t),
-                                    first_index: Some(0),
-                                    transform_buffer: None,
-                                    transform_buffer_offset: None,
-                                },
-                            ]),
-                        })
-                        .collect();
-                    encoder.build_acceleration_structures(entries.iter(), std::iter::empty());
-                }
-                None
-            } else {
+            if !active_instances.is_empty() {
                 let mut tlas_raw = gpu.device.create_tlas(&wgpu::CreateTlasDescriptor {
                     label: Some("entelechy trace instanced tlas"),
                     max_instances: active_instances.len() as u32,
@@ -1665,56 +2051,325 @@ fn trace_hw(
                 for (slot, inst) in active_instances.into_iter().enumerate() {
                     tlas_raw[slot] = Some(inst);
                 }
-                let entries: Vec<wgpu::BlasBuildEntry<'_>> = pending_builds
-                    .iter()
-                    .map(|(blas, size_desc, clean_v, clean_t)| wgpu::BlasBuildEntry {
-                        blas,
-                        geometry: wgpu::BlasGeometries::TriangleGeometries(vec![
-                            wgpu::BlasTriangleGeometry {
-                                size: size_desc,
-                                vertex_buffer: clean_v,
-                                first_vertex: 0,
-                                vertex_stride: 12,
-                                index_buffer: Some(clean_t),
-                                first_index: Some(0),
-                                transform_buffer: None,
-                                transform_buffer_offset: None,
-                            },
-                        ]),
-                    })
-                    .collect();
-                encoder.build_acceleration_structures(entries.iter(), std::iter::once(&tlas_raw));
-                Some(Arc::new(tlas_raw))
-            };
+                inst_new_tlas = Some(Arc::new(tlas_raw));
+            }
             let mut cache = gpu
                 .trace_cache
                 .inner
                 .lock()
                 .unwrap_or_else(|p| p.into_inner());
-            if cache.hw_instanced.len() >= CACHE_MAX_ENTRIES {
-                cache.hw_instanced.clear();
-            }
+            evict_oldest_before(&mut cache.hw_instanced, eval_now, |v| v.last_eval);
             cache.hw_instanced.insert(
                 tlas_key,
                 CachedInstancedHw {
-                    tlas: built_tlas.clone(),
+                    tlas: inst_new_tlas.clone(),
                     last_eval: eval_now,
                 },
             );
-            built_tlas
-        };
-        (tlas_opt, meshes_buf, insts_buf, m_count, i_count)
+        }
+    }
+
+    // Handle zero-active-instance case after flushing any newly built BLASes.
+    if instanced && inst_cached_tlas.as_ref().is_some_and(Option::is_none) {
+        return dispatch_clear_misses(
+            gpu,
+            &pipelines.clear_layout,
+            &pipelines.clear,
+            ray_count,
+            domain,
+            scope,
+        );
+    }
+    let has_tlas = !instanced || inst_cached_tlas.is_some() || inst_new_tlas.is_some();
+
+    let use_compact = has_tlas && ray_count >= COMPACT_RAY_THRESHOLD && (flags & 6) != 6;
+    let est_ops = u64::from(ray_count).saturating_mul(64);
+    let batched = gpu.batch.can_batch(gpu.measured(), &gpu.frames);
+    if !batched {
+        gpu.batch.flush()?;
+    }
+
+    // Phase 2: Prepare all uniform payloads atomically before taking the encoder.
+    let single_slice = MeshSlice {
+        vertex_offset: 0,
+        vertex_count: v_count as usize,
+        triangle_offset: 0,
+        triangle_count: t_count as usize,
+    };
+    let mut sanitize_payloads: Vec<[u8; 16]> = Vec::new();
+    if let Some(plan) = &single_plan {
+        if !matches!(plan, SingleHwPlan::Cached(_)) {
+            sanitize_payloads.push(sanitize_setup_bytes(single_slice));
+        }
+    } else {
+        for (slice, _, _, _, _) in &inst_pending_builds {
+            sanitize_payloads.push(sanitize_setup_bytes(*slice));
+        }
+    }
+    let mut compact_payload = [0u8; 16];
+    compact_payload[..4].copy_from_slice(&ray_count.to_le_bytes());
+    compact_payload[4..8].copy_from_slice(&(flags as u32).to_le_bytes());
+    let trace_setup: [u32; 8] = [
+        ray_count,
+        v_count,
+        t_count,
+        flags as u32,
+        u32::from(mask),
+        u32::from(instanced),
+        mesh_count,
+        u32::from(use_compact),
+    ];
+    let mut trace_payload = [0u8; 32];
+    for (slot, w) in trace_payload.chunks_exact_mut(4).zip(trace_setup) {
+        slot.copy_from_slice(&w.to_le_bytes());
+    }
+
+    let mut all_payloads: Vec<&[u8]> = sanitize_payloads.iter().map(|b| b.as_slice()).collect();
+    if use_compact {
+        all_payloads.push(&compact_payload);
+    }
+    if has_tlas {
+        all_payloads.push(&trace_payload);
+    }
+    let mut temp_buffers = Vec::new();
+    let uniform_slices = alloc_uniform_slices(gpu, batched, &all_payloads, &mut temp_buffers)?;
+    let san_count = sanitize_payloads.len();
+    let compact_u = use_compact.then(|| &uniform_slices[san_count]);
+    let trace_u = has_tlas.then(|| &uniform_slices[san_count + usize::from(use_compact)]);
+
+    let scopes = (!batched).then(|| Scopes::push(&gpu.device));
+    let timing_set = has_tlas.then(|| gpu.timing_set(2)).flatten();
+    let mut opened_ts = false;
+    let mut encoder = if batched {
+        gpu.batch.take_or_open()
+    } else {
+        gpu.device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("entelechy trace hw"),
+            })
     };
 
-    let Some(tlas) = tlas else {
-        // Submit any pending BLAS builds and clear hits to misses.
-        gpu.submit(encoder.finish());
-        for buf in temp_uniforms {
-            gpu.spare().keep(buf, None);
+    // Phase 3: Encode BLAS/TLAS sanitize + acceleration structure build.
+    let final_tlas: Option<Arc<wgpu::Tlas>> = if let Some(plan) = single_plan {
+        match plan {
+            SingleHwPlan::Cached(tlas) => Some(tlas),
+            SingleHwPlan::RebuildDynamic { slot_idx } => {
+                let dyn_key = (tris_id, v_count, t_count);
+                let mut cache = gpu
+                    .trace_cache
+                    .inner
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
+                let dyn_entry = cache
+                    .hw_dynamic
+                    .get_mut(&dyn_key)
+                    .expect("dynamic BLAS slot exists");
+                let slot = &mut dyn_entry.slots[slot_idx];
+                encode_sanitize_into(
+                    &gpu.device,
+                    pipelines,
+                    &mut encoder,
+                    &uniform_slices[0],
+                    &verts_buf,
+                    &tris_buf,
+                    &slot.clean_verts,
+                    &slot.clean_tris,
+                    v_count,
+                    t_count,
+                    timing_set.as_ref(),
+                    &mut opened_ts,
+                );
+                let blas_entry = wgpu::BlasBuildEntry {
+                    blas: &slot.blas,
+                    geometry: wgpu::BlasGeometries::TriangleGeometries(vec![
+                        wgpu::BlasTriangleGeometry {
+                            size: &slot.size_desc,
+                            vertex_buffer: &slot.clean_verts,
+                            first_vertex: 0,
+                            vertex_stride: 12,
+                            index_buffer: Some(&slot.clean_tris),
+                            first_index: Some(0),
+                            transform_buffer: None,
+                            transform_buffer_offset: None,
+                        },
+                    ]),
+                };
+                encoder.build_acceleration_structures(
+                    std::iter::once(&blas_entry),
+                    std::iter::once(&*slot.tlas),
+                );
+                slot.built_verts_id = verts_id;
+                dyn_entry.last_eval = eval_now;
+                Some(Arc::clone(&slot.tlas))
+            }
+            SingleHwPlan::PromoteDynamic => {
+                let slot0 = alloc_dynamic_hw_slot(&gpu.device, v_count, t_count);
+                let slot1 = alloc_dynamic_hw_slot(&gpu.device, v_count, t_count);
+                encode_sanitize_into(
+                    &gpu.device,
+                    pipelines,
+                    &mut encoder,
+                    &uniform_slices[0],
+                    &verts_buf,
+                    &tris_buf,
+                    &slot0.clean_verts,
+                    &slot0.clean_tris,
+                    v_count,
+                    t_count,
+                    timing_set.as_ref(),
+                    &mut opened_ts,
+                );
+                let blas_entry = wgpu::BlasBuildEntry {
+                    blas: &slot0.blas,
+                    geometry: wgpu::BlasGeometries::TriangleGeometries(vec![
+                        wgpu::BlasTriangleGeometry {
+                            size: &slot0.size_desc,
+                            vertex_buffer: &slot0.clean_verts,
+                            first_vertex: 0,
+                            vertex_stride: 12,
+                            index_buffer: Some(&slot0.clean_tris),
+                            first_index: Some(0),
+                            transform_buffer: None,
+                            transform_buffer_offset: None,
+                        },
+                    ]),
+                };
+                encoder.build_acceleration_structures(
+                    std::iter::once(&blas_entry),
+                    std::iter::once(&*slot0.tlas),
+                );
+                let tlas = Arc::clone(&slot0.tlas);
+                let mut s0 = slot0;
+                s0.built_verts_id = verts_id;
+                let dyn_key = (tris_id, v_count, t_count);
+                let mut cache = gpu
+                    .trace_cache
+                    .inner
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
+                evict_oldest_before(&mut cache.hw_dynamic, eval_now, |v| v.last_eval);
+                cache.hw_dynamic.insert(
+                    dyn_key,
+                    DynamicHwBlas {
+                        slots: [s0, slot1],
+                        cursor: 1,
+                        last_eval: eval_now,
+                    },
+                );
+                Some(tlas)
+            }
+            SingleHwPlan::BuildStatic => {
+                let (blas, size_desc, clean_v, clean_t) =
+                    alloc_static_blas(&gpu.device, single_slice)
+                        .expect("non-empty mesh produces BLAS");
+                encode_sanitize_into(
+                    &gpu.device,
+                    pipelines,
+                    &mut encoder,
+                    &uniform_slices[0],
+                    &verts_buf,
+                    &tris_buf,
+                    &clean_v,
+                    &clean_t,
+                    v_count,
+                    t_count,
+                    timing_set.as_ref(),
+                    &mut opened_ts,
+                );
+                let mut tlas_raw = gpu.device.create_tlas(&wgpu::CreateTlasDescriptor {
+                    label: Some("entelechy trace single tlas"),
+                    max_instances: 1,
+                    flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
+                    update_mode: wgpu::AccelerationStructureUpdateMode::Build,
+                });
+                let identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+                tlas_raw[0] = Some(wgpu::TlasInstance::new(&blas, identity, 0, 0xFF));
+                let blas_entry = wgpu::BlasBuildEntry {
+                    blas: &blas,
+                    geometry: wgpu::BlasGeometries::TriangleGeometries(vec![
+                        wgpu::BlasTriangleGeometry {
+                            size: &size_desc,
+                            vertex_buffer: &clean_v,
+                            first_vertex: 0,
+                            vertex_stride: 12,
+                            index_buffer: Some(&clean_t),
+                            first_index: Some(0),
+                            transform_buffer: None,
+                            transform_buffer_offset: None,
+                        },
+                    ]),
+                };
+                encoder.build_acceleration_structures(
+                    std::iter::once(&blas_entry),
+                    std::iter::once(&tlas_raw),
+                );
+                let tlas = Arc::new(tlas_raw);
+                let mut cache = gpu
+                    .trace_cache
+                    .inner
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
+                evict_oldest_before(&mut cache.hw_single, eval_now, |v| v.last_eval);
+                cache.hw_single.insert(
+                    (verts_id, tris_id),
+                    CachedSingleHw {
+                        _blas: blas,
+                        tlas: Arc::clone(&tlas),
+                        last_eval: eval_now,
+                    },
+                );
+                Some(tlas)
+            }
         }
-        scopes
-            .pop(gpu.wait, "")
-            .map_err(|error| ExecutionError::Device(error.said()))?;
+    } else if let Some(cached) = inst_cached_tlas {
+        cached
+    } else {
+        for (idx, (slice, _, _, clean_v, clean_t)) in inst_pending_builds.iter().enumerate() {
+            encode_sanitize_into(
+                &gpu.device,
+                pipelines,
+                &mut encoder,
+                &uniform_slices[idx],
+                &verts_buf,
+                &tris_buf,
+                clean_v,
+                clean_t,
+                slice.vertex_count as u32,
+                slice.triangle_count as u32,
+                timing_set.as_ref(),
+                &mut opened_ts,
+            );
+        }
+        let entries: Vec<wgpu::BlasBuildEntry<'_>> = inst_pending_builds
+            .iter()
+            .map(
+                |(_, blas, size_desc, clean_v, clean_t)| wgpu::BlasBuildEntry {
+                    blas,
+                    geometry: wgpu::BlasGeometries::TriangleGeometries(vec![
+                        wgpu::BlasTriangleGeometry {
+                            size: size_desc,
+                            vertex_buffer: clean_v,
+                            first_vertex: 0,
+                            vertex_stride: 12,
+                            index_buffer: Some(clean_t),
+                            first_index: Some(0),
+                            transform_buffer: None,
+                            transform_buffer_offset: None,
+                        },
+                    ]),
+                },
+            )
+            .collect();
+        if let Some(ref tlas) = inst_new_tlas {
+            encoder.build_acceleration_structures(entries.iter(), std::iter::once(&**tlas));
+        } else if !entries.is_empty() {
+            encoder.build_acceleration_structures(entries.iter(), std::iter::empty());
+        }
+        inst_new_tlas
+    };
+
+    let Some(tlas) = final_tlas else {
+        finish_trace_encoder(gpu, encoder, batched, scopes, None, 0, temp_buffers)?;
         return dispatch_clear_misses(
             gpu,
             &pipelines.clear_layout,
@@ -1725,34 +2380,38 @@ fn trace_hw(
         );
     };
 
+    // Phase 4: Optional active-ray stream compaction + indirect hardware RT trace!
     let out_bytes = (ray_count as u64 * HIT_WORDS as u64 * 4).max(16);
     let output_buffer = gpu.spare().take(
         &gpu.device,
         out_bytes,
         wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
     );
-    let setup: [u32; 8] = [
-        ray_count,
-        v_count,
-        t_count,
-        flags as u32,
-        u32::from(mask),
-        u32::from(instanced),
-        mesh_count,
-        inst_count,
-    ];
-    let mut setup_bytes = [0u8; 32];
-    for (slot, w) in setup_bytes.chunks_exact_mut(4).zip(setup) {
-        slot.copy_from_slice(&w.to_le_bytes());
-    }
-    let setup_buf = gpu.take_uniform(&setup_bytes);
+    let (active_rays_buf, indirect_args_opt) = if let Some(cu) = compact_u {
+        let (act, ind) = encode_compact_rays(
+            gpu,
+            &pipelines.compact,
+            &mut encoder,
+            cu,
+            &rays_buf,
+            &output_buffer,
+            ray_count,
+            timing_set.as_ref(),
+            &mut opened_ts,
+            &mut temp_buffers,
+        );
+        (act, Some(ind))
+    } else {
+        (pipelines.empty_buf.clone(), None)
+    };
+
     let trace_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("entelechy trace hw"),
         layout: &pipelines.trace_layout,
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: setup_buf.as_entire_binding(),
+                resource: trace_u.expect("trace uniform").binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
@@ -1782,29 +2441,37 @@ fn trace_hw(
                 binding: 7,
                 resource: insts_buf.as_entire_binding(),
             },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: active_rays_buf.as_entire_binding(),
+            },
         ],
     });
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("entelechy trace hw"),
-            timestamp_writes: None,
+            timestamp_writes: timing_set
+                .as_ref()
+                .map(|t| t.compute((!opened_ts).then_some(0), Some(1))),
         });
         pass.set_pipeline(&pipelines.trace);
         pass.set_bind_group(0, &trace_group, &[]);
-        let (gx, gy) = wgsl::folded(ray_count.div_ceil(TRACE_WORKGROUP));
-        pass.dispatch_workgroups(gx, gy, 1);
+        if let Some(ref ind) = indirect_args_opt {
+            pass.dispatch_workgroups_indirect(ind, 0);
+        } else {
+            let (gx, gy) = wgsl::folded(ray_count.div_ceil(TRACE_WORKGROUP).max(1));
+            pass.dispatch_workgroups(gx, gy, 1);
+        }
     }
-    gpu.submit(encoder.finish());
-    gpu.spare().keep(setup_buf, None);
-    for buf in temp_uniforms {
-        gpu.spare().keep(buf, None);
-    }
-    if gpu._waiter.is_none() {
-        let _ = gpu.device.poll(wgpu::PollType::Poll);
-    }
-    scopes
-        .pop(gpu.wait, "")
-        .map_err(|error| ExecutionError::Device(error.said()))?;
+    finish_trace_encoder(
+        gpu,
+        encoder,
+        batched,
+        scopes,
+        timing_set,
+        est_ops,
+        temp_buffers,
+    )?;
     let dev = Box::new(DeviceImage::new(
         output_buffer,
         Some(gpu.spare().clone()),
@@ -1817,6 +2484,12 @@ fn flatten_bvh_nodes(bvh: &BuiltBvh, out: &mut Vec<u32>) {
     for node in &bvh.nodes {
         out.extend_from_slice(&node.to_words());
     }
+}
+
+enum SingleLbvhPlan {
+    Reuse,
+    Refit,
+    FullBuild,
 }
 
 fn trace_bvh(
@@ -1888,101 +2561,22 @@ fn trace_bvh(
     let verts_id = image_id(scope, verts_h).unwrap_or(0);
     let tris_id = image_id(scope, tris_h).unwrap_or(0);
 
-    let (
-        bvh_nodes_buf,
-        bvh_ord_buf,
-        mesh_descs_buf,
-        tlas_nodes_buf,
-        tlas_ord_buf,
-        inst_descs_buf,
-        tlas_node_count,
-    ) = if !instanced {
-        let key = (verts_id, tris_id);
-        let cached = {
-            let mut cache = gpu
-                .trace_cache
-                .inner
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
-            cache.bvh_single.get_mut(&key).map(|entry| {
-                entry.last_eval = eval_now;
-                (
-                    entry.nodes.clone(),
-                    entry.ordered.clone(),
-                    entry.mesh_desc.clone(),
-                    entry.empty,
-                )
-            })
-        };
-        let (nodes_buf, ord_buf, desc_buf, empty) = if let Some(hit) = cached {
-            hit
-        } else {
-            let v_words = read_words(gpu, scope, verts_h)?;
-            let t_words = read_words(gpu, scope, tris_h)?;
-            let slice = MeshSlice {
-                vertex_offset: 0,
-                vertex_count: v_words.len() / POSITION_WORDS,
-                triangle_offset: 0,
-                triangle_count: t_words.len() / TRIANGLE_WORDS,
-            };
-            let bvh = trace::build_mesh_bvh(&v_words, &t_words, slice);
-            let empty = bvh.nodes.is_empty();
-            let mut node_words = Vec::with_capacity(bvh.nodes.len() * 8);
-            flatten_bvh_nodes(&bvh, &mut node_words);
-            let nodes_buf =
-                upload_words_buf(&gpu.device, &gpu.queue, "entelechy bvh nodes", &node_words);
-            let ord_buf = upload_words_buf(
-                &gpu.device,
-                &gpu.queue,
-                "entelechy bvh ordered",
-                &bvh.ordered,
-            );
-            let desc_words = [0u32, v_count, 0, 0, 0, bvh.nodes.len() as u32, 0, 0];
-            let desc_buf = upload_words_buf(
-                &gpu.device,
-                &gpu.queue,
-                "entelechy bvh mesh desc",
-                &desc_words,
-            );
-            let mut cache = gpu
-                .trace_cache
-                .inner
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
-            if cache.bvh_single.len() >= CACHE_MAX_ENTRIES {
-                cache.bvh_single.clear();
-            }
-            cache.bvh_single.insert(
-                key,
-                CachedSingleBvh {
-                    nodes: nodes_buf.clone(),
-                    ordered: ord_buf.clone(),
-                    mesh_desc: desc_buf.clone(),
-                    empty,
-                    last_eval: eval_now,
-                },
-            );
-            (nodes_buf, ord_buf, desc_buf, empty)
-        };
-        if empty {
-            return dispatch_clear_misses(
-                gpu,
-                &pipelines.clear_layout,
-                &pipelines.clear,
-                ray_count,
-                domain,
-                scope,
-            );
-        }
-        (
-            nodes_buf,
-            ord_buf,
-            desc_buf,
-            pipelines.empty_buf.clone(),
-            pipelines.empty_buf.clone(),
-            pipelines.empty_buf.clone(),
-            0u32,
-        )
+    // Phase 1: Single-mesh uses 100% GPU-resident Zero-Readback LBVH + 1-pass dynamic refit!
+    // Instanced multi-mesh builds/caches static mesh SAH BVHs + TLAS before opening batch encoder.
+    let mut lbvh_plan = None;
+    let mut inst_bufs = None;
+    if !instanced {
+        let key = (tris_id, v_count, t_count);
+        let cache = gpu
+            .trace_cache
+            .inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        lbvh_plan = Some(match cache.lbvh_single.get(&key) {
+            Some(mesh) if mesh.built_verts_id == verts_id && verts_id != 0 => SingleLbvhPlan::Reuse,
+            Some(mesh) if mesh.refits_since_build < LBVH_REFIT_PERIOD => SingleLbvhPlan::Refit,
+            _ => SingleLbvhPlan::FullBuild,
+        });
     } else {
         let mh = meshes_h.expect("instanced trace has meshes");
         let ih = insts_h.expect("instanced trace has instances");
@@ -2078,9 +2672,7 @@ fn trace_bvh(
                 .inner
                 .lock()
                 .unwrap_or_else(|p| p.into_inner());
-            if cache.bvh_meshes.len() >= CACHE_MAX_ENTRIES {
-                cache.bvh_meshes.clear();
-            }
+            evict_oldest_before(&mut cache.bvh_meshes, eval_now, |v| v.last_eval);
             cache.bvh_meshes.insert(
                 mesh_key,
                 CachedMeshSetBvh {
@@ -2171,9 +2763,7 @@ fn trace_bvh(
                     .inner
                     .lock()
                     .unwrap_or_else(|p| p.into_inner());
-                if cache.bvh_instanced.len() >= CACHE_MAX_ENTRIES {
-                    cache.bvh_instanced.clear();
-                }
+                evict_oldest_before(&mut cache.bvh_instanced, eval_now, |v| v.last_eval);
                 cache.bvh_instanced.insert(
                     tlas_key,
                     CachedInstancedBvh {
@@ -2196,7 +2786,7 @@ fn trace_bvh(
                 scope,
             );
         }
-        (
+        inst_bufs = Some((
             nodes_buf,
             ord_buf,
             descs_buf,
@@ -2204,16 +2794,33 @@ fn trace_bvh(
             tlas_ord_buf,
             inst_descs_buf,
             tlas_node_count,
-        )
-    };
+        ));
+    }
 
-    let out_bytes = (ray_count as u64 * HIT_WORDS as u64 * 4).max(16);
-    let output_buffer = gpu.spare().take(
-        &gpu.device,
-        out_bytes,
-        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-    );
-    let setup: [u32; 8] = [
+    let use_compact = !instanced && ray_count >= COMPACT_RAY_THRESHOLD && (flags & 6) != 6;
+    let est_ops = u64::from(ray_count)
+        .saturating_mul(160)
+        .saturating_add(u64::from(t_count).saturating_mul(32));
+    if gpu.wait.parks_with_host()
+        && !gpu.measured()
+        && gpu.page_queue.full(est_ops, gpu.page_pace_ops_budget())
+    {
+        gpu.batch.flush()?;
+        gpu.drain_page()?;
+    }
+    let batched = gpu.batch.can_batch(gpu.measured(), &gpu.frames);
+    if !batched {
+        gpu.batch.flush()?;
+    }
+
+    // Phase 2: Allocate all uniforms atomically before opening encoder.
+    let full_payloads = trace_lbvh::full_build_uniform_payloads(v_count, t_count);
+    let refit_payload = trace_lbvh::refit_uniform_payload(v_count, t_count);
+    let mut compact_payload = [0u8; 16];
+    compact_payload[..4].copy_from_slice(&ray_count.to_le_bytes());
+    compact_payload[4..8].copy_from_slice(&(flags as u32).to_le_bytes());
+    let tlas_node_count = inst_bufs.as_ref().map_or(0u32, |b| b.6);
+    let trace_setup: [u32; 8] = [
         ray_count,
         v_count,
         t_count,
@@ -2221,20 +2828,148 @@ fn trace_bvh(
         u32::from(mask),
         u32::from(instanced),
         tlas_node_count,
-        0,
+        u32::from(use_compact),
     ];
-    let mut setup_bytes = [0u8; 32];
-    for (slot, w) in setup_bytes.chunks_exact_mut(4).zip(setup) {
+    let mut trace_payload = [0u8; 32];
+    for (slot, w) in trace_payload.chunks_exact_mut(4).zip(trace_setup) {
         slot.copy_from_slice(&w.to_le_bytes());
     }
-    let setup_buf = gpu.take_uniform(&setup_bytes);
+
+    let mut all_payloads: Vec<&[u8]> = Vec::new();
+    let lbvh_u_count = match lbvh_plan {
+        Some(SingleLbvhPlan::FullBuild) => {
+            for p in &full_payloads {
+                all_payloads.push(p.as_slice());
+            }
+            8usize
+        }
+        Some(SingleLbvhPlan::Refit) => {
+            all_payloads.push(refit_payload.as_slice());
+            1usize
+        }
+        _ => 0usize,
+    };
+    if use_compact {
+        all_payloads.push(&compact_payload);
+    }
+    all_payloads.push(&trace_payload);
+
+    let mut temp_buffers = Vec::new();
+    let uniform_slices = alloc_uniform_slices(gpu, batched, &all_payloads, &mut temp_buffers)?;
+    let compact_u = use_compact.then(|| &uniform_slices[lbvh_u_count]);
+    let trace_u = &uniform_slices[lbvh_u_count + usize::from(use_compact)];
+
+    let scopes = (!batched).then(|| Scopes::push(&gpu.device));
+    let timing_set = gpu.timing_set(2);
+    let mut opened_ts = false;
+    let mut encoder = if batched {
+        gpu.batch.take_or_open()
+    } else {
+        gpu.device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("entelechy trace bvh"),
+            })
+    };
+
+    // Phase 3: Encode Full-GPU LBVH build or 1-pass dynamic refit (zero CPU readback!).
+    let (bvh_nodes_buf, bvh_ord_buf, mesh_descs_buf, tlas_nodes_base, tlas_ord_buf, inst_descs_buf) =
+        if let Some(plan) = lbvh_plan {
+            let key = (tris_id, v_count, t_count);
+            let mut cache = gpu
+                .trace_cache
+                .inner
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            if !cache.lbvh_single.contains_key(&key) {
+                evict_oldest_before(&mut cache.lbvh_single, eval_now, |v| v.last_eval);
+                cache
+                    .lbvh_single
+                    .insert(key, GpuLbvhMesh::allocate(&gpu.device, t_count, eval_now));
+            }
+            let mesh = cache
+                .lbvh_single
+                .get_mut(&key)
+                .expect("lbvh entry allocated");
+            match plan {
+                SingleLbvhPlan::Reuse => {
+                    mesh.last_eval = eval_now;
+                }
+                SingleLbvhPlan::Refit => {
+                    mesh.encode_refit(
+                        &gpu.device,
+                        &pipelines.lbvh,
+                        &mut encoder,
+                        &verts_buf,
+                        &tris_buf,
+                        &uniform_slices[0],
+                        verts_id,
+                        eval_now,
+                        timing_set.as_ref(),
+                        &mut opened_ts,
+                    );
+                }
+                SingleLbvhPlan::FullBuild => {
+                    mesh.encode_full_build(
+                        &gpu.device,
+                        &gpu.spare(),
+                        &pipelines.lbvh,
+                        &mut encoder,
+                        &verts_buf,
+                        &tris_buf,
+                        &uniform_slices[..8],
+                        verts_id,
+                        eval_now,
+                        &mut temp_buffers,
+                        timing_set.as_ref(),
+                        &mut opened_ts,
+                    );
+                }
+            }
+            (
+                mesh.nodes.clone(),
+                mesh.ordered.clone(),
+                mesh.mesh_desc.clone(),
+                pipelines.empty_buf.clone(),
+                pipelines.empty_buf.clone(),
+                pipelines.empty_buf.clone(),
+            )
+        } else {
+            let (n, o, d, tn, to, id, _) = inst_bufs.expect("instanced buffers");
+            (n, o, d, tn, to, id)
+        };
+
+    // Phase 4: Optional active-ray stream compaction + indirect BVH trace!
+    let out_bytes = (ray_count as u64 * HIT_WORDS as u64 * 4).max(16);
+    let output_buffer = gpu.spare().take(
+        &gpu.device,
+        out_bytes,
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+    );
+    let (binding8_buf, indirect_args_opt) = if let Some(cu) = compact_u {
+        let (act, ind) = encode_compact_rays(
+            gpu,
+            &pipelines.compact,
+            &mut encoder,
+            cu,
+            &rays_buf,
+            &output_buffer,
+            ray_count,
+            timing_set.as_ref(),
+            &mut opened_ts,
+            &mut temp_buffers,
+        );
+        (act, Some(ind))
+    } else {
+        (tlas_nodes_base, None)
+    };
+
     let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("entelechy trace bvh"),
         layout: &pipelines.trace_layout,
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: setup_buf.as_entire_binding(),
+                resource: trace_u.binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
@@ -2266,7 +3001,7 @@ fn trace_bvh(
             },
             wgpu::BindGroupEntry {
                 binding: 8,
-                resource: tlas_nodes_buf.as_entire_binding(),
+                resource: binding8_buf.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 9,
@@ -2278,31 +3013,31 @@ fn trace_bvh(
             },
         ],
     });
-    gpu.batch.flush()?;
-    let scopes = Scopes::push(&gpu.device);
-    let mut encoder = gpu
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("entelechy trace bvh"),
-        });
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("entelechy trace bvh"),
-            timestamp_writes: None,
+            timestamp_writes: timing_set
+                .as_ref()
+                .map(|t| t.compute((!opened_ts).then_some(0), Some(1))),
         });
         pass.set_pipeline(&pipelines.trace);
         pass.set_bind_group(0, &group, &[]);
-        let (gx, gy) = wgsl::folded(ray_count.div_ceil(TRACE_WORKGROUP));
-        pass.dispatch_workgroups(gx, gy, 1);
+        if let Some(ref ind) = indirect_args_opt {
+            pass.dispatch_workgroups_indirect(ind, 0);
+        } else {
+            let (gx, gy) = wgsl::folded(ray_count.div_ceil(TRACE_WORKGROUP).max(1));
+            pass.dispatch_workgroups(gx, gy, 1);
+        }
     }
-    gpu.submit(encoder.finish());
-    gpu.spare().keep(setup_buf, None);
-    if gpu._waiter.is_none() {
-        let _ = gpu.device.poll(wgpu::PollType::Poll);
-    }
-    scopes
-        .pop(gpu.wait, "")
-        .map_err(|error| ExecutionError::Device(error.said()))?;
+    finish_trace_encoder(
+        gpu,
+        encoder,
+        batched,
+        scopes,
+        timing_set,
+        est_ops,
+        temp_buffers,
+    )?;
     let dev = Box::new(DeviceImage::new(
         output_buffer,
         Some(gpu.spare().clone()),

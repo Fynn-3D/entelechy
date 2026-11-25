@@ -21,11 +21,13 @@ mod pool;
 mod prepare;
 pub mod present;
 mod raster;
+mod raster_hiz;
 mod same;
 mod stage;
 mod texture;
 mod timing;
 mod trace;
+mod trace_lbvh;
 mod wait;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 mod webgl;

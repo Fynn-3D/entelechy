@@ -107,9 +107,9 @@ pub(crate) struct SpareTextures {
     gone: Arc<Mutex<Vec<wgpu::Texture>>>,
 }
 
-/// How many targets the pile holds, and how many bytes: three per shape,
-/// for about two shapes.
-pub(crate) const SPARE_TEXTURES: usize = 8;
+/// How many targets the pile holds, and how many bytes: three per shape
+/// (places, depth, and optional mipmapped Hi-Z pyramid), for several shapes.
+pub(crate) const SPARE_TEXTURES: usize = 12;
 
 pub(crate) const SPARE_TEXTURE_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -124,10 +124,26 @@ impl SpareTextures {
         format: wgpu::TextureFormat,
         usage: wgpu::TextureUsages,
     ) -> wgpu::Texture {
+        self.take_mipmapped(device, label, width, height, 1, format, usage)
+    }
+
+    /// A mipmapped target of exactly this shape, from the pile or from the device.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn take_mipmapped(
+        &self,
+        device: &wgpu::Device,
+        label: &str,
+        width: u32,
+        height: u32,
+        mip_level_count: u32,
+        format: wgpu::TextureFormat,
+        usage: wgpu::TextureUsages,
+    ) -> wgpu::Texture {
         let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(index) = held.iter().position(|texture| {
             texture.width() == width
                 && texture.height() == height
+                && texture.mip_level_count() == mip_level_count
                 && texture.format() == format
                 && texture.usage() == usage
         }) {
@@ -141,7 +157,7 @@ impl SpareTextures {
                 height,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: 1,
+            mip_level_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
@@ -154,7 +170,12 @@ impl SpareTextures {
     pub(crate) fn keep(&self, texture: wgpu::Texture) {
         let bytes = |texture: &wgpu::Texture| -> u64 {
             let size = texture.format().target_pixel_byte_cost().unwrap_or(16) as u64;
-            u64::from(texture.width()) * u64::from(texture.height()) * size
+            let base = u64::from(texture.width()) * u64::from(texture.height()) * size;
+            if texture.mip_level_count() > 1 {
+                base + base / 2
+            } else {
+                base
+            }
         };
         let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
         let held_bytes: u64 = held.iter().map(bytes).sum();
@@ -171,7 +192,12 @@ impl SpareTextures {
         held.iter()
             .map(|texture| {
                 let size = texture.format().target_pixel_byte_cost().unwrap_or(16) as u64;
-                u64::from(texture.width()) * u64::from(texture.height()) * size
+                let base = u64::from(texture.width()) * u64::from(texture.height()) * size;
+                if texture.mip_level_count() > 1 {
+                    base + base / 2
+                } else {
+                    base
+                }
             })
             .sum()
     }
