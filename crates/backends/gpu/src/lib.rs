@@ -135,31 +135,57 @@ pub(crate) struct WgpuBackend {
     /// What the device said by itself: an error no scope caught, its loss.
     /// A readback that fails says it too, as the cause is most often there.
     heard: Arc<Mutex<Vec<String>>>,
-    /// Unsettled submissions and elements queued on a page's device since
-    /// its last wait, drained periodically so long startup bursts never
-    /// starve the browser's GPU watchdog (Windows WDDM TDR).
+    /// Set once the device reports loss so pending warm/finish passes fail fast
+    /// instead of queuing dead compilation promises onto a lost device.
+    device_lost: Arc<std::sync::atomic::AtomicBool>,
+    /// Deferred error-scope checks from native operations (e.g. `rasterize`) on
+    /// a page, drained at the frame's end by [`Submitted::wait`].
+    pending_checks: Arc<Mutex<Vec<Box<dyn Check>>>>,
+    /// Unsettled submissions and estimated operations queued on a page's device
+    /// since its last wait, drained adaptively so slow laptop integrated GPUs
+    /// stay safely under Windows WDDM's 2-second TDR watchdog without stalling
+    /// fast discrete GPUs.
     page_queue: PageQueue,
     /// Smoothed nanoseconds per million effective IR operations observed across
-    /// [`WgpuBackend::drain_page`] waits, starting conservatively for laptop
-    /// integrated GPUs (`crbug.com/369219127`) and scaling up on discrete GPUs.
-    ns_per_mop: std::sync::atomic::AtomicU64,
+    /// [`WgpuBackend::drain_page`] and frame-end waits, starting conservatively
+    /// for laptop integrated GPUs (`crbug.com/369219127`) and converging down
+    /// to true hardware throughput on fast discrete GPUs.
+    ns_per_mop: Arc<std::sync::atomic::AtomicU64>,
     /// Optional per-slice element ceiling override for testing sliced map
     /// dispatches on native devices (`0` uses the default policy).
     test_slice_limit: usize,
 }
 
-/// Runs, elements, and target slice duration on a page's device before
-/// draining, keeping Windows WDDM's 2-second TDR watchdog safe even when
-/// Windows Chrome routes WebGPU onto a laptop's integrated GPU (`crbug.com/369219127`).
-const PAGE_PACE_RUNS: u32 = 6;
-const PAGE_PACE_ELEMENTS: u64 = 1_048_576;
+/// Runs and target slice duration on a page's device before draining, keeping
+/// Windows WDDM's 2-second TDR watchdog safe on slow laptop integrated GPUs
+/// (`crbug.com/369219127`) while converging to zero mid-frame stalls on fast
+/// discrete GPUs.
+const PAGE_PACE_RUNS: u32 = 48;
 const PAGE_TARGET_SLICE_NS: u64 = 150_000_000;
-const PAGE_INITIAL_NS_PER_MOP: u64 = 3_000_000;
-const PAGE_SLICE_VOLUME_ELEMENTS: usize = 65_536;
+const PAGE_INITIAL_NS_PER_MOP: u64 = 2_000_000;
+const PAGE_MIN_NS_PER_MOP: u64 = 250;
+const PAGE_MAX_NS_PER_MOP: u64 = 20_000_000;
 const PAGE_SLICE_MIN_VOLUME_ELEMENTS: usize = 1_024;
-const PAGE_SLICE_LARGE_ELEMENTS: usize = 262_144;
 const PAGE_SLICE_MIN_GRID_ELEMENTS: usize = 8_192;
-const PAGE_SLICE_THRESHOLD: usize = 1_048_576;
+
+pub(crate) fn record_page_rate(
+    ns_per_mop: &std::sync::atomic::AtomicU64,
+    queued_ops: u64,
+    elapsed_ns: u64,
+) {
+    if queued_ops < 20_000_000 {
+        return;
+    }
+    let sample = (elapsed_ns.saturating_mul(1_000_000) / queued_ops)
+        .clamp(PAGE_MIN_NS_PER_MOP, PAGE_MAX_NS_PER_MOP);
+    let prev = ns_per_mop.load(std::sync::atomic::Ordering::Relaxed);
+    let next = if sample > prev {
+        sample
+    } else {
+        (prev / 4).max(sample)
+    };
+    ns_per_mop.store(next, std::sync::atomic::Ordering::Relaxed);
+}
 
 fn effective_page_unit_ops(module: &Validated, params: &[Value]) -> u64 {
     let typical = module.typical_work_given(params).max(1);
@@ -175,44 +201,57 @@ pub(crate) struct PageQueue(
     Arc<(
         std::sync::atomic::AtomicU32,
         std::sync::atomic::AtomicU64,
-        std::sync::atomic::AtomicU64,
+        Mutex<Option<entelechy_rules::clock::Moment>>,
     )>,
 );
 
 impl PageQueue {
-    pub(crate) fn note(&self, elements: u64, ops: u64) {
-        self.0.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    pub(crate) fn note(&self, ops: u64) {
+        let prev_runs = self.0.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.0
             .1
-            .fetch_add(elements, std::sync::atomic::Ordering::Relaxed);
-        self.0
-            .2
             .fetch_add(ops, std::sync::atomic::Ordering::Relaxed);
+        if prev_runs == 0 {
+            let mut first = self
+                .0
+                .2
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if first.is_none() {
+                *first = entelechy_rules::clock::now();
+            }
+        }
     }
 
-    pub(crate) fn ops(&self) -> u64 {
-        self.0.2.load(std::sync::atomic::Ordering::Relaxed)
+    pub(crate) fn take_timing(&self) -> (u64, u64) {
+        let ops = self.0.1.swap(0, std::sync::atomic::Ordering::Relaxed);
+        self.0.0.store(0, std::sync::atomic::Ordering::Relaxed);
+        let started = self
+            .0
+            .2
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        let elapsed_ns = entelechy_rules::clock::since(started)
+            .as_nanos()
+            .min(u128::from(u64::MAX)) as u64;
+        (ops, elapsed_ns)
     }
 
     pub(crate) fn clear(&self) {
         self.0.0.store(0, std::sync::atomic::Ordering::Relaxed);
         self.0.1.store(0, std::sync::atomic::Ordering::Relaxed);
-        self.0.2.store(0, std::sync::atomic::Ordering::Relaxed);
+        *self
+            .0
+            .2
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     }
 
-    pub(crate) fn full(
-        &self,
-        incoming_elements: u64,
-        incoming_ops: u64,
-        pace_ops_limit: u64,
-    ) -> bool {
+    pub(crate) fn full(&self, incoming_ops: u64, pace_ops_limit: u64) -> bool {
         let runs = self.0.0.load(std::sync::atomic::Ordering::Relaxed);
-        let elements = self.0.1.load(std::sync::atomic::Ordering::Relaxed);
-        let ops = self.0.2.load(std::sync::atomic::Ordering::Relaxed);
-        runs >= PAGE_PACE_RUNS
-            || (runs > 0
-                && (elements.saturating_add(incoming_elements) > PAGE_PACE_ELEMENTS
-                    || ops.saturating_add(incoming_ops) > pace_ops_limit))
+        let ops = self.0.1.load(std::sync::atomic::Ordering::Relaxed);
+        runs >= PAGE_PACE_RUNS || (runs > 0 && ops.saturating_add(incoming_ops) > pace_ops_limit)
     }
 }
 
@@ -343,9 +382,12 @@ impl WgpuBackend {
                 keep(&heard, error.to_string())
             }));
         }
+        let device_lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
         {
             let heard = Arc::clone(&heard);
+            let lost = Arc::clone(&device_lost);
             device.set_device_lost_callback(move |reason, message| {
+                lost.store(true, std::sync::atomic::Ordering::Relaxed);
                 keep(
                     &heard,
                     format!("the device was lost ({reason:?}): {message}"),
@@ -382,10 +424,21 @@ impl WgpuBackend {
             frames: timing::Frames::default(),
             passes: Arc::default(),
             heard,
+            device_lost,
+            pending_checks: Arc::default(),
             page_queue: PageQueue::default(),
-            ns_per_mop: std::sync::atomic::AtomicU64::new(PAGE_INITIAL_NS_PER_MOP),
+            ns_per_mop: Arc::new(std::sync::atomic::AtomicU64::new(PAGE_INITIAL_NS_PER_MOP)),
             test_slice_limit: 0,
         })
+    }
+
+    /// Queues a deferred device check (such as a page rasterizer's error scope)
+    /// to be resolved at the frame's end without mid-frame round trips.
+    pub(crate) fn defer_check(&self, check: Box<dyn Check>) {
+        self.pending_checks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(check);
     }
 
     /// Forces map passes to slice at `limit` elements per submission, for
@@ -399,41 +452,28 @@ impl WgpuBackend {
         let rate = self
             .ns_per_mop
             .load(std::sync::atomic::Ordering::Relaxed)
-            .max(15_000);
-        (PAGE_TARGET_SLICE_NS.saturating_mul(1_000_000) / rate).clamp(40_000_000, 12_000_000_000)
+            .max(PAGE_MIN_NS_PER_MOP);
+        (PAGE_TARGET_SLICE_NS.saturating_mul(1_000_000) / rate).clamp(25_000_000, 600_000_000_000)
     }
 
     pub(crate) fn page_pace_ops_budget(&self) -> u64 {
         let slice_ops = self.page_slice_ops_budget();
-        (slice_ops.saturating_mul(3) / 2).max(60_000_000)
+        (slice_ops.saturating_mul(3) / 2).max(40_000_000)
     }
 
     pub(crate) fn drain_page(&self) -> Result<(), ExecutionError> {
-        let queued_ops = self.page_queue.ops();
         if self.wait.parks_with_host() {
-            let started = entelechy_rules::clock::now();
             self.spent
                 .time(|| self.wait.drain(&self.device, &self.queue))
                 .map_err(|error| ExecutionError::Device(told(&self.heard, error)))?;
-            if queued_ops >= 20_000_000 {
-                let elapsed_ns = entelechy_rules::clock::since(started)
-                    .as_nanos()
-                    .min(u128::from(u64::MAX)) as u64;
-                let sample =
-                    (elapsed_ns.saturating_mul(1_000_000) / queued_ops).clamp(15_000, 20_000_000);
-                let prev = self.ns_per_mop.load(std::sync::atomic::Ordering::Relaxed);
-                let next = if sample > prev {
-                    sample
-                } else {
-                    prev.midpoint(sample)
-                };
-                self.ns_per_mop
-                    .store(next, std::sync::atomic::Ordering::Relaxed);
+            let (queued_ops, elapsed_ns) = self.page_queue.take_timing();
+            record_page_rate(&self.ns_per_mop, queued_ops, elapsed_ns);
+        } else {
+            if self._waiter.is_none() {
+                let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
             }
-        } else if self._waiter.is_none() {
-            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+            self.page_queue.clear();
         }
-        self.page_queue.clear();
         Ok(())
     }
 
@@ -449,28 +489,20 @@ impl WgpuBackend {
         if !self.wait.parks_with_host() || self.measured() {
             return usize::MAX;
         }
-        let mut cap = if domain.depth() >= 16 {
-            PAGE_SLICE_VOLUME_ELEMENTS
-        } else if domain.count() > PAGE_SLICE_THRESHOLD {
-            PAGE_SLICE_LARGE_ELEMENTS
-        } else {
-            usize::MAX
-        };
         let unit_ops = effective_page_unit_ops(module, params);
         let total_ops = (domain.count() as u64).saturating_mul(unit_ops);
         let slice_ops_budget = self.page_slice_ops_budget();
-        if total_ops > slice_ops_budget {
-            let floor = if domain.depth() >= 16 {
-                PAGE_SLICE_MIN_VOLUME_ELEMENTS
-            } else {
-                PAGE_SLICE_MIN_GRID_ELEMENTS
-            };
-            let by_ops = usize::try_from(slice_ops_budget / unit_ops)
-                .unwrap_or(usize::MAX)
-                .max(floor);
-            cap = cap.min(by_ops);
+        if total_ops <= slice_ops_budget {
+            return usize::MAX;
         }
-        cap
+        let floor = if domain.depth() >= 16 {
+            PAGE_SLICE_MIN_VOLUME_ELEMENTS
+        } else {
+            PAGE_SLICE_MIN_GRID_ELEMENTS
+        };
+        usize::try_from(slice_ops_budget / unit_ops)
+            .unwrap_or(usize::MAX)
+            .max(floor)
     }
 
     /// This backend computing every `Long` as a pair of 32-bit words, as on
@@ -591,11 +623,32 @@ impl Backend for WgpuBackend {
         let _ = self
             .spent
             .time(|| self.wait.drain(&self.device, &self.queue));
+        if self.wait.parks_with_host() {
+            let (queued_ops, elapsed_ns) = self.page_queue.take_timing();
+            record_page_rate(&self.ns_per_mop, queued_ops, elapsed_ns);
+        } else {
+            self.page_queue.clear();
+        }
+        let pending = std::mem::take(
+            &mut *self
+                .pending_checks
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+        for check in pending {
+            let _ = check.wait();
+        }
     }
 
     fn submitted(&self) -> Option<Box<dyn Check>> {
         // An empty submission after the rest: done when they are.
         let after = self.queue.submit(std::iter::empty());
+        let pending = std::mem::take(
+            &mut *self
+                .pending_checks
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
         Some(Box::new(Submitted {
             wait: self.wait,
             spent: self.spent.clone(),
@@ -603,6 +656,9 @@ impl Backend for WgpuBackend {
             queue: self.queue.clone(),
             after,
             asked: self.wait.ask_done(&self.queue),
+            page_queue: self.page_queue.clone(),
+            ns_per_mop: Arc::clone(&self.ns_per_mop),
+            pending,
         }))
     }
 
@@ -782,11 +838,7 @@ impl Backend for WgpuBackend {
         let slice_limit = self.slice_limit_for(module, &invocation.params, domain);
         if self.wait.parks_with_host()
             && !self.measured()
-            && self.page_queue.full(
-                domain.count() as u64,
-                total_ops,
-                self.page_pace_ops_budget(),
-            )
+            && self.page_queue.full(total_ops, self.page_pace_ops_budget())
         {
             self.drain_page()?;
         }
@@ -875,20 +927,19 @@ impl Backend for WgpuBackend {
             let timing = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
             let sub = self.submit(encoder.finish());
             if self.wait.parks_with_host() && !self.measured() {
-                self.page_queue.note(element_count as u64, total_ops);
+                self.page_queue.note(total_ops);
             }
             self.settle_measured(sub.clone(), timing);
             sub
         } else {
             let total_slices = (further_slices.len() + 1) as u64;
-            let per_slice_elems = (element_count as u64).div_ceil(total_slices);
             let per_slice_ops = total_ops.div_ceil(total_slices);
             let _ = self.submit(encoder.finish());
             if self.wait.parks_with_host() && !self.measured() {
-                self.page_queue.note(per_slice_elems, per_slice_ops);
+                self.page_queue.note(per_slice_ops);
                 if self
                     .page_queue
-                    .full(per_slice_elems, per_slice_ops, self.page_pace_ops_budget())
+                    .full(per_slice_ops, self.page_pace_ops_budget())
                 {
                     self.drain_page()?;
                 }
@@ -925,13 +976,12 @@ impl Backend for WgpuBackend {
                 }
                 let sub = self.submit(slice_encoder.finish());
                 if self.wait.parks_with_host() && !self.measured() {
-                    self.page_queue.note(per_slice_elems, per_slice_ops);
+                    self.page_queue.note(per_slice_ops);
                     let pace_limit = self.page_pace_ops_budget();
                     let need_drain = if idx == last_idx {
                         total_ops >= pace_limit
                     } else {
-                        self.page_queue
-                            .full(per_slice_elems, per_slice_ops, pace_limit)
+                        self.page_queue.full(per_slice_ops, pace_limit)
                     };
                     if need_drain {
                         self.drain_page()?;
@@ -1046,7 +1096,7 @@ impl Backend for WgpuBackend {
         if self.wait.parks_with_host() {
             let elems = (domain.count() as u64).saturating_mul(u64::from(repeat));
             let ops = elems.saturating_mul(effective_page_unit_ops(module, &invocation.params));
-            if elems > PAGE_PACE_ELEMENTS || ops > self.page_pace_ops_budget() {
+            if ops > self.page_pace_ops_budget() {
                 return None;
             }
         }
@@ -1502,5 +1552,25 @@ impl Backend for GpuBackend {
 
     fn waited(&self) -> std::time::Duration {
         self.inner().waited()
+    }
+}
+
+#[cfg(test)]
+mod page_pacing_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn adaptive_page_rate_converges_for_fast_gpus_and_clamps_up_on_slow_gpus() {
+        let rate = AtomicU64::new(PAGE_INITIAL_NS_PER_MOP);
+        // Fast discrete GPU completing 50 Gop in 5 ms converges down rapidly.
+        for _ in 0..8 {
+            record_page_rate(&rate, 50_000_000_000, 5_000_000);
+        }
+        assert_eq!(rate.load(Ordering::Relaxed), PAGE_MIN_NS_PER_MOP);
+
+        // Slow integrated GPU taking 250 ms for 100 Mop snaps up immediately.
+        record_page_rate(&rate, 100_000_000, 250_000_000);
+        assert_eq!(rate.load(Ordering::Relaxed), 2_500_000);
     }
 }

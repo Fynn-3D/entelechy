@@ -30,6 +30,7 @@ use entelechy_abi::{Handle, Invocation, Scope};
 use entelechy_rules::raster::{SURFACE_WORDS, check_rasterize, surface_schema};
 use entelechy_rules::{ExecutionError, NativeOp};
 
+use crate::failure::Scopes;
 use crate::{DeviceImage, WgpuBackend};
 
 /// What every stage reads: the canvas, the counts, the cutout, and how
@@ -977,9 +978,7 @@ pub(crate) fn rasterize(
         .saturating_add(pixels.saturating_mul(16));
     if gpu.wait.parks_with_host()
         && !gpu.measured()
-        && gpu
-            .page_queue
-            .full(pixels, est_ops, gpu.page_pace_ops_budget())
+        && gpu.page_queue.full(est_ops, gpu.page_pace_ops_budget())
     {
         gpu.drain_page()?;
     }
@@ -1144,22 +1143,24 @@ pub(crate) fn rasterize(
         pass.set_bind_group(0, &resolve_group, &[]);
         pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
     }
-    let guard = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let scopes = Scopes::push(&gpu.device);
     // Under a measured run a native operation waits for the device like any
     // node, and reports the device's clock where there is one.
     let timing = gpu.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
     let submission = gpu.submit(encoder.finish());
     if gpu.wait.parks_with_host() && !gpu.measured() {
-        gpu.page_queue.note(pixels, est_ops);
-        if triangle_count >= 500_000 {
+        gpu.page_queue.note(est_ops);
+        if gpu.page_queue.full(0, gpu.page_pace_ops_budget()) {
             gpu.drain_page()?;
         }
     }
     gpu.settle_measured(submission, timing);
-    if let Some(error) = gpu.wait.block_on(guard.pop()) {
+    if gpu.wait.parks_with_host() && !gpu.measured() {
+        gpu.defer_check(Box::new(scopes.pop_later(gpu.wait, gpu.spent.clone())));
+    } else if let Err(error) = scopes.pop(gpu.wait, "") {
         return Err(ExecutionError::Device(format!(
             "rasterize: {}",
-            crate::device_error(&error)
+            error.said()
         )));
     }
     let output = scope.adopt_resident(

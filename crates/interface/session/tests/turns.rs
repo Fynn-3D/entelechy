@@ -481,13 +481,16 @@ fn finish_used_warms_window_domains_and_unsupplied_fallbacks() {
         "kernel t.fresh@1 { requires { field.write; } output result: Rows<Int>; compute { return element(); } }\n\
          kernel t.aim@1 { requires { field.write; } output result: Rows<Int>; compute { return 1; } }\n\
          kernel t.view@1 { requires { field.read; field.write; } input aim: Rows<Int>; output result: Image; compute { return vec4(float(at(aim, 0)), 0.0, 0.0, 1.0); } }\n\
+         kernel t.extra@1 { requires { field.write; } output result: Image; compute { return vec4(1.0, 0.0, 0.0, 1.0); } }\n\
          kernel t.keep@1 { requires { field.read; field.write; } input saved: Rows<Int>; output result: Rows<Int>; compute { return sample(saved); } }\n\
          input saved: Rows<Int> = \"saves/missing.field\" else fresh.result;\n\
          node fresh: t.fresh@1 { domain = 256; }\n\
          node keep: t.keep@1 { saved <~ keep.result from saved; domain = 256; }\n\
          node aim: t.aim@1 { domain = 1; }\n\
          node view: t.view@1 { aim <- aim.result; domain = window(); }\n\
-         output picture <- view.result;\n",
+         node extra: t.extra@1 { domain = window(); }\n\
+         output picture <- view.result;\n\
+         output result <- extra.result;\n",
     )
     .unwrap();
 
@@ -511,6 +514,7 @@ fn finish_used_warms_window_domains_and_unsupplied_fallbacks() {
     // finish during loading even before Frame 1 sets a window, while `t.aim@1`
     // (`domain = 1`) stays on the processor without building a GPU pipeline.
     assert!(finished.iter().any(|id| id == "t.view@1"), "{finished:?}");
+    assert!(finished.iter().any(|id| id == "t.extra@1"), "{finished:?}");
     assert!(finished.iter().any(|id| id == "t.fresh@1"), "{finished:?}");
     assert!(finished.iter().any(|id| id == "t.keep@1"), "{finished:?}");
     assert!(!finished.iter().any(|id| id == "t.aim@1"), "{finished:?}");

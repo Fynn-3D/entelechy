@@ -3393,3 +3393,72 @@ fn packed_input_groups_splits_wide_grids_across_multiple_storage_buffers() {
             });
     }
 }
+
+#[test]
+fn small_integer_pow_expands_without_pow_ref() {
+    let module = compile(
+        "kernel test.small_pow@1 {
+            requires { field.read; field.write; }
+            input xs: Rows<Float>;
+            output result: Rows<Vec4>;
+            compute {
+                let x = at(xs, element());
+                return vec4(pow(x, 1.0), pow(x, 2.0), pow(x, 3.0), pow(x, 4.0));
+            }
+        }",
+    )
+    .unwrap();
+    let accounted = entelechy_ir::account(&module).unwrap();
+    let pruned = entelechy_gpu::wgsl::pruned(&entelechy_gpu::wgsl::emit(&accounted));
+    assert!(
+        !pruned.contains("fn pow_ref("),
+        "constant 1..4 pow should expand to multiplies without pulling pow_ref:\n{pruned}"
+    );
+    let Some(gpu) = gpu() else { return };
+    let mut host = Host::new(1 << 20);
+    let samples = [
+        0.0f32,
+        -0.0,
+        1.0,
+        -1.0,
+        2.5,
+        -2.5,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NAN,
+    ];
+    let words: Vec<u32> = samples.iter().map(|v| v.to_bits()).collect();
+    let handle = host
+        .adopt(
+            entelechy_abi::FieldData::from_values(
+                entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float]),
+                Domain::Rows(samples.len() as u32),
+                &words,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let (cpu, device) = on_both_inputs(
+        &gpu,
+        &mut host,
+        &module,
+        vec![handle],
+        Domain::Rows(samples.len() as u32),
+    );
+    for (idx, (c, d)) in cpu.iter().zip(device.iter()).enumerate() {
+        let cf = f32::from_bits(*c);
+        let df = f32::from_bits(*d);
+        if cf.is_nan() {
+            assert!(df.is_nan(), "lane {idx}: expected NaN, got {df}");
+        } else if cf.is_infinite() {
+            assert_eq!(c, d, "lane {idx}: infinity sign mismatch ({cf} vs {df})");
+        } else if cf == 0.0 {
+            assert_eq!(c, d, "lane {idx}: zero sign mismatch");
+        } else {
+            assert!(
+                (cf - df).abs() <= cf.abs() * 1e-6 + 1e-6,
+                "lane {idx}: {cf} vs {df}"
+            );
+        }
+    }
+}

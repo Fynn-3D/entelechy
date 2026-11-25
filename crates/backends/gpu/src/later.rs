@@ -62,16 +62,34 @@ pub(crate) struct Submitted {
     /// The end of the work, asked for as it was marked where the device
     /// answers only for everything before ([`Wait::ask_done`]).
     pub(crate) asked: Option<crate::wait::Asked<()>>,
+    pub(crate) page_queue: crate::PageQueue,
+    pub(crate) ns_per_mop: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub(crate) pending: Vec<Box<dyn Check>>,
 }
 
 impl Check for Submitted {
     fn wait(mut self: Box<Self>) -> Result<(), ExecutionError> {
         let asked = self.asked.take();
-        self.spent
+        let waited = self
+            .spent
             .time(|| match asked {
                 Some(asked) => self.wait.answer(&self.device, asked),
                 None => self.wait.done_after(&self.device, &self.queue, &self.after),
             })
-            .map_err(ExecutionError::Device)
+            .map_err(ExecutionError::Device);
+        if self.wait.parks_with_host() {
+            let (queued_ops, elapsed_ns) = self.page_queue.take_timing();
+            crate::record_page_rate(&self.ns_per_mop, queued_ops, elapsed_ns);
+        } else {
+            self.page_queue.clear();
+        }
+        let mut first = waited;
+        for check in self.pending {
+            let answer = check.wait();
+            if first.is_ok() {
+                first = answer;
+            }
+        }
+        first
     }
 }

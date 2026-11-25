@@ -437,6 +437,13 @@ impl Session {
             return;
         };
         let handles = self.backing.handles();
+        let output_seeds = shared
+            .outputs
+            .iter()
+            .filter_map(|(_, source)| match source {
+                entelechy_graph::Source::Node { node, .. } => Some(node.clone()),
+                entelechy_graph::Source::External(_) => None,
+            });
         let fallback_seeds = shared
             .fallbacks
             .iter()
@@ -445,7 +452,13 @@ impl Session {
                 entelechy_graph::Source::Node { node, .. } => Some(node.clone()),
                 entelechy_graph::Source::External(_) => None,
             });
-        let reached = shared.read_through(self.pins.iter().cloned().chain(fallback_seeds));
+        let reached = shared.read_through(
+            self.pins
+                .iter()
+                .cloned()
+                .chain(output_seeds)
+                .chain(fallback_seeds),
+        );
         let mut warm_context = self.last_context;
         if warm_context.window[0] <= 0.0 || warm_context.window[1] <= 0.0 {
             warm_context.window = [1280.0, 720.0];

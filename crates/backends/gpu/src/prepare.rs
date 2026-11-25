@@ -426,6 +426,7 @@ pub(crate) struct Lazy {
     passes: Arc<PassCache>,
     unbuilt: Arc<Mutex<Vec<(Validated, String)>>>,
     heard: Arc<Mutex<Vec<String>>>,
+    device_lost: Arc<std::sync::atomic::AtomicBool>,
     shaders: Mutex<Option<Pipeline<Shader>>>,
     built: OnceLock<Result<BuiltPipeline, String>>,
 }
@@ -439,7 +440,7 @@ impl Lazy {
 
     /// Starts asynchronous compilation of every pass in a page's browser.
     pub(crate) fn warm(&self) {
-        if self.is_built() {
+        if self.is_built() || self.device_lost.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
         if let Some(shaders) = self
@@ -457,6 +458,18 @@ impl Lazy {
     pub(crate) fn built(&self) -> Result<&Pipeline, ExecutionError> {
         self.built
             .get_or_init(|| {
+                if self.device_lost.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = self
+                        .shaders
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .take();
+                    return Err(format!(
+                        "the device's own compiler could not build `{}`: {}",
+                        self.id,
+                        crate::told(&self.heard, "the device was lost".to_owned())
+                    ));
+                }
                 let shaders = self
                     .shaders
                     .lock()
@@ -477,6 +490,10 @@ impl Lazy {
                         let had_device_loss = self.heard.lock().is_ok_and(|h| !h.is_empty())
                             || error.contains("device was lost")
                             || error.contains("Instance reference no longer exists");
+                        if had_device_loss {
+                            self.device_lost
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
                         let error = crate::told(&self.heard, error);
                         // Do not silently route heavy compute Kernels onto the
                         // page's single-threaded ordered backend, or record a
@@ -747,6 +764,7 @@ impl WgpuBackend {
             passes: Arc::clone(&self.passes),
             unbuilt: Arc::clone(&self.unbuilt),
             heard: Arc::clone(&self.heard),
+            device_lost: Arc::clone(&self.device_lost),
             shaders: Mutex::new(Some(shaders)),
             built: OnceLock::new(),
         })

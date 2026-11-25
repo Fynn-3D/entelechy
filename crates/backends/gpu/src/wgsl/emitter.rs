@@ -37,9 +37,11 @@ pub(crate) fn emit_function(
         let _ = writeln!(out, "fn {name}({args}) -> {} {{", wgsl_type(ret));
     }
     let mut types = std::collections::HashMap::new();
-    types_in(&function.body, &mut types);
+    let mut const_floats = std::collections::HashMap::new();
+    types_and_consts_in(&function.body, &mut types, &mut const_floats);
     let mut emitter = Emitter {
         types,
+        const_floats,
         out,
         module,
         function,
@@ -120,6 +122,8 @@ pub(crate) struct Emitter<'a> {
     loops: Vec<(ValueId, bool)>,
     /// Every value's type by id, gathered once.
     types: std::collections::HashMap<u32, Type>,
+    /// Uniform constant float values by id, for exact small-integer `pow` expansion.
+    const_floats: std::collections::HashMap<u32, f32>,
     /// Whether a Long is a pair of words, every operation on it a helper
     /// (`LONG_PAIR_HELPERS`).
     pairs: bool,
@@ -142,12 +146,39 @@ pub(crate) fn meets(body: &[Instruction]) -> bool {
     })
 }
 
-/// Every value `body` defines, with its type, in nested blocks too.
-fn types_in(body: &[entelechy_ir::Instruction], out: &mut std::collections::HashMap<u32, Type>) {
+/// Every value `body` defines, with its type (and uniform float constant, if any),
+/// in nested blocks too.
+fn types_and_consts_in(
+    body: &[entelechy_ir::Instruction],
+    types: &mut std::collections::HashMap<u32, Type>,
+    const_floats: &mut std::collections::HashMap<u32, f32>,
+) {
     for instruction in body {
-        out.insert(instruction.id.0, instruction.ty);
+        types.insert(instruction.id.0, instruction.ty);
+        if let Op::Const(value) = &instruction.op {
+            let uniform = match *value {
+                Value::Float(f) => Some(f),
+                Value::Vec2([a, b]) if a.to_bits() == b.to_bits() => Some(a),
+                Value::Vec3([a, b, c])
+                    if a.to_bits() == b.to_bits() && a.to_bits() == c.to_bits() =>
+                {
+                    Some(a)
+                }
+                Value::Vec4([a, b, c, d])
+                    if a.to_bits() == b.to_bits()
+                        && a.to_bits() == c.to_bits()
+                        && a.to_bits() == d.to_bits() =>
+                {
+                    Some(a)
+                }
+                _ => None,
+            };
+            if let Some(f) = uniform {
+                const_floats.insert(instruction.id.0, f);
+            }
+        }
         for block in instruction.op.blocks() {
-            types_in(&block.body, out);
+            types_and_consts_in(&block.body, types, const_floats);
         }
     }
 }
@@ -841,12 +872,19 @@ impl Emitter<'_> {
                 (_, Type::IVec4) => format!("to_int4({list})"),
                 _ => format!("to_int({list})"),
             },
-            Intrinsic::Pow => format!(
-                "{}({}, {})",
-                suffix("pow_ref"),
-                splat(&args[0], ty),
-                splat(&args[1], ty)
-            ),
+            // Small positive integer constant exponents expand directly to multiplies:
+            // identical on every IEEE 754 special value (±0, ±inf, NaN, negative bases)
+            // without pulling the 30-line `pow_ref` helper into DXC's AlwaysInliner.
+            Intrinsic::Pow => {
+                let base = splat(&args[0], ty);
+                match self.const_floats.get(&args[1].0).copied() {
+                    Some(1.0) => base,
+                    Some(2.0) => format!("({base} * {base})"),
+                    Some(3.0) => format!("(({base} * {base}) * {base})"),
+                    Some(4.0) => format!("(({base} * {base}) * ({base} * {base}))"),
+                    _ => format!("{}({}, {})", suffix("pow_ref"), base, splat(&args[1], ty)),
+                }
+            }
             // A device's `tanh` may give NaN far out (Metal's from 45 on);
             // a Float's tanh is exactly ±1 past ±9.01, so the argument is
             // held to ±15 and every answer is the reference's.
