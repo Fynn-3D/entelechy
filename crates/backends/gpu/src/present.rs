@@ -16,6 +16,7 @@ pub(crate) struct WgpuDisplay {
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
+    batch: std::sync::Arc<crate::batch::BatchHub>,
 }
 
 #[derive(Clone)]
@@ -39,6 +40,7 @@ impl WgpuBackend {
             adapter: adapter.clone(),
             device: device.clone(),
             queue: queue.clone(),
+            batch: std::sync::Arc::clone(&self.batch),
         }
     }
 }
@@ -415,6 +417,7 @@ impl WgpuDisplay {
         window_height: u32,
         overlay: Option<Overlay<'_>>,
     ) -> Result<Option<Placement>, String> {
+        let _ = self.batch.flush();
         let (gpu_device, queue) = (&self.device, &self.queue);
         if (presenter.config.width, presenter.config.height) != (window_width, window_height)
             && window_width > 0

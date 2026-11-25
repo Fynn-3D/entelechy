@@ -122,6 +122,7 @@ impl WgpuBackend {
             .lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.batch.flush().map_err(|e| e.to_string())?;
         let words = u32::try_from(byte_len / 4).map_err(|_| "a Field too long to compare")?;
         let mut count_bytes = [0u8; 16];
         count_bytes[..4].copy_from_slice(&words.to_le_bytes());

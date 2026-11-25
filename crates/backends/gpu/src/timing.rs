@@ -305,6 +305,16 @@ impl Frames {
         submission
     }
 
+    /// Records one batched pass into the open clocked frame's timestamp table
+    /// without submitting a separate command buffer.
+    pub(crate) fn note_batched_run(&self) {
+        if self.clocked() && self.stamps() {
+            let mut stamped = lock(&self.stamped);
+            let count = stamped.resolving.take().unwrap_or(0);
+            stamped.counts.push(count);
+        }
+    }
+
     /// How many runs the open frame has been given.
     pub(crate) fn mark(&self) -> usize {
         if self.stamps() {

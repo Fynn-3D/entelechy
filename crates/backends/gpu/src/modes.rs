@@ -25,6 +25,7 @@ impl WgpuBackend {
         // Two buffers take turns, so the output is held twice.
         let schema = &module.manifest.outputs[0].ty.schema;
         scope.can_hold(&[(schema, domain), (schema, domain)])?;
+        let allow_batch = self.batch.can_batch(self.measured(), &self.frames);
         let staged = self.stage(
             pipeline,
             module,
@@ -33,13 +34,17 @@ impl WgpuBackend {
             domain,
             None,
             usize::MAX,
+            allow_batch,
         )?;
         let Staged {
             mut encoder,
+            batched,
             bind_group: _,
             further_slices: _,
-            context_buffer,
-            params_buffer,
+            context_buffer: _,
+            params_buffer: _,
+            context_slice,
+            params_slice,
             mut input_buffers,
             memory_outputs: _,
             output_buffer,
@@ -51,7 +56,7 @@ impl WgpuBackend {
             highs: _,
             bound_inputs: _,
         } = staged;
-        let scopes = Scopes::push(&self.device);
+        let scopes = (!batched).then(|| Scopes::push(&self.device));
         // The first time reads the input it was given and writes the
         // first of the two; every time after reads what the one before
         // wrote and writes the other.
@@ -83,11 +88,11 @@ impl WgpuBackend {
             let mut entries = vec![
                 wgpu::BindGroupEntry {
                     binding: wgsl::CONTEXT_BINDING,
-                    resource: context_buffer.as_entire_binding(),
+                    resource: context_slice.binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: wgsl::PARAMS_BINDING,
-                    resource: params_buffer.as_entire_binding(),
+                    resource: params_slice.binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: wgsl::OUTPUT_BINDING,
@@ -139,15 +144,29 @@ impl WgpuBackend {
         } else {
             (output_buffer, spare)
         };
-        self.submit(encoder.finish());
-        // The other of the two goes to the pile for a later output.
-        self.spare.keep(other, None);
-        if self._waiter.is_none() {
-            let _ = self.device.poll(wgpu::PollType::Poll);
+        if batched {
+            self.frames.note_batched_run();
+            let page_budget = self
+                .wait
+                .parks_with_host()
+                .then(|| self.page_pace_ops_budget());
+            let elems = (domain.count() as u64).saturating_mul(u64::from(repeat));
+            let ops = elems.saturating_mul(effective_page_unit_ops(module, &invocation.params));
+            self.batch
+                .finish_node(encoder, ops, vec![other], Vec::new(), page_budget)?;
+        } else {
+            self.submit(encoder.finish());
+            // The other of the two goes to the pile for a later output.
+            self.spare.keep(other, None);
+            if self._waiter.is_none() {
+                let _ = self.device.poll(wgpu::PollType::Poll);
+            }
+            if let Some(scopes) = scopes {
+                scopes
+                    .pop(self.wait, "")
+                    .map_err(|error| ExecutionError::Device(error.said()))?;
+            }
         }
-        scopes
-            .pop(self.wait, "")
-            .map_err(|error| ExecutionError::Device(error.said()))?;
         // What the last time wrote is what the run gives.
         adopt_outputs(
             scope,

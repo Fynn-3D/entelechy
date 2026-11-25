@@ -93,3 +93,12 @@ impl Check for Submitted {
         first
     }
 }
+
+/// A deferred error already surfaced when flushing an open batch at frame end.
+pub(crate) struct ImmediateError(pub(crate) ExecutionError);
+
+impl Check for ImmediateError {
+    fn wait(self: Box<Self>) -> Result<(), ExecutionError> {
+        Err(self.0)
+    }
+}

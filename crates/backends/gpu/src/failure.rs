@@ -14,8 +14,11 @@ pub(crate) struct FailureCheck {
     /// The failure word and its readback buffer, back to the pile once read.
     pub(crate) pair: Option<(wgpu::Buffer, wgpu::Buffer)>,
     /// The run's submission: waiting for its word waits for it and what
-    /// came before, not for what was submitted after.
-    pub(crate) submitted: wgpu::SubmissionIndex,
+    /// came before, not for what was submitted after. `None` when the run was
+    /// batched and must flush the open frame batch first.
+    pub(crate) submitted: Option<wgpu::SubmissionIndex>,
+    /// Shared frame batcher flushed before mapping when `submitted` is `None`.
+    pub(crate) batch: Arc<crate::batch::BatchHub>,
     /// The word's readback, asked for as the run was submitted where the
     /// device answers only for everything before ([`Wait::ask_map`]).
     pub(crate) asked: Option<crate::wait::Asked<Result<(), wgpu::BufferAsyncError>>>,
@@ -38,6 +41,10 @@ pub(crate) struct FailureCheck {
 impl Check for FailureCheck {
     fn wait(mut self: Box<Self>) -> Result<(), ExecutionError> {
         let (word_buffer, back) = self.pair.take().expect("a check is waited on once");
+        let submitted = match self.submitted.take() {
+            Some(sub) => Some(sub),
+            None => self.batch.flush_for_wait()?,
+        };
         let slice = back.slice(..);
         let asked = self.asked.take();
         self.spent
@@ -46,9 +53,12 @@ impl Check for FailureCheck {
                     .wait
                     .answer(&self.device, asked)?
                     .map_err(|error| error.to_string()),
-                None => self
-                    .wait
-                    .map_read_after(&self.device, &self.queue, slice, &self.submitted),
+                None => match &submitted {
+                    Some(sub) => self
+                        .wait
+                        .map_read_after(&self.device, &self.queue, slice, sub),
+                    None => self.wait.map_read(&self.device, &self.queue, slice),
+                },
             })
             .map_err(|error| ExecutionError::Device(crate::told(&self.heard, error)))?;
         self.page_queue.clear();

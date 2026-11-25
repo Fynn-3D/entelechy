@@ -79,10 +79,13 @@ pub(crate) fn param_bytes(params: &[Value]) -> Vec<u8> {
 /// What the map pass leaves ready for the mode's remaining passes.
 pub(crate) struct Staged {
     pub(crate) encoder: wgpu::CommandEncoder,
+    pub(crate) batched: bool,
     pub(crate) bind_group: wgpu::BindGroup,
     pub(crate) further_slices: Vec<(u32, u32, u32, u32, u32)>,
     pub(crate) context_buffer: wgpu::Buffer,
     pub(crate) params_buffer: wgpu::Buffer,
+    pub(crate) context_slice: crate::batch::UniformSlice,
+    pub(crate) params_slice: crate::batch::UniformSlice,
     pub(crate) input_buffers: Vec<wgpu::Buffer>,
     /// What the passes bind for the inputs, by binding: the inputs' own
     /// buffers, and the pack where some are packed.
@@ -242,7 +245,15 @@ impl WgpuBackend {
         };
         let storage = scope.storage(handle)?;
         for span in spans {
-            self.write_words(&buffer, span.start, &storage[span]);
+            let slice = &storage[span.clone()];
+            if self.batch.stage_upload(&buffer, span.start, slice)? {
+                self.uploaded.fetch_add(
+                    (slice.len() * 4) as u64,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            } else {
+                self.write_words(&buffer, span.start, slice);
+            }
         }
         let holds = Held {
             words: scope.version(handle)?,
@@ -281,13 +292,15 @@ impl WgpuBackend {
             return None;
         }
         let to = self.spare.take(&self.device, size, usage);
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("made from"),
-            });
-        encoder.copy_buffer_to_buffer(&from, 0, &to, 0, size);
-        self.submit(encoder.finish());
+        if !self.batch.copy_if_open(&from, &to, size) {
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("made from"),
+                });
+            encoder.copy_buffer_to_buffer(&from, 0, &to, 0, size);
+            self.submit(encoder.finish());
+        }
         Some(to)
     }
 
@@ -360,6 +373,7 @@ impl WgpuBackend {
         domain: entelechy_abi::Domain,
         timing: Option<&Timing>,
         slice_limit: usize,
+        allow_batch: bool,
     ) -> Result<Staged, ExecutionError> {
         let element_count = domain.count();
         let can_slice = slice_limit < usize::MAX
@@ -378,6 +392,10 @@ impl WgpuBackend {
         };
         let (groups_x, groups_y, groups_z, fold, slice_at) = slices.remove(0);
         let further_slices = slices;
+        let batched = allow_batch && further_slices.is_empty();
+        if !batched {
+            self.batch.flush()?;
+        }
         // Inputs: bind resident buffers directly; upload the rest once and
         // leave them resident.
         let mut input_buffers: Vec<wgpu::Buffer> = Vec::with_capacity(invocation.inputs.len());
@@ -466,7 +484,7 @@ impl WgpuBackend {
         // Context head (see `wgsl::CONTEXT_HEAD`), then one [w, h, d, 0] per
         // input; extents and the fold are the bits of `u32`s. Built after
         // `bind_input` so `write_words` is done with `self.staging`.
-        let (context_buffer, params_buffer) = {
+        let (context_slice, params_slice) = {
             let mut scratch = self
                 .staging
                 .lock()
@@ -535,8 +553,18 @@ impl WgpuBackend {
                 }
                 params.resize(params.len().div_ceil(16) * 16, 0);
             }
-            self.uniform_buffers(context, params)
+            if batched {
+                self.batch.alloc_uniform_pair(context, params)?
+            } else {
+                let (c, p) = self.uniform_buffers(context, params);
+                (
+                    crate::batch::UniformSlice::entire(c),
+                    crate::batch::UniformSlice::entire(p),
+                )
+            }
         };
+        let context_buffer = context_slice.buffer.clone();
+        let params_buffer = params_slice.buffer.clone();
         let output_schema = &module.manifest.outputs[0].ty.schema;
         let output_words = output_schema.value_words();
         // A scatter's map pass stores a pair per source element; the
@@ -560,11 +588,11 @@ impl WgpuBackend {
         let mut entries = vec![
             wgpu::BindGroupEntry {
                 binding: wgsl::CONTEXT_BINDING,
-                resource: context_buffer.as_entire_binding(),
+                resource: context_slice.binding(),
             },
             wgpu::BindGroupEntry {
                 binding: wgsl::PARAMS_BINDING,
-                resource: params_buffer.as_entire_binding(),
+                resource: params_slice.binding(),
             },
             wgpu::BindGroupEntry {
                 binding: wgsl::OUTPUT_BINDING,
@@ -640,11 +668,14 @@ impl WgpuBackend {
             layout: &pipeline.main.1,
             entries: &entries,
         });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("entelechy"),
-            });
+        let mut encoder = if batched {
+            self.batch.take_or_open()
+        } else {
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("entelechy"),
+                })
+        };
         for (from, to, size) in &copies {
             encoder.copy_buffer_to_buffer(from, 0, to, 0, *size);
         }
@@ -764,10 +795,13 @@ impl WgpuBackend {
         }
         Ok(Staged {
             encoder,
+            batched,
             bind_group,
             further_slices,
             context_buffer,
             params_buffer,
+            context_slice,
+            params_slice,
             input_buffers,
             bound_inputs,
             memory_outputs,

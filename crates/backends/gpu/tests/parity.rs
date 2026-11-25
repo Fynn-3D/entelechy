@@ -3462,3 +3462,155 @@ fn small_integer_pow_expands_without_pow_ref() {
         }
     }
 }
+
+#[test]
+fn batched_frame_chains_maps_small_uploads_and_deferred_checks() {
+    let Some(gpu) = gpu() else { return };
+    let add = compile(
+        "kernel test.batch_add@1 {
+            requires { field.read; field.write; }
+            input a: Grid<Float>;
+            input b: Grid<Float>;
+            param bias: Float = 0.0;
+            output out: Grid<Float>;
+            compute {
+                return sample(a) + sample(b) + bias;
+            }
+        }",
+    )
+    .unwrap();
+    let checked_div = compile(
+        "kernel test.batch_div@1 {
+            requires { field.read; field.write; }
+            input a: Grid<Float>;
+            param divisor: Int = 1;
+            output out: Grid<Float>;
+            compute {
+                let q = 100 / divisor;
+                return sample(a) + float(q);
+            }
+        }",
+    )
+    .unwrap();
+    let prep_add = gpu.prepare(&add).unwrap();
+    let prep_div = gpu.prepare(&checked_div).unwrap();
+    let domain = Domain::Grid(32, 16);
+    let count = domain.count();
+    let mut host = Host::new(4 << 20);
+    // Run 3 batched frames: each queues multiple `execute_checked` passes with
+    // distinct per-node uniforms and fresh small Host uploads (`<= 64 KiB`)
+    // before settling via `submitted()` and verifying bit-exact results.
+    for frame in 0..3u32 {
+        let mut checks: Vec<Box<dyn entelechy_rules::Check>> = Vec::new();
+        let make_grid = |host: &mut Host, offset: f32| {
+            let words: Vec<u32> = (0..count)
+                .map(|i| (i as f32 * 0.25 + offset).to_bits())
+                .collect();
+            host.adopt(
+                entelechy_abi::FieldData::from_values(
+                    entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Float]),
+                    domain,
+                    &words,
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        };
+        let a = make_grid(&mut host, frame as f32);
+        let b = make_grid(&mut host, 10.0 + frame as f32);
+        let c = make_grid(&mut host, 20.0 + frame as f32);
+        let mut scope = Scope::new(&mut host, all());
+        let (o1, chk1) = gpu
+            .execute_checked(
+                prep_add.as_ref(),
+                &add,
+                &Invocation {
+                    inputs: vec![a, b],
+                    params: vec![entelechy_abi::Value::Float(1.5 + frame as f32)],
+                    domain,
+                    context: Context::default(),
+                },
+                &mut scope,
+            )
+            .unwrap();
+        if let Some(c) = chk1 {
+            checks.push(c);
+        }
+        // Second node introduces a new small Host upload (`c`) while the batch
+        // encoder is already open, plus distinct params in the uniform slab.
+        let (o2, chk2) = gpu
+            .execute_checked(
+                prep_add.as_ref(),
+                &add,
+                &Invocation {
+                    inputs: vec![o1[0], c],
+                    params: vec![entelechy_abi::Value::Float(2.5)],
+                    domain,
+                    context: Context::default(),
+                },
+                &mut scope,
+            )
+            .unwrap();
+        if let Some(c) = chk2 {
+            checks.push(c);
+        }
+        // Third node is checked (`can_fail`) and triggers division by zero on frame 2.
+        let divisor = if frame == 2 { 0 } else { 4 };
+        let (o3, chk3) = gpu
+            .execute_checked(
+                prep_div.as_ref(),
+                &checked_div,
+                &Invocation {
+                    inputs: vec![o2[0]],
+                    params: vec![entelechy_abi::Value::Int(divisor)],
+                    domain,
+                    context: Context::default(),
+                },
+                &mut scope,
+            )
+            .unwrap();
+        if let Some(c) = chk3 {
+            checks.push(c);
+        }
+        let done = gpu.submitted().unwrap();
+        let mut err = None;
+        for chk in checks {
+            if let Err(e) = chk.wait() {
+                err = Some(e);
+            }
+        }
+        done.wait().unwrap();
+        if frame == 2 {
+            assert!(
+                matches!(
+                    err,
+                    Some(entelechy_rules::ExecutionError::Arithmetic {
+                        error: entelechy_rules::ArithmeticError::DivisionByZero,
+                        ..
+                    })
+                ),
+                "expected DivisionByZero from batched FailureCheck, got {err:?}"
+            );
+        } else {
+            assert!(err.is_none(), "unexpected error on frame {frame}: {err:?}");
+            let resident = host.resident(o3[0]).unwrap().unwrap();
+            let got = gpu.download(resident, count * 4).unwrap();
+            for (i, &bits) in got.iter().enumerate() {
+                let expected = (i as f32 * 0.25 + frame as f32)
+                    + (i as f32 * 0.25 + 10.0 + frame as f32)
+                    + (1.5 + frame as f32)
+                    + (i as f32 * 0.25 + 20.0 + frame as f32)
+                    + 2.5
+                    + 25.0;
+                assert!(
+                    (f32::from_bits(bits) - expected).abs() < 1e-4,
+                    "frame {frame} pixel {i}: got {}, expected {expected}",
+                    f32::from_bits(bits)
+                );
+            }
+        }
+        for h in [a, b, c, o1[0], o2[0], o3[0]] {
+            let _ = host.release(h);
+        }
+    }
+}

@@ -954,7 +954,35 @@ pub(crate) fn rasterize(
     for (slot, word) in setup_bytes.chunks_exact_mut(4).zip(setup) {
         slot.copy_from_slice(&word.to_le_bytes());
     }
-    let setup_buffer = gpu.take_uniform(&setup_bytes);
+    // The keys the sorting pass draws small triangles into, a pixel each,
+    // cleared to none. Check page pacing and bind `before` BEFORE allocating
+    // from the batch uniform slab so no flush can happen after `setup_slice`.
+    let pixels = u64::from(width) * u64::from(height);
+    let est_ops = u64::from(triangle_count)
+        .saturating_mul(64)
+        .saturating_add(pixels.saturating_mul(16));
+    if gpu.wait.parks_with_host()
+        && !gpu.measured()
+        && gpu.page_queue.full(est_ops, gpu.page_pace_ops_budget())
+    {
+        gpu.batch.flush()?;
+        gpu.drain_page()?;
+    }
+    // The keys before the cover; the surface's pass binds the small
+    // triangles' keys there, unread.
+    let before_buffer = match before {
+        Some(keys) => Some(gpu.bind_input(scope, keys)?),
+        None => None,
+    };
+    let batched = gpu.batch.can_batch(gpu.measured(), &gpu.frames);
+    if !batched {
+        gpu.batch.flush()?;
+    }
+    let setup_slice = if batched {
+        gpu.batch.alloc_uniform(&setup_bytes)?
+    } else {
+        crate::batch::UniformSlice::entire(gpu.take_uniform(&setup_bytes))
+    };
 
     // The keeping pass's buffers, from the pile and back to it.
     let spare = gpu.spare();
@@ -970,18 +998,6 @@ pub(crate) fn rasterize(
     let indices = scratch(u64::from(triangle_count) * 3, wgpu::BufferUsages::INDEX);
     let rows = scratch(u64::from(triangle_count), wgpu::BufferUsages::empty());
     let args = scratch(8, wgpu::BufferUsages::INDIRECT);
-    // The keys the sorting pass draws small triangles into, a pixel each,
-    // cleared to none.
-    let pixels = u64::from(width) * u64::from(height);
-    let est_ops = u64::from(triangle_count)
-        .saturating_mul(64)
-        .saturating_add(pixels.saturating_mul(16));
-    if gpu.wait.parks_with_host()
-        && !gpu.measured()
-        && gpu.page_queue.full(est_ops, gpu.page_pace_ops_budget())
-    {
-        gpu.drain_page()?;
-    }
     let keys = scratch(
         if pipelines.here { pixels * 2 } else { 4 },
         wgpu::BufferUsages::COPY_DST,
@@ -997,7 +1013,10 @@ pub(crate) fn rasterize(
         label: Some("entelechy rasterize keep"),
         layout: &pipelines.keep_layout,
         entries: &[
-            entry(0, &setup_buffer),
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: setup_slice.binding(),
+            },
             entry(1, &vertex_buffer),
             entry(2, &triangle_buffer),
             entry(3, &marks),
@@ -1013,7 +1032,10 @@ pub(crate) fn rasterize(
         label: Some("entelechy rasterize draw"),
         layout: &pipelines.draw_layout,
         entries: &[
-            entry(0, &setup_buffer),
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: setup_slice.binding(),
+            },
             entry(1, &vertex_buffer),
             entry(2, &indices),
             entry(3, &mask_buffer),
@@ -1030,12 +1052,6 @@ pub(crate) fn rasterize(
         None => (surface_schema(), SURFACE_WORDS as u64),
     };
     let output_size = width as u64 * height as u64 * words * 4;
-    // The keys before the cover; the surface's pass binds the small
-    // triangles' keys there, unread.
-    let before_buffer = match before {
-        Some(keys) => Some(gpu.bind_input(scope, keys)?),
-        None => None,
-    };
     let output_buffer = spare.take(
         &gpu.device,
         output_size,
@@ -1045,7 +1061,10 @@ pub(crate) fn rasterize(
         label: Some("entelechy rasterize resolve"),
         layout: &pipelines.resolve_layout,
         entries: &[
-            entry(0, &setup_buffer),
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: setup_slice.binding(),
+            },
             entry(1, &vertex_buffer),
             entry(2, &triangle_buffer),
             entry(3, &rows),
@@ -1062,11 +1081,14 @@ pub(crate) fn rasterize(
     // The set is made before the encoder so the opening timestamp is its
     // first command: the first pass opens it, the last closes it.
     let timing_set = gpu.timing_set(2);
-    let mut encoder = gpu
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("entelechy rasterize"),
-        });
+    let mut encoder = if batched {
+        gpu.batch.take_or_open()
+    } else {
+        gpu.device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("entelechy rasterize"),
+            })
+    };
     let drawing = triangle_count > 0;
     if pipelines.here {
         encoder.clear_buffer(&keys, 0, None);
@@ -1143,25 +1165,56 @@ pub(crate) fn rasterize(
         pass.set_bind_group(0, &resolve_group, &[]);
         pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
     }
-    let scopes = Scopes::push(&gpu.device);
-    // Under a measured run a native operation waits for the device like any
-    // node, and reports the device's clock where there is one.
     let timing = gpu.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
-    let submission = gpu.submit(encoder.finish());
-    if gpu.wait.parks_with_host() && !gpu.measured() {
-        gpu.page_queue.note(est_ops);
-        if gpu.page_queue.full(0, gpu.page_pace_ops_budget()) {
+    if batched {
+        gpu.frames.note_batched_run();
+        let page_budget = gpu
+            .wait
+            .parks_with_host()
+            .then(|| gpu.page_pace_ops_budget());
+        gpu.batch.finish_node(
+            encoder,
+            est_ops,
+            vec![marks, offsets, indices, rows, args, keys],
+            vec![places, depth],
+            page_budget,
+        )?;
+        if gpu.wait.parks_with_host() && gpu.page_queue.full(0, gpu.page_pace_ops_budget()) {
+            gpu.batch.flush()?;
             gpu.drain_page()?;
         }
-    }
-    gpu.settle_measured(submission, timing);
-    if gpu.wait.parks_with_host() && !gpu.measured() {
-        gpu.defer_check(Box::new(scopes.pop_later(gpu.wait, gpu.spent.clone())));
-    } else if let Err(error) = scopes.pop(gpu.wait, "") {
-        return Err(ExecutionError::Device(format!(
-            "rasterize: {}",
-            error.said()
-        )));
+    } else {
+        let scopes = Scopes::push(&gpu.device);
+        let submission = gpu.submit(encoder.finish());
+        if gpu.wait.parks_with_host() && !gpu.measured() {
+            gpu.page_queue.note(est_ops);
+            if gpu.page_queue.full(0, gpu.page_pace_ops_budget()) {
+                gpu.drain_page()?;
+            }
+        }
+        gpu.settle_measured(submission, timing);
+        if gpu.wait.parks_with_host() && !gpu.measured() {
+            gpu.defer_check(Box::new(scopes.pop_later(gpu.wait, gpu.spent.clone())));
+        } else if let Err(error) = scopes.pop(gpu.wait, "") {
+            return Err(ExecutionError::Device(format!(
+                "rasterize: {}",
+                error.said()
+            )));
+        }
+        for texture in [places, depth] {
+            gpu.targets().keep(texture);
+        }
+        for buffer in [
+            setup_slice.buffer,
+            marks,
+            offsets,
+            indices,
+            rows,
+            args,
+            keys,
+        ] {
+            spare.keep(buffer, None);
+        }
     }
     let output = scope.adopt_resident(
         schema,
@@ -1172,14 +1225,5 @@ pub(crate) fn rasterize(
             holds: None,
         }),
     )?;
-    // The call's own targets and buffers go back to the piles for the next
-    // rasterize of the same shape; the queue orders their reuse after this
-    // run.
-    for texture in [places, depth] {
-        gpu.targets().keep(texture);
-    }
-    for buffer in [setup_buffer, marks, offsets, indices, rows, args, keys] {
-        spare.keep(buffer, None);
-    }
     Ok(vec![output])
 }
