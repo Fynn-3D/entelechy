@@ -9,6 +9,7 @@ pub mod clock;
 pub mod placement;
 pub mod raster;
 pub mod reduce;
+pub mod trace;
 
 pub use backend::{Backend, Check, ClockedFrame, Downloading, NativeOp, Prepared};
 

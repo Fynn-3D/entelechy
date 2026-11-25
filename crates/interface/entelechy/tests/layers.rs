@@ -48,8 +48,10 @@ const YARDSTICKS: [&str; 3] = [
 const PLAIN_INTERFACES: [&str; 2] = ["entelechy-formats", "entelechy-documents"];
 
 /// The crates allowed `unsafe`: the JIT runs its code, the FFI reads a C
-/// caller's pointers. The workspace's lints forbid it elsewhere.
-const UNSAFE: [&str; 2] = ["entelechy-jit", "entelechy-ffi"];
+/// caller's pointers, and the GPU opts into native `wgpu::ExperimentalFeatures`
+/// for hardware ray queries (`#![deny(unsafe_code)]` stays active crate-wide).
+/// The workspace's lints forbid it elsewhere.
+const UNSAFE: [&str; 3] = ["entelechy-jit", "entelechy-ffi", "entelechy-gpu"];
 
 struct Crate {
     layer: &'static str,

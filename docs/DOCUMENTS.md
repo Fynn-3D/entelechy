@@ -908,7 +908,23 @@ be keywords.
    (the depth's bits above, the triangle's row below), `domain =
    size(keys);`; bit for bit on the interpreter and the JIT, on a GPU
    the device's rasterizer, approximate at edges and in a depth's last
-   bits.
+   bits. `native.trace@1` traces `rays` (`origin: Vec3; tmin: Float;
+   dir: Vec3; tmax: Float`) against a single triangle mesh (`vertices:
+   Rows<Vec3>`, `triangles: Rows<{ a: Int; b: Int; c: Int }>`) with
+   `param flags: Int = 0` (`1` terminate on first hit, `2` cull back
+   faces, `4` cull front faces) and writes `hits` (`t: Float; bary:
+   Vec2; triangle: Int; instance: Int; custom: Int; front: Bool`;
+   `triangle == -1` and `t == -1.0` on miss), matching
+   `geometry.trace@1`. `native.trace@2` traces `rays` against an
+   instanced multi-mesh scene (`vertices`, `triangles`, `meshes` of
+   `vertex_offset, vertex_count, triangle_offset, triangle_count`, and
+   `instances` of row-major 3x4 affine `row0, row1, row2: Vec4`,
+   `mesh`, `custom`, `mask`) with `param flags: Int = 0` and `param
+   mask: Int = 255`, matching `geometry.trace_instances@1`; on the
+   interpreter and JIT both use a pure-Rust SAH BVH, and on a GPU both
+   dispatch hardware ray queries (`EXPERIMENTAL_RAY_QUERY`, cached
+   BLAS/TLAS acceleration structures) when offered or fall back
+   transparently to a portable GPU compute SAH BVH.
 9. A graph exposes `input`, `param` and `output` like a Kernel, so it is
    placed with `node name: graph "path.esn" { ... }`. Placement
    flattens it: its nodes join the parent under `name.`, its inputs take

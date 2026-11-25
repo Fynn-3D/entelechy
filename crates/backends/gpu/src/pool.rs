@@ -4,11 +4,18 @@
 use super::*;
 use std::ops::Range;
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_IMAGE_ID: AtomicU64 = AtomicU64::new(1);
+
 /// A resident image: either a storage buffer (with an optional lazily-populated
 /// 2D/3D hardware texture mirror) or a hardware block-compressed 2D/2D-array
 /// texture (`compressed`, with zero uncompressed storage buffer until a buffer
 /// consumer asks for one).
 pub(crate) struct DeviceImage {
+    /// Monotonic unique identity for this immutable resident Field, preventing
+    /// stale cache hits when a recycled buffer from [`Spare`] backs a new Field.
+    pub(crate) id: u64,
     pub(crate) buffer: Option<wgpu::Buffer>,
     /// Where the buffer goes when its Field is released, for the next output
     /// of its size. `None` when the buffer is not the backend's to keep.
@@ -29,6 +36,7 @@ pub(crate) struct DeviceImage {
 impl DeviceImage {
     pub(crate) fn new(buffer: wgpu::Buffer, spare: Option<Spare>, holds: Option<Held>) -> Self {
         Self {
+            id: NEXT_IMAGE_ID.fetch_add(1, Ordering::Relaxed),
             buffer: Some(buffer),
             spare,
             holds,
@@ -43,6 +51,7 @@ impl DeviceImage {
         spare: Option<Spare>,
     ) -> Self {
         Self {
+            id: NEXT_IMAGE_ID.fetch_add(1, Ordering::Relaxed),
             buffer: None,
             spare,
             holds: None,

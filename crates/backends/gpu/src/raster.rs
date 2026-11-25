@@ -1115,6 +1115,11 @@ pub(crate) fn rasterize(
             let (vertices, triangles) = check_rasterize(invocation, scope)?;
             (vertices, triangles, None, 0.0)
         }
+        NativeOp::Trace | NativeOp::TraceInstances => {
+            return Err(ExecutionError::Device(
+                "rasterizer called for trace op".into(),
+            ));
+        }
     };
     let pipelines = match pipelines.get_or_init(|| {
         build(

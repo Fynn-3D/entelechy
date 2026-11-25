@@ -1370,6 +1370,39 @@ impl Backend for WebGlBackend {
                     &words,
                 )?])
             }
+            NativeOp::Trace => {
+                let inp = entelechy_rules::trace::check_trace(invocation, scope)?;
+                let words = entelechy_rules::trace::trace_words(
+                    &self.input_values(scope, inp.rays)?,
+                    &self.input_values(scope, inp.vertices)?,
+                    &self.input_values(scope, inp.triangles)?,
+                    inp.flags,
+                );
+                Ok(vec![self.adopt_words(
+                    scope,
+                    entelechy_rules::trace::hit_schema(),
+                    domain,
+                    &words,
+                )?])
+            }
+            NativeOp::TraceInstances => {
+                let inp = entelechy_rules::trace::check_trace_instances(invocation, scope)?;
+                let words = entelechy_rules::trace::trace_instances_words(
+                    &self.input_values(scope, inp.rays)?,
+                    &self.input_values(scope, inp.vertices)?,
+                    &self.input_values(scope, inp.triangles)?,
+                    &self.input_values(scope, inp.meshes)?,
+                    &self.input_values(scope, inp.instances)?,
+                    inp.flags,
+                    inp.mask,
+                );
+                Ok(vec![self.adopt_words(
+                    scope,
+                    entelechy_rules::trace::hit_schema(),
+                    domain,
+                    &words,
+                )?])
+            }
         }
     }
 

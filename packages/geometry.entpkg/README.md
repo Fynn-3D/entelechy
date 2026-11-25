@@ -29,6 +29,9 @@ use "geometry.entpkg";
 - `kernels/quaternion.ent` — Rotations as unit quaternions, held in a
   `Vec4` as `x y z w`, the order glTF and Blender write.
 - `kernels/sdf.ent` — Signed distance functions.
+- `kernels/trace.ent` — Triangle-mesh ray tracing (`ray_triangle`,
+  `geometry.trace@1`, `geometry.trace_instances@1`), the reference
+  definitions that `native.trace@1` and `native.trace@2` accelerate.
 - `kernels/transform.ent` — Rigid transforms.
 - `kernels/warp.ent` — Space bent before a distance is measured:
   repeated, mirrored, turned into sectors or folded into a kaleidoscope,
@@ -37,7 +40,7 @@ use "geometry.entpkg";
 ## Tests
 
 `tests/` holds scenes and their replays, run on every backend:
-`camera.replay`, `curves.replay`, `distances.replay`, `intersect.replay`, `lens.replay`, `turns.replay`, `warps.replay`. Every Kernel of the
+`camera.replay`, `curves.replay`, `distances.replay`, `intersect.replay`, `lens.replay`, `trace.replay`, `turns.replay`, `warps.replay`. Every Kernel of the
 package is reached by one of them.
 
 Used by the [animation](../../examples/animation/README.md), [culled](../../examples/culled/README.md), [image](../../examples/image/README.md), [mesh](../../examples/mesh/README.md), [showcase](../../examples/showcase/README.md), [surface](../../examples/surface/README.md), [voxel](../../examples/voxel/README.md) examples.

@@ -27,15 +27,26 @@ pub enum NativeOp {
     /// raster package's `raster.cover@4`, fast, for what needs only the
     /// nearest depth (a shadow map).
     Cover,
+    /// Traces `rays` against a single triangle mesh `(vertices, triangles)`
+    /// into `hits`, using hardware BLAS/TLAS ray queries on supported GPUs or
+    /// a BVH fallback; see [`crate::trace`] for the contract.
+    Trace,
+    /// Traces `rays` against an instanced multi-mesh scene
+    /// `(vertices, triangles, meshes, instances)` into `hits`, caching per-mesh
+    /// BLASes and rebuilding only the TLAS when instances move; see
+    /// [`crate::trace`] for the contract.
+    TraceInstances,
 }
 
 impl NativeOp {
     /// Every native operation.
-    pub const ALL: [NativeOp; 4] = [
+    pub const ALL: [NativeOp; 6] = [
         NativeOp::Rasterize,
         NativeOp::RasterizeCutout,
         NativeOp::RasterizeCanvas,
         NativeOp::Cover,
+        NativeOp::Trace,
+        NativeOp::TraceInstances,
     ];
 
     /// The id a graph binds to.
@@ -45,11 +56,12 @@ impl NativeOp {
             Self::RasterizeCutout => KernelId::new("native.rasterize", 2).expect("valid id"),
             Self::RasterizeCanvas => KernelId::new("native.rasterize", 3).expect("valid id"),
             Self::Cover => KernelId::new("native.cover", 1).expect("valid id"),
+            Self::Trace => KernelId::new("native.trace", 1).expect("valid id"),
+            Self::TraceInstances => KernelId::new("native.trace", 2).expect("valid id"),
         }
     }
 
-    /// The structs the manifest's ports name, by index: a vertex, a
-    /// triangle, a surface texel and, for the cutout, a mask pixel.
+    /// The structs the manifest's ports name, by index.
     pub fn structs(self) -> Vec<entelechy_ir::StructDef> {
         let def = |name: &str, fields: &[(&str, Type)]| entelechy_ir::StructDef {
             name: name.to_owned(),
@@ -62,6 +74,54 @@ impl NativeOp {
                 .collect(),
             element: None,
         };
+        if matches!(self, Self::Trace | Self::TraceInstances) {
+            return vec![
+                def(
+                    "Ray",
+                    &[
+                        ("origin", Type::Vec3),
+                        ("tmin", Type::Float),
+                        ("dir", Type::Vec3),
+                        ("tmax", Type::Float),
+                    ],
+                ),
+                def(
+                    "Triangle",
+                    &[("a", Type::Int), ("b", Type::Int), ("c", Type::Int)],
+                ),
+                def(
+                    "Hit",
+                    &[
+                        ("t", Type::Float),
+                        ("bary", Type::Vec2),
+                        ("triangle", Type::Int),
+                        ("instance", Type::Int),
+                        ("custom", Type::Int),
+                        ("front", Type::Bool),
+                    ],
+                ),
+                def(
+                    "TraceMesh",
+                    &[
+                        ("vertex_offset", Type::Int),
+                        ("vertex_count", Type::Int),
+                        ("triangle_offset", Type::Int),
+                        ("triangle_count", Type::Int),
+                    ],
+                ),
+                def(
+                    "TraceInstance",
+                    &[
+                        ("row0", Type::Vec4),
+                        ("row1", Type::Vec4),
+                        ("row2", Type::Vec4),
+                        ("mesh", Type::Int),
+                        ("custom", Type::Int),
+                        ("mask", Type::Int),
+                    ],
+                ),
+            ];
+        }
         vec![
             def(
                 "Vertex",
@@ -148,10 +208,84 @@ impl NativeOp {
             });
             return manifest;
         }
+        if self == Self::TraceInstances {
+            let mut manifest = Self::Trace.manifest();
+            manifest.id = self.id();
+            manifest.inputs.push(Port {
+                name: "meshes".into(),
+                ty: PortType {
+                    element: Type::Struct(3),
+                    shape: Shape::Rows,
+                    schema: crate::trace::mesh_schema(),
+                },
+            });
+            manifest.inputs.push(Port {
+                name: "instances".into(),
+                ty: PortType {
+                    element: Type::Struct(4),
+                    shape: Shape::Rows,
+                    schema: crate::trace::instance_schema(),
+                },
+            });
+            manifest.params.push(entelechy_ir::Param {
+                name: "mask".into(),
+                ty: Type::Int,
+                default: entelechy_abi::Value::Int(255),
+            });
+            return manifest;
+        }
         match self {
-            Self::RasterizeCutout | Self::RasterizeCanvas | Self::Cover => {
+            Self::RasterizeCutout | Self::RasterizeCanvas | Self::Cover | Self::TraceInstances => {
                 unreachable!("answered above")
             }
+            Self::Trace => Manifest {
+                id: self.id(),
+                mode: entelechy_ir::Mode::Map,
+                memories: Vec::new(),
+                budget: entelechy_ir::DEFAULT_BUDGET,
+                requires: [Capability::FieldRead, Capability::FieldWrite]
+                    .into_iter()
+                    .collect::<Capabilities>(),
+                inputs: vec![
+                    Port {
+                        name: "rays".into(),
+                        ty: PortType {
+                            element: Type::Struct(0),
+                            shape: Shape::Rows,
+                            schema: crate::trace::ray_schema(),
+                        },
+                    },
+                    Port {
+                        name: "vertices".into(),
+                        ty: PortType {
+                            element: Type::Vec3,
+                            shape: Shape::Rows,
+                            schema: crate::trace::position_schema(),
+                        },
+                    },
+                    Port {
+                        name: "triangles".into(),
+                        ty: PortType {
+                            element: Type::Struct(1),
+                            shape: Shape::Rows,
+                            schema: crate::trace::triangle_schema(),
+                        },
+                    },
+                ],
+                params: vec![entelechy_ir::Param {
+                    name: "flags".into(),
+                    ty: Type::Int,
+                    default: entelechy_abi::Value::Int(0),
+                }],
+                outputs: vec![Port {
+                    name: "hits".into(),
+                    ty: PortType {
+                        element: Type::Struct(2),
+                        shape: Shape::Rows,
+                        schema: crate::trace::hit_schema(),
+                    },
+                }],
+            },
             Self::Rasterize => Manifest {
                 id: self.id(),
                 mode: entelechy_ir::Mode::Map,
@@ -232,6 +366,34 @@ impl NativeOp {
 // read at its own uv as `at_linear(mask, uv * size(mask))` reads it, is
 // below `cutout` is not drawn: it writes no surface and settles no
 // depth, so what is behind a leaf's edge is seen through it.
+"
+            }
+            Self::Trace => {
+                "\
+// native.trace@1: hardware-accelerated ray tracing over one triangle mesh.
+//   input rays: Rows<{ origin: Vec3; tmin: Float; dir: Vec3; tmax: Float; }>
+//   input vertices: Rows<Vec3>
+//   input triangles: Rows<{ a: Int; b: Int; c: Int; }>
+//   param flags: Int = 0 (1 = terminate on first hit, 2 = cull back, 4 = cull front)
+//   output hits: Rows<{ t: Float; bary: Vec2; triangle: Int; instance: Int; custom: Int; front: Bool; }>
+// The geometry package's `geometry.trace@1`, fast: traces each ray against the
+// triangle mesh via cached hardware BLAS/TLAS ray queries (or a BVH fallback).
+// Misses hold t = -1, triangle = -1, instance = -1, custom = 0, front = false.
+"
+            }
+            Self::TraceInstances => {
+                "\
+// native.trace@2: hardware-accelerated instanced multi-mesh ray tracing (TLAS).
+//   input rays: Rows<{ origin: Vec3; tmin: Float; dir: Vec3; tmax: Float; }>
+//   input vertices: Rows<Vec3>
+//   input triangles: Rows<{ a: Int; b: Int; c: Int; }>
+//   input meshes: Rows<{ vertex_offset: Int; vertex_count: Int; triangle_offset: Int; triangle_count: Int; }>
+//   input instances: Rows<{ row0: Vec4; row1: Vec4; row2: Vec4; mesh: Int; custom: Int; mask: Int; }>
+//   param flags: Int = 0 (1 = terminate on first hit, 2 = cull back, 4 = cull front)
+//   param mask: Int = 255 (8-bit visibility mask tested against instance.mask)
+//   output hits: Rows<{ t: Float; bary: Vec2; triangle: Int; instance: Int; custom: Int; front: Bool; }>
+// The geometry package's `geometry.trace_instances@1`, fast: caches per-mesh
+// BLASes and updates only the TLAS when instance transforms change.
 "
             }
             Self::Rasterize => {

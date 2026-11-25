@@ -1,0 +1,42 @@
+scene trace.esn
+
+# Default (flags = 0, mask = 255): closest hit, no face culling.
+# Single mesh: ray 0 hits front tri 0 at z=0 (t=3); ray 1 hits closer back tri 1
+# at z=1 (t=2); rays 2 and 3 miss.
+frame 0.0
+expect summary.result[0] = 3 0 0 1 0.001
+expect summary.result[1] = 2 1 0 0 0.001
+expect summary.result[2] = -1 -1 -1 0 0.001
+expect summary.result[3] = -1 -1 -1 0 0.001
+# Instanced: ray 0 hits inst 0 (custom 11, front=true -> 11.5); ray 1 hits
+# mirrored inst 2 (custom 22, front=false -> 22.0); ray 2 hits inst 3 (custom 33,
+# back tri 1 -> 33.0); ray 3 misses.
+expect summary.result[4] = 3 0 0 11.5 0.001
+expect summary.result[5] = 3 0 2 22 0.001
+expect summary.result[6] = 2.5 0 3 33 0.001
+expect summary.result[7] = -1 -1 -1 0 0.001
+# Reference Kernels (`geometry.trace@1`, `geometry.trace_instances@1`) match
+# native acceleration (`native.trace@1`, `native.trace@2`) on every ray.
+expect summary.result[8] = 0 0 0 0 0.001
+expect summary.result[9] = 0 0 0 0 0.001
+
+# Cull back faces (flags = 2): single-mesh ray 1 passes through back tri 1 and
+# hits front tri 0 behind it (t=3); instanced mirrored row 2 and back row 3 miss.
+param flags 2
+frame 0.0
+expect summary.result[0] = 3 0 0 1 0.001
+expect summary.result[1] = 3 0 0 1 0.001
+expect summary.result[4] = 3 0 0 11.5 0.001
+expect summary.result[5] = -1 -1 -1 0 0.001
+expect summary.result[6] = -1 -1 -1 0 0.001
+expect summary.result[8] = 0 0 0 0 0.001
+expect summary.result[9] = 0 0 0 0 0.001
+
+# Visibility mask (flags = 0, mask = 2): only mirrored instance row 2 is visible.
+param flags 0
+param mask 2
+frame 0.0
+expect summary.result[4] = -1 -1 -1 0 0.001
+expect summary.result[5] = 3 0 2 22 0.001
+expect summary.result[6] = -1 -1 -1 0 0.001
+expect summary.result[9] = 0 0 0 0 0.001

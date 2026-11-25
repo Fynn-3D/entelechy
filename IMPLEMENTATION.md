@@ -33,10 +33,10 @@ directions: a test needing a higher crate lives in that crate's tests.
 | Compiler | [compiler](crates/frontend/compiler/src/lib.rs), [lowering](crates/frontend/compiler/src/lower/), [help](crates/frontend/compiler/src/help.rs) | [compile tests](crates/frontend/compiler/tests/compile.rs), [surface at its version](crates/frontend/compiler/tests/surface.rs), [help written as the language takes it](crates/frontend/compiler/tests/help_examples.rs), [every signature and its capability compiled](crates/frontend/compiler/tests/help_signatures.rs) |
 | File writes | [writes](crates/interface/documents/src/writes.rs), [bundled saves](crates/interface/session/src/session/saves.rs); `else` fallback in the [evaluator](crates/core/graph/src/evaluate/mod.rs) | [session](crates/interface/session/tests/writes.rs), [bundle saves](crates/interface/session/tests/bundle.rs), [runner saves](crates/interface/player/tests/runner.rs), [lowering](crates/frontend/scene/src/lib.rs), [save replay](examples/data/tests/save.replay) |
 | Laws a world writes | output `to files` into its law's document; [history origin](crates/interface/documents/src/history.rs), [kept store](crates/interface/documents/src/store.rs), replay `allow`; [template](packages/text.entpkg/graphs/template.esn) | [genesis tests](crates/interface/session/tests/genesis.rs), [genesis replay](examples/genesis/tests/genesis.replay) |
-| Shared rules | [rules](crates/core/rules/src/lib.rs), [`Backend`](crates/core/rules/src/backend.rs), [reduce tree](crates/core/rules/src/reduce.rs), [rasterizer](crates/core/rules/src/raster.rs) | every backend's parity test |
+| Shared rules | [rules](crates/core/rules/src/lib.rs), [`Backend`](crates/core/rules/src/backend.rs), [reduce tree](crates/core/rules/src/reduce.rs), [rasterizer](crates/core/rules/src/raster.rs), [ray tracer](crates/core/rules/src/trace.rs) | every backend's parity test |
 | Reference backend | [cpu](crates/backends/cpu/src/lib.rs), [word code](crates/backends/cpu/src/eval/) | [execution](crates/backends/cpu/tests/execute.rs), [optimizer](crates/backends/cpu/tests/optimizer.rs) |
 | JIT backend | [jit](crates/backends/jit/src/lib.rs), [Cranelift emission](crates/backends/jit/src/codegen.rs), [WebAssembly emission](crates/backends/jit/src/wasm) | [parity](crates/backends/jit/tests/parity.rs), [matrix](crates/backends/jit/tests/matrix.rs), [as WebAssembly in node](crates/interface/entelechy/tests/wasm.rs) |
-| GPU backend | [gpu](crates/backends/gpu/src/lib.rs), [WGSL](crates/backends/gpu/src/wgsl/mod.rs), [GLSL ES 3.00](crates/backends/gpu/src/glsl/mod.rs), [WebGL2](crates/backends/gpu/src/webgl.rs), [rasterizer](crates/backends/gpu/src/raster.rs), [presenter](crates/backends/gpu/src/present.rs), [wait](crates/backends/gpu/src/wait.rs) | [parity](crates/backends/gpu/tests/parity.rs), [matrix](crates/backends/gpu/tests/matrix.rs) (skip without an adapter), [shader names](crates/backends/gpu/tests/names.rs), [WebGL2 in Chrome](bridges/web/test.html) |
+| GPU backend | [gpu](crates/backends/gpu/src/lib.rs), [WGSL](crates/backends/gpu/src/wgsl/mod.rs), [GLSL ES 3.00](crates/backends/gpu/src/glsl/mod.rs), [WebGL2](crates/backends/gpu/src/webgl.rs), [rasterizer](crates/backends/gpu/src/raster.rs), [ray tracer](crates/backends/gpu/src/trace.rs), [presenter](crates/backends/gpu/src/present.rs), [wait](crates/backends/gpu/src/wait.rs) | [parity](crates/backends/gpu/tests/parity.rs), [matrix](crates/backends/gpu/tests/matrix.rs) (skip without an adapter), [shader names](crates/backends/gpu/tests/names.rs), [WebGL2 in Chrome](bridges/web/test.html) |
 | Conformance matrix | [matrix](crates/backends/conformance/src/lib.rs) | bit for bit [on the JIT](crates/backends/jit/tests/matrix.rs), ints exact and floats to rounding [on the GPU](crates/backends/gpu/tests/matrix.rs) |
 | Kernel Runtime | [runtime](crates/core/kernel/src/lib.rs), [off-frame runs](crates/core/kernel/src/later.rs), [clock](crates/core/kernel/src/clock.rs) | [hot swap](crates/core/kernel/tests/swap.rs), [async](crates/interface/session/tests/later.rs), [mixed backends](crates/interface/session/tests/mixed.rs) |
 | Scene documents | [scene](crates/frontend/scene/src/lib.rs), [domain](crates/frontend/scene/src/domain.rs) | lowering tests in place, [every form lowered](crates/frontend/scene/tests/surface.rs) |
@@ -62,6 +62,7 @@ Packages built from existing modes, with no engine feature of their own.
 | [Text](packages/text.entpkg/kernels/glyph.ent) | `Rows<Glyph>`, a `Grid<Float>` atlas | [text replay](examples/text/tests/text.replay) |
 | [Skinning](packages/animation.entpkg/kernels/skin.ent), [rig contract](docs/RIGS.md) | maps over rows, `<~` | [rig tests](crates/interface/entelechy/tests/rigs.rs); [skin](examples/animation/tests/blend.replay), [crowd](examples/animation/tests/crowd.replay), [reach](examples/animation/tests/aim.replay), [elbow](packages/animation.entpkg/tests/aim.replay), [stride](examples/animation/tests/stride.replay) replays |
 | [Rasterization](packages/raster.entpkg/kernels/triangle.ent) | scatter `min` of `Long` keys with `emit` | [edges](examples/mesh/tests/edges.replay) and [cutout](examples/mesh/tests/cutout.replay) replays on three backends, [session test](crates/interface/entelechy/tests/session.rs); [ten million triangles](examples/mesh/tests/ten_million.esn) for `bench` |
+| [Ray tracing](packages/geometry.entpkg/kernels/trace.ent) | Moller-Trumbore maps over `Rows<TraceRay>`, accelerated by `native.trace@1` and `native.trace@2` | [trace replay](packages/geometry.entpkg/tests/trace.replay) on three backends, [GPU hardware RT & BVH parity](crates/backends/gpu/tests/parity.rs) |
 | [Vector drawing](packages/vector.entpkg/kernels/fill.ent) | `prefix with sum`, scatter `max` with `emit`, `value(port)` | [vector replays](examples/vector/tests/) on three backends |
 | [Rigid bodies](packages/physics.entpkg/kernels/solve.ent) | the math package, scatter `sum` of pushes, `times` with two `carry`s, `<~` | [physics replays](examples/physics/tests/) on three backends |
 | [Widgets and letters](packages/ui.entpkg/README.md) | maps over grids, `<~` navigation state, `value(port)` and `count(port)` extents | [ui replay](examples/ui/tests/ui.replay) on three backends |
@@ -197,6 +198,14 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   triangle with any `w <= 0` whole
   ([rules](crates/core/rules/src/raster.rs), [near-plane replay](packages/raster.entpkg/tests/near.replay));
   its ports are read by field ([native replay](examples/mesh/tests/native.replay)).
+  The ray tracer (`native.trace@1` single-mesh, `native.trace@2` instanced
+  multi-mesh) builds pure-Rust SAH BVHs on CPU/JIT
+  ([rules](crates/core/rules/src/trace.rs)) and dispatches hardware ray
+  queries (`EXPERIMENTAL_RAY_QUERY`, GPU-sanitized cached BLAS/TLAS) or a
+  portable GPU compute SAH BVH fallback
+  ([gpu trace](crates/backends/gpu/src/trace.rs),
+  [trace replay](packages/geometry.entpkg/tests/trace.replay),
+  [GPU parity](crates/backends/gpu/tests/parity.rs)).
 
 ### Graph, state and composition
 

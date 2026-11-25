@@ -5257,3 +5257,853 @@ fn subgroup_rasterizer_compaction_matches_fallback() {
         "subgroup raster compaction must match non-subgroup fallback bit for bit"
     );
 }
+
+#[derive(Debug, Clone, Copy)]
+struct DecodedHit {
+    t: f32,
+    u: f32,
+    v: f32,
+    triangle: i32,
+    instance: i32,
+    custom: i32,
+    front: bool,
+}
+
+fn decode_hits(words: &[u32]) -> Vec<DecodedHit> {
+    words
+        .chunks_exact(entelechy_rules::trace::HIT_WORDS)
+        .map(|w| DecodedHit {
+            t: f32::from_bits(w[0]),
+            u: f32::from_bits(w[1]),
+            v: f32::from_bits(w[2]),
+            triangle: w[3] as i32,
+            instance: w[4] as i32,
+            custom: w[5] as i32,
+            front: w[6] != 0,
+        })
+        .collect()
+}
+
+fn push_ray(out: &mut Vec<u32>, origin: [f32; 3], tmin: f32, dir: [f32; 3], tmax: f32) {
+    for f in [
+        origin[0], origin[1], origin[2], tmin, dir[0], dir[1], dir[2], tmax,
+    ] {
+        out.push(f.to_bits());
+    }
+}
+
+fn push_vec3(out: &mut Vec<u32>, p: [f32; 3]) {
+    for f in p {
+        out.push(f.to_bits());
+    }
+}
+
+fn push_mesh(out: &mut Vec<u32>, vo: i32, vc: i32, to: i32, tc: i32) {
+    out.extend([vo as u32, vc as u32, to as u32, tc as u32]);
+}
+
+fn push_instance(
+    out: &mut Vec<u32>,
+    row0: [f32; 4],
+    row1: [f32; 4],
+    row2: [f32; 4],
+    mesh: i32,
+    custom: i32,
+    mask: i32,
+) {
+    for f in row0.into_iter().chain(row1).chain(row2) {
+        out.push(f.to_bits());
+    }
+    out.extend([mesh as u32, custom as u32, mask as u32]);
+}
+
+fn assert_hits_match(label: &str, expected: &[u32], actual: &[u32], any_hit: bool, rays: &[u32]) {
+    let exp = decode_hits(expected);
+    let act = decode_hits(actual);
+    assert_eq!(exp.len(), act.len(), "{label}: hit count mismatch");
+    for (i, (&e, &a)) in exp.iter().zip(act.iter()).enumerate() {
+        let e_hit = e.triangle >= 0;
+        let a_hit = a.triangle >= 0;
+        assert_eq!(
+            e_hit, a_hit,
+            "{label}: ray {i} hit/miss mismatch: expected={e:?} actual={a:?}"
+        );
+        if !e_hit {
+            assert_eq!(a.t, -1.0, "{label}: ray {i} miss t != -1: {a:?}");
+            assert_eq!(a.triangle, -1, "{label}: ray {i} miss tri != -1: {a:?}");
+            assert_eq!(a.instance, -1, "{label}: ray {i} miss inst != -1: {a:?}");
+            assert_eq!(a.custom, 0, "{label}: ray {i} miss custom != 0: {a:?}");
+            assert!(!a.front, "{label}: ray {i} miss front != false: {a:?}");
+            continue;
+        }
+        if any_hit {
+            let base = i * entelechy_rules::trace::RAY_WORDS;
+            let tmin = f32::from_bits(rays[base + 3]);
+            let tmax = f32::from_bits(rays[base + 7]);
+            assert!(
+                a.t >= tmin - 1e-4 && a.t <= tmax + 1e-4,
+                "{label}: ray {i} any-hit t out of range [{tmin}, {tmax}]: {a:?}"
+            );
+            assert!(
+                a.u >= -1e-4 && a.v >= -1e-4 && a.u + a.v <= 1.0002,
+                "{label}: ray {i} any-hit invalid barycentrics: {a:?}"
+            );
+            continue;
+        }
+        assert_eq!(
+            a.instance, e.instance,
+            "{label}: ray {i} instance mismatch: expected={e:?} actual={a:?}"
+        );
+        assert_eq!(
+            a.custom, e.custom,
+            "{label}: ray {i} custom mismatch: expected={e:?} actual={a:?}"
+        );
+        assert_eq!(
+            a.triangle, e.triangle,
+            "{label}: ray {i} triangle mismatch: expected={e:?} actual={a:?}"
+        );
+        assert_eq!(
+            a.front, e.front,
+            "{label}: ray {i} front mismatch: expected={e:?} actual={a:?}"
+        );
+        assert!(
+            (a.t - e.t).abs() < 1e-3 * (1.0 + e.t.abs()),
+            "{label}: ray {i} t mismatch: expected={e:?} actual={a:?}"
+        );
+        assert!(
+            (a.u - e.u).abs() < 1e-3 && (a.v - e.v).abs() < 1e-3,
+            "{label}: ray {i} bary mismatch: expected={e:?} actual={a:?}"
+        );
+    }
+}
+
+#[test]
+fn hardware_ray_tracing_single_mesh_parity() {
+    let Some(gpu) = gpu() else { return };
+    let fallback = GpuBackend::new().unwrap().without_ray_query();
+    let cpu = CpuBackend;
+
+    // Build a 10x10 wavy heightfield (200 triangles) + 2 opposite-wound planes
+    // + a degenerate triangle + an OOB-clamped triangle + a NaN vertex.
+    let mut verts = Vec::new();
+    let mut tris = Vec::new();
+    let grid = 11usize;
+    for gy in 0..grid {
+        for gx in 0..grid {
+            let x = (gx as f32 / (grid - 1) as f32) * 4.0 - 2.0;
+            let y = (gy as f32 / (grid - 1) as f32) * 4.0 - 2.0;
+            let z = 0.25 * (x * 1.7).sin() * (y * 1.3).cos();
+            push_vec3(&mut verts, [x, y, z]);
+        }
+    }
+    for gy in 0..(grid - 1) {
+        for gx in 0..(grid - 1) {
+            let a = (gy * grid + gx) as u32;
+            let b = a + 1;
+            let c = a + grid as u32;
+            let d = c + 1;
+            tris.extend([a, b, d, a, d, c]);
+        }
+    }
+    // Add a front-facing and a back-facing quad floating in front of the terrain.
+    let base_v = (verts.len() / 3) as u32;
+    push_vec3(&mut verts, [-0.8, -0.8, 1.2]);
+    push_vec3(&mut verts, [0.2, -0.8, 1.2]);
+    push_vec3(&mut verts, [0.2, 0.2, 1.2]);
+    push_vec3(&mut verts, [-0.8, 0.2, 1.2]);
+    // CCW when viewed from +Z (front face for rays going -Z)
+    tris.extend([
+        base_v,
+        base_v + 1,
+        base_v + 2,
+        base_v,
+        base_v + 2,
+        base_v + 3,
+    ]);
+
+    let back_v = (verts.len() / 3) as u32;
+    push_vec3(&mut verts, [0.3, -0.5, 1.6]);
+    push_vec3(&mut verts, [1.2, -0.5, 1.6]);
+    push_vec3(&mut verts, [1.2, 0.6, 1.6]);
+    push_vec3(&mut verts, [0.3, 0.6, 1.6]);
+    // CW when viewed from +Z (back face for rays going -Z)
+    tris.extend([
+        back_v,
+        back_v + 2,
+        back_v + 1,
+        back_v,
+        back_v + 3,
+        back_v + 2,
+    ]);
+
+    // Degenerate triangle, OOB index triangle, and a NaN-vertex triangle.
+    let nan_v = (verts.len() / 3) as u32;
+    push_vec3(&mut verts, [f32::NAN, 0.0, 0.0]);
+    tris.extend([0, 0, 0]);
+    tris.extend([(-5i32) as u32, 999_999u32, 1]);
+    tris.extend([nan_v, 0, 1]);
+
+    // 48x48 camera rays + edge-case invalid rays.
+    let mut rays = Vec::new();
+    let res = 48usize;
+    for ry in 0..res {
+        for rx in 0..res {
+            // Offset slightly off grid seams so no exact edge ties arise between HW & SW.
+            let u = ((rx as f32 + 0.37) / res as f32) * 5.0 - 2.5;
+            let v = ((ry as f32 + 0.61) / res as f32) * 5.0 - 2.5;
+            let origin = [u * 0.6, v * 0.6, 3.5];
+            let dx = u * 0.4;
+            let dy = v * 0.4;
+            let dz = -3.5f32;
+            let len = (dx * dx + dy * dy + dz * dz).sqrt();
+            push_ray(
+                &mut rays,
+                origin,
+                0.01,
+                [dx / len, dy / len, dz / len],
+                20.0,
+            );
+        }
+    }
+    // Invalid / edge rays.
+    push_ray(&mut rays, [0.0, 0.0, 3.0], -0.1, [0.0, 0.0, -1.0], 10.0);
+    push_ray(&mut rays, [0.0, 0.0, 3.0], 5.0, [0.0, 0.0, -1.0], 2.0);
+    push_ray(
+        &mut rays,
+        [f32::NAN, 0.0, 3.0],
+        0.01,
+        [0.0, 0.0, -1.0],
+        10.0,
+    );
+    push_ray(
+        &mut rays,
+        [0.0, 0.0, 3.0],
+        0.01,
+        [0.0, f32::INFINITY, -1.0],
+        10.0,
+    );
+    push_ray(&mut rays, [0.0, 0.0, 3.0], 0.01, [0.0, 0.0, 0.0], 10.0);
+    push_ray(&mut rays, [0.0, 0.0, 3.0], f32::NAN, [0.0, 0.0, -1.0], 10.0);
+    push_ray(&mut rays, [0.0, 0.0, 3.0], 0.01, [0.0, 0.0, -1.0], f32::NAN);
+
+    let ray_count = (rays.len() / entelechy_rules::trace::RAY_WORDS) as u32;
+    let vert_count = (verts.len() / entelechy_rules::trace::POSITION_WORDS) as u32;
+    let tri_count = (tris.len() / entelechy_rules::trace::TRIANGLE_WORDS) as u32;
+
+    let run_backend = |backend: &dyn Backend, flags: i32, empty_mesh: bool| {
+        let mut host = Host::new(1 << 24);
+        let rh = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::trace::ray_schema(),
+                    Domain::Rows(ray_count),
+                    rays.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let (v_data, v_n, t_data, t_n) = if empty_mesh {
+            // Entelechy fields are non-empty; a single degenerate triangle tests
+            // the empty-BVH / zero-valid-primitive fast path cleanly.
+            (vec![0u32, 0, 0], 1, vec![0u32, 0, 0], 1)
+        } else {
+            (verts.clone(), vert_count, tris.clone(), tri_count)
+        };
+        let vh = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::trace::position_schema(),
+                    Domain::Rows(v_n),
+                    v_data,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let th = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::trace::triangle_schema(),
+                    Domain::Rows(t_n),
+                    t_data,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let inv = Invocation {
+            inputs: vec![rh, vh, th],
+            params: vec![entelechy_abi::Value::Int(flags)],
+            domain: Domain::Rows(ray_count),
+            context: Context::default(),
+        };
+        let out_h = Backend::execute_native(
+            backend,
+            entelechy_rules::NativeOp::Trace,
+            &inv,
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap()[0];
+        if let Some(dev) = host.resident(out_h).unwrap() {
+            Backend::download(
+                backend,
+                dev,
+                ray_count as usize * entelechy_rules::trace::HIT_WORDS * 4,
+            )
+            .unwrap()
+        } else {
+            host.data(out_h).unwrap().storage().to_vec()
+        }
+    };
+
+    for flags in [0i32, 1, 2, 3, 4, 5, 6] {
+        let any_hit = (flags & 1) != 0;
+        let cpu_out = run_backend(&cpu, flags, false);
+        let hw_out = run_backend(&gpu, flags, false);
+        let bvh_out = run_backend(&fallback, flags, false);
+        assert_hits_match(
+            &format!("single-mesh hw flags={flags}"),
+            &cpu_out,
+            &hw_out,
+            any_hit,
+            &rays,
+        );
+        assert_hits_match(
+            &format!("single-mesh bvh flags={flags}"),
+            &cpu_out,
+            &bvh_out,
+            any_hit,
+            &rays,
+        );
+        // Sanity check that culling actually exercises both front & back hits.
+        let decoded = decode_hits(&cpu_out);
+        let hit_n = decoded.iter().filter(|h| h.triangle >= 0).count();
+        match flags {
+            0 | 1 => assert!(hit_n > 500, "flags={flags} hit_n={hit_n}"),
+            2 | 3 => {
+                assert!(
+                    hit_n > 200,
+                    "cull_back should still hit front faces: {hit_n}"
+                );
+                assert!(decoded.iter().filter(|h| h.triangle >= 0).all(|h| h.front));
+            }
+            4 | 5 => {
+                assert!(
+                    hit_n > 10,
+                    "cull_front should hit back-facing quad: {hit_n}"
+                );
+                assert!(decoded.iter().filter(|h| h.triangle >= 0).all(|h| !h.front));
+            }
+            6 => assert_eq!(hit_n, 0, "cull_back|cull_front must miss all"),
+            _ => {}
+        }
+    }
+
+    // All-degenerate mesh must miss cleanly on all paths without crashing BLAS/TLAS creation.
+    let empty_cpu = run_backend(&cpu, 0, true);
+    let empty_hw = run_backend(&gpu, 0, true);
+    let empty_bvh = run_backend(&fallback, 0, true);
+    assert_eq!(empty_cpu, empty_hw);
+    assert_eq!(empty_cpu, empty_bvh);
+    assert!(decode_hits(&empty_cpu).iter().all(|h| h.triangle == -1));
+}
+
+#[test]
+fn hardware_ray_tracing_dynamic_gpu_mesh_zero_readback() {
+    let Some(gpu) = gpu() else { return };
+    let fallback = GpuBackend::new().unwrap().without_ray_query();
+    let cpu = CpuBackend;
+
+    // Kernel generating animated triangle vertices directly in GPU memory.
+    let vert_kernel = compile(
+        "kernel test.anim_verts@1 {
+            requires { field.write; }
+            param shift: Float = 0.0;
+            output positions: Rows<Vec3>;
+            compute {
+                let i = element();
+                let x = if i == 0 { -1.0 } else if i == 1 { 1.0 } else { 0.0 };
+                let y = if i == 2 { 1.0 } else { -1.0 };
+                return vec3(x + shift, y, 0.5 * shift);
+            }
+        }",
+    )
+    .unwrap();
+
+    let mut rays = Vec::new();
+    for ry in 0..16 {
+        for rx in 0..16 {
+            let x = (rx as f32 + 0.41) / 16.0 * 3.0 - 1.5;
+            let y = (ry as f32 + 0.57) / 16.0 * 3.0 - 1.5;
+            push_ray(&mut rays, [x, y, 3.0], 0.01, [0.0, 0.0, -1.0], 10.0);
+        }
+    }
+    let ray_count = (rays.len() / entelechy_rules::trace::RAY_WORDS) as u32;
+    let tris: Vec<u32> = vec![0, 1, 2];
+
+    let run_two_frames = |backend: &GpuBackend, tag: &str| {
+        let prep = Backend::prepare(backend, &vert_kernel).unwrap();
+        let mut host = Host::new(1 << 24);
+        let rh = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::trace::ray_schema(),
+                    Domain::Rows(ray_count),
+                    rays.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let th = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::trace::triangle_schema(),
+                    Domain::Rows(1),
+                    tris.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        for (frame, shift) in [(0usize, -0.35f32), (1, 0.45f32)] {
+            backend.evaluation_begun();
+            let v_inv = Invocation {
+                inputs: vec![],
+                params: vec![entelechy_abi::Value::Float(shift)],
+                domain: Domain::Rows(3),
+                context: Context::default(),
+            };
+            let vh = Backend::execute(
+                backend,
+                &*prep,
+                &vert_kernel,
+                &v_inv,
+                &mut Scope::new(&mut host, all()),
+            )
+            .unwrap()[0];
+            assert!(
+                host.resident(vh).unwrap().is_some(),
+                "{tag}: vertices should stay GPU-resident"
+            );
+            let t_inv = Invocation {
+                inputs: vec![rh, vh, th],
+                params: vec![entelechy_abi::Value::Int(0)],
+                domain: Domain::Rows(ray_count),
+                context: Context::default(),
+            };
+            let hit_h = Backend::execute_native(
+                backend,
+                entelechy_rules::NativeOp::Trace,
+                &t_inv,
+                &mut Scope::new(&mut host, all()),
+            )
+            .unwrap()[0];
+            let gpu_hits = Backend::download(
+                backend,
+                host.resident(hit_h).unwrap().unwrap(),
+                ray_count as usize * entelechy_rules::trace::HIT_WORDS * 4,
+            )
+            .unwrap();
+            // Compare against CPU using the exact generated vertices.
+            let gen_verts =
+                Backend::download(backend, host.resident(vh).unwrap().unwrap(), 3 * 3 * 4).unwrap();
+            let cpu_hits = entelechy_rules::trace::trace_words(&rays, &gen_verts, &tris, 0);
+            assert_hits_match(
+                &format!("{tag} dynamic frame {frame} shift={shift}"),
+                &cpu_hits,
+                &gpu_hits,
+                false,
+                &rays,
+            );
+            let hit_n = decode_hits(&gpu_hits)
+                .iter()
+                .filter(|h| h.triangle >= 0)
+                .count();
+            assert!(hit_n > 20, "{tag} frame {frame} hit_n={hit_n}");
+            let _ = host.release(hit_h);
+            let _ = host.release(vh);
+        }
+    };
+
+    run_two_frames(&gpu, "hw");
+    run_two_frames(&fallback, "bvh");
+    let _ = cpu;
+}
+
+#[test]
+fn hardware_ray_tracing_instanced_tlas_parity() {
+    let Some(gpu) = gpu() else { return };
+    let fallback = GpuBackend::new().unwrap().without_ray_query();
+    let cpu = CpuBackend;
+
+    // Pack 3 distinct meshes + 1 empty mesh descriptor into shared buffers.
+    let mut verts = Vec::new();
+    let mut tris = Vec::new();
+    let mut meshes = Vec::new();
+
+    // Mesh 0: unit quad in XY at z = 0 (2 triangles, CCW from +Z).
+    let m0_vo = (verts.len() / 3) as i32;
+    let m0_to = (tris.len() / 3) as i32;
+    push_vec3(&mut verts, [-0.5, -0.5, 0.0]);
+    push_vec3(&mut verts, [0.5, -0.5, 0.0]);
+    push_vec3(&mut verts, [0.5, 0.5, 0.0]);
+    push_vec3(&mut verts, [-0.5, 0.5, 0.0]);
+    tris.extend([0u32, 1, 2, 0, 2, 3]);
+    push_mesh(&mut meshes, m0_vo, 4, m0_to, 2);
+
+    // Mesh 1: pyramid (4 side triangles + 2 base triangles).
+    let m1_vo = (verts.len() / 3) as i32;
+    let m1_to = (tris.len() / 3) as i32;
+    push_vec3(&mut verts, [-0.5, -0.5, 0.0]);
+    push_vec3(&mut verts, [0.5, -0.5, 0.0]);
+    push_vec3(&mut verts, [0.5, 0.5, 0.0]);
+    push_vec3(&mut verts, [-0.5, 0.5, 0.0]);
+    push_vec3(&mut verts, [0.0, 0.0, 0.9]);
+    tris.extend([0, 1, 4, 1, 2, 4, 2, 3, 4, 3, 0, 4, 0, 2, 1, 0, 3, 2]);
+    push_mesh(&mut meshes, m1_vo, 5, m1_to, 6);
+
+    // Mesh 2: single tilted triangle.
+    let m2_vo = (verts.len() / 3) as i32;
+    let m2_to = (tris.len() / 3) as i32;
+    push_vec3(&mut verts, [-0.7, -0.4, -0.2]);
+    push_vec3(&mut verts, [0.8, -0.3, 0.3]);
+    push_vec3(&mut verts, [0.1, 0.9, 0.1]);
+    tris.extend([0, 1, 2]);
+    push_mesh(&mut meshes, m2_vo, 3, m2_to, 1);
+
+    // Mesh 3: empty mesh.
+    push_mesh(&mut meshes, 0, 0, 0, 0);
+
+    let build_instances = |shift_x: f32| {
+        let mut insts = Vec::new();
+        let c = 0.6f32.cos();
+        let s = 0.6f32.sin();
+        // Row 0: translated mesh 0
+        push_instance(
+            &mut insts,
+            [1.0, 0.0, 0.0, -1.2 + shift_x],
+            [0.0, 1.0, 0.0, -0.5],
+            [0.0, 0.0, 1.0, 0.2],
+            0,
+            101,
+            0x01,
+        );
+        // Row 1: rotated + non-uniform scaled mesh 1, negative 32-bit custom ID
+        push_instance(
+            &mut insts,
+            [1.2 * c, -0.8 * s, 0.0, 0.1],
+            [1.2 * s, 0.8 * c, 0.0, 0.2],
+            [0.0, 0.0, 1.3, -0.3],
+            1,
+            -42,
+            0x03,
+        );
+        // Row 2: invalid mesh index (must be skipped while preserving original row indices)
+        push_instance(
+            &mut insts,
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            99,
+            999,
+            0xFF,
+        );
+        // Row 3: negative-determinant reflection of mesh 0 (flips winding!), >24-bit custom ID
+        push_instance(
+            &mut insts,
+            [-1.1, 0.0, 0.0, 1.3 - shift_x],
+            [0.0, 1.1, 0.0, -0.4],
+            [0.0, 0.0, 1.0, 0.4],
+            0,
+            0x7FFF_1234,
+            0x02,
+        );
+        // Row 4: hidden (mask = 0)
+        push_instance(
+            &mut insts,
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 1.0],
+            0,
+            404,
+            0,
+        );
+        // Row 5: singular transform (det = 0)
+        push_instance(
+            &mut insts,
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+            0,
+            505,
+            0xFF,
+        );
+        // Row 6: translated + tilted mesh 2
+        push_instance(
+            &mut insts,
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 1.1],
+            [0.0, 0.0, 1.0, 0.1],
+            2,
+            606,
+            0x04,
+        );
+        // Row 7: references empty mesh 3
+        push_instance(
+            &mut insts,
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            3,
+            707,
+            0xFF,
+        );
+        insts
+    };
+
+    let mut rays = Vec::new();
+    let res = 40usize;
+    for ry in 0..res {
+        for rx in 0..res {
+            let x = ((rx as f32 + 0.31) / res as f32) * 4.4 - 2.2;
+            let y = ((ry as f32 + 0.67) / res as f32) * 3.6 - 1.4;
+            let dir = [x * 0.06, y * 0.06, -1.0f32];
+            let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+            push_ray(
+                &mut rays,
+                [x, y, 4.0],
+                0.01,
+                [dir[0] / len, dir[1] / len, dir[2] / len],
+                15.0,
+            );
+        }
+    }
+    let ray_count = (rays.len() / entelechy_rules::trace::RAY_WORDS) as u32;
+    let vert_count = (verts.len() / entelechy_rules::trace::POSITION_WORDS) as u32;
+    let tri_count = (tris.len() / entelechy_rules::trace::TRIANGLE_WORDS) as u32;
+    let mesh_count = (meshes.len() / entelechy_rules::trace::MESH_WORDS) as u32;
+
+    // Run two frames sharing immutable meshes/vertices/triangles while moving instances,
+    // verifying BLAS cache reuse and fresh TLAS updates across all masks and flags.
+    let mut cpu_host = Host::new(1 << 24);
+    let mut hw_host = Host::new(1 << 24);
+    let mut bvh_host = Host::new(1 << 24);
+
+    let adopt_scene = |host: &mut Host| {
+        let rh = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::trace::ray_schema(),
+                    Domain::Rows(ray_count),
+                    rays.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let vh = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::trace::position_schema(),
+                    Domain::Rows(vert_count),
+                    verts.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let th = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::trace::triangle_schema(),
+                    Domain::Rows(tri_count),
+                    tris.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mh = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::trace::mesh_schema(),
+                    Domain::Rows(mesh_count),
+                    meshes.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        (rh, vh, th, mh)
+    };
+    let cpu_scene = adopt_scene(&mut cpu_host);
+    let hw_scene = adopt_scene(&mut hw_host);
+    let bvh_scene = adopt_scene(&mut bvh_host);
+
+    for (frame, shift_x) in [(0usize, 0.0f32), (1, 0.45f32)] {
+        gpu.evaluation_begun();
+        fallback.evaluation_begun();
+        let insts = build_instances(shift_x);
+        let inst_count = (insts.len() / entelechy_rules::trace::INSTANCE_WORDS) as u32;
+        let adopt_inst = |host: &mut Host| {
+            host.adopt(
+                entelechy_abi::FieldData::from_storage(
+                    entelechy_rules::trace::instance_schema(),
+                    Domain::Rows(inst_count),
+                    insts.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        };
+        let cpu_ih = adopt_inst(&mut cpu_host);
+        let hw_ih = adopt_inst(&mut hw_host);
+        let bvh_ih = adopt_inst(&mut bvh_host);
+
+        for (flags, mask) in [
+            (0i32, 0xFFi32),
+            (1, 0xFF),
+            (2, 0xFF),
+            (3, 0xFF),
+            (4, 0xFF),
+            (5, 0xFF),
+            (6, 0xFF),
+            (0, 0x01),
+            (0, 0x02),
+            (0, 0x04),
+            (0, 0x00),
+        ] {
+            let run_one = |backend: &dyn Backend,
+                           host: &mut Host,
+                           sc: (
+                entelechy_abi::Handle,
+                entelechy_abi::Handle,
+                entelechy_abi::Handle,
+                entelechy_abi::Handle,
+            ),
+                           ih: entelechy_abi::Handle| {
+                let inv = Invocation {
+                    inputs: vec![sc.0, sc.1, sc.2, sc.3, ih],
+                    params: vec![
+                        entelechy_abi::Value::Int(flags),
+                        entelechy_abi::Value::Int(mask),
+                    ],
+                    domain: Domain::Rows(ray_count),
+                    context: Context::default(),
+                };
+                let out_h = Backend::execute_native(
+                    backend,
+                    entelechy_rules::NativeOp::TraceInstances,
+                    &inv,
+                    &mut Scope::new(host, all()),
+                )
+                .unwrap()[0];
+                let words = if let Some(dev) = host.resident(out_h).unwrap() {
+                    Backend::download(
+                        backend,
+                        dev,
+                        ray_count as usize * entelechy_rules::trace::HIT_WORDS * 4,
+                    )
+                    .unwrap()
+                } else {
+                    host.data(out_h).unwrap().storage().to_vec()
+                };
+                let _ = host.release(out_h);
+                words
+            };
+            let any_hit = (flags & 1) != 0;
+            let cpu_out = run_one(&cpu, &mut cpu_host, cpu_scene, cpu_ih);
+            let hw_out = run_one(&gpu, &mut hw_host, hw_scene, hw_ih);
+            let bvh_out = run_one(&fallback, &mut bvh_host, bvh_scene, bvh_ih);
+            assert_hits_match(
+                &format!("tlas hw frame={frame} flags={flags} mask={mask:#x}"),
+                &cpu_out,
+                &hw_out,
+                any_hit,
+                &rays,
+            );
+            assert_hits_match(
+                &format!("tlas bvh frame={frame} flags={flags} mask={mask:#x}"),
+                &cpu_out,
+                &bvh_out,
+                any_hit,
+                &rays,
+            );
+            if flags == 0 && mask == 0xFF {
+                let decoded = decode_hits(&cpu_out);
+                // Every valid instance (rows 0, 1, 3, 6) must be hit!
+                for expected_inst in [0i32, 1, 3, 6] {
+                    assert!(
+                        decoded.iter().any(|h| h.instance == expected_inst),
+                        "frame={frame}: expected hits on instance {expected_inst}"
+                    );
+                }
+                // Mirrored instance row 3 (neg-det reflection of CCW quad) must have front == false!
+                assert!(
+                    decoded
+                        .iter()
+                        .filter(|h| h.instance == 3)
+                        .all(|h| !h.front && h.custom == 0x7FFF_1234),
+                    "frame={frame}: mirrored instance row 3 must flip front face and preserve 32-bit custom"
+                );
+            }
+        }
+        let _ = cpu_host.release(cpu_ih);
+        let _ = hw_host.release(hw_ih);
+        let _ = bvh_host.release(bvh_ih);
+    }
+
+    // All-hidden instances must cleanly trigger the zero-active-instance TLAS fast path.
+    let mut hidden_insts = Vec::new();
+    push_instance(
+        &mut hidden_insts,
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        0,
+        0,
+        0,
+    );
+    let adopt_hidden = |host: &mut Host| {
+        host.adopt(
+            entelechy_abi::FieldData::from_storage(
+                entelechy_rules::trace::instance_schema(),
+                Domain::Rows(1),
+                hidden_insts.clone(),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    let h_cpu = adopt_hidden(&mut cpu_host);
+    let h_hw = adopt_hidden(&mut hw_host);
+    let h_bvh = adopt_hidden(&mut bvh_host);
+    for (backend, host, sc, ih) in [
+        (&cpu as &dyn Backend, &mut cpu_host, cpu_scene, h_cpu),
+        (&gpu as &dyn Backend, &mut hw_host, hw_scene, h_hw),
+        (&fallback as &dyn Backend, &mut bvh_host, bvh_scene, h_bvh),
+    ] {
+        let inv = Invocation {
+            inputs: vec![sc.0, sc.1, sc.2, sc.3, ih],
+            params: vec![
+                entelechy_abi::Value::Int(0),
+                entelechy_abi::Value::Int(0xFF),
+            ],
+            domain: Domain::Rows(ray_count),
+            context: Context::default(),
+        };
+        let out_h = Backend::execute_native(
+            backend,
+            entelechy_rules::NativeOp::TraceInstances,
+            &inv,
+            &mut Scope::new(host, all()),
+        )
+        .unwrap()[0];
+        let words = if let Some(dev) = host.resident(out_h).unwrap() {
+            Backend::download(
+                backend,
+                dev,
+                ray_count as usize * entelechy_rules::trace::HIT_WORDS * 4,
+            )
+            .unwrap()
+        } else {
+            host.data(out_h).unwrap().storage().to_vec()
+        };
+        assert!(decode_hits(&words).iter().all(|h| h.triangle == -1));
+        let _ = host.release(out_h);
+    }
+}

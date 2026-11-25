@@ -42,5 +42,9 @@ entelechy-compiler = { path = "../../frontend/compiler" }
 entelechy-conformance = { path = "../../backends/conformance" }
 entelechy-graph = { path = "../../core/graph" }
 
-[lints]
-workspace = true
+# Native builds need a single isolated `wgpu::ExperimentalFeatures::enabled()`
+# token to opt into hardware `EXPERIMENTAL_RAY_QUERY` BLAS/TLAS acceleration
+# structures; `src/lib.rs` enforces `#![deny(unsafe_code)]` crate-wide with one
+# surgical `#[allow(unsafe_code)]` on that expression.
+[lints.rust]
+unsafe_code = "allow"

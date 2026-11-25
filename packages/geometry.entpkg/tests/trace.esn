@@ -1,0 +1,222 @@
+// Verifies `geometry.trace@1`, `geometry.trace_instances@1`, `native.trace@1`,
+// and `native.trace@2` agree on single-mesh and instanced scenes (including
+// front/back culling, visibility masks, skipped instances, and negative-
+// determinant mirror reflections) across CPU, JIT, and GPU.
+use "../kernels/";
+
+param flags: Int = 0;
+param mask: Int = 255;
+
+// Two triangles: a CCW front-facing triangle at z = 0, and a CW back-facing
+// triangle at z = 1 overlapping the right side.
+node vertices: kernel {
+    requires { field.write; }
+    output result: Rows<Vec3>;
+    domain = 6;
+    compute {
+        let i = element();
+        return if i == 0 { vec3(-1.0, -1.0, 0.0) }
+            else if i == 1 { vec3(1.0, -1.0, 0.0) }
+            else if i == 2 { vec3(0.0, 1.0, 0.0) }
+            else if i == 3 { vec3(0.0, -0.8, 1.0) }
+            else if i == 4 { vec3(0.6, 0.8, 1.0) }
+            else { vec3(1.2, -0.8, 1.0) };
+    }
+}
+
+node triangles: kernel {
+    requires { field.write; }
+    output result: Rows<TraceTriangle>;
+    domain = 2;
+    compute {
+        return if element() == 0 {
+            TraceTriangle { a: 0, b: 1, c: 2 }
+        } else {
+            TraceTriangle { a: 3, b: 4, c: 5 }
+        };
+    }
+}
+
+// Per-mesh local indices (each mesh slice indexes 0..vertex_count - 1).
+node mesh_triangles: kernel {
+    requires { field.write; }
+    output result: Rows<TraceTriangle>;
+    domain = 2;
+    compute {
+        return TraceTriangle { a: 0, b: 1, c: 2 };
+    }
+}
+
+// Two meshes in the shared buffers (mesh 0 = tri 0, mesh 1 = tri 1).
+node meshes: kernel {
+    requires { field.write; }
+    output result: Rows<TraceMesh>;
+    domain = 2;
+    compute {
+        return if element() == 0 {
+            TraceMesh { vertex_offset: 0, vertex_count: 3, triangle_offset: 0, triangle_count: 1 }
+        } else {
+            TraceMesh { vertex_offset: 3, vertex_count: 3, triangle_offset: 1, triangle_count: 1 }
+        };
+    }
+}
+
+// Four instances:
+// 0: translated mesh 0 at x = -1.2 (custom 11, mask 1, det > 0 -> front)
+// 1: hidden instance (mask 0 -> skipped)
+// 2: mirrored mesh 0 at x = +1.2 with scale(-1, 1, 1) (custom 22, mask 2, det < 0 -> back!)
+// 3: translated mesh 1 at x = 0.0, y = 0.2 (custom 33, mask 4)
+node instances: kernel {
+    requires { field.write; }
+    output result: Rows<TraceInstance>;
+    domain = 4;
+    compute {
+        let i = element();
+        return if i == 0 {
+            TraceInstance {
+                row0: vec4(1.0, 0.0, 0.0, -1.2),
+                row1: vec4(0.0, 1.0, 0.0, 0.0),
+                row2: vec4(0.0, 0.0, 1.0, 0.0),
+                mesh: 0, custom: 11, mask: 1
+            }
+        } else if i == 1 {
+            TraceInstance {
+                row0: vec4(1.0, 0.0, 0.0, 0.0),
+                row1: vec4(0.0, 1.0, 0.0, 0.0),
+                row2: vec4(0.0, 0.0, 1.0, 0.5),
+                mesh: 0, custom: 99, mask: 0
+            }
+        } else if i == 2 {
+            TraceInstance {
+                row0: vec4(-1.0, 0.0, 0.0, 1.2),
+                row1: vec4(0.0, 1.0, 0.0, 0.0),
+                row2: vec4(0.0, 0.0, 1.0, 0.0),
+                mesh: 0, custom: 22, mask: 2
+            }
+        } else {
+            TraceInstance {
+                row0: vec4(1.0, 0.0, 0.0, -0.5),
+                row1: vec4(0.0, 1.0, 0.0, 0.1),
+                row2: vec4(0.0, 0.0, 1.0, -0.5),
+                mesh: 1, custom: 33, mask: 4
+            }
+        };
+    }
+}
+
+// 4 single-mesh rays: front hit, back-over-front overlap, miss, invalid tmin.
+node single_rays: kernel {
+    requires { field.write; }
+    output result: Rows<TraceRay>;
+    domain = 4;
+    compute {
+        let i = element();
+        return if i == 0 {
+            TraceRay { origin: vec3(-0.2, -0.2, 3.0), tmin: 0.01, dir: vec3(0.0, 0.0, -1.0), tmax: 10.0 }
+        } else if i == 1 {
+            TraceRay { origin: vec3(0.35, -0.4, 3.0), tmin: 0.01, dir: vec3(0.0, 0.0, -1.0), tmax: 10.0 }
+        } else if i == 2 {
+            TraceRay { origin: vec3(3.0, 3.0, 3.0), tmin: 0.01, dir: vec3(0.0, 0.0, -1.0), tmax: 10.0 }
+        } else {
+            TraceRay { origin: vec3(0.0, 0.0, 3.0), tmin: -1.0, dir: vec3(0.0, 0.0, -1.0), tmax: 10.0 }
+        };
+    }
+}
+
+// 4 instanced rays: hits instance 0, hits mirrored instance 2, hits instance 3, misses.
+node inst_rays: kernel {
+    requires { field.write; }
+    output result: Rows<TraceRay>;
+    domain = 4;
+    compute {
+        let i = element();
+        return if i == 0 {
+            TraceRay { origin: vec3(-1.2, -0.2, 3.0), tmin: 0.01, dir: vec3(0.0, 0.0, -1.0), tmax: 10.0 }
+        } else if i == 1 {
+            TraceRay { origin: vec3(1.2, -0.2, 3.0), tmin: 0.01, dir: vec3(0.0, 0.0, -1.0), tmax: 10.0 }
+        } else if i == 2 {
+            TraceRay { origin: vec3(0.1, -0.1, 3.0), tmin: 0.01, dir: vec3(0.0, 0.0, -1.0), tmax: 10.0 }
+        } else {
+            TraceRay { origin: vec3(5.0, 5.0, 3.0), tmin: 0.01, dir: vec3(0.0, 0.0, -1.0), tmax: 10.0 }
+        };
+    }
+}
+
+node ref_single: geometry.trace@1 {
+    rays <- single_rays.result;
+    vertices <- vertices.result;
+    triangles <- triangles.result;
+    flags = flags;
+}
+
+node hw_single: native.trace@1 {
+    rays <- single_rays.result;
+    vertices <- vertices.result;
+    triangles <- triangles.result;
+    flags = flags;
+}
+
+node ref_inst: geometry.trace_instances@1 {
+    rays <- inst_rays.result;
+    vertices <- vertices.result;
+    triangles <- mesh_triangles.result;
+    meshes <- meshes.result;
+    instances <- instances.result;
+    flags = flags;
+    mask = mask;
+}
+
+node hw_inst: native.trace@2 {
+    rays <- inst_rays.result;
+    vertices <- vertices.result;
+    triangles <- mesh_triangles.result;
+    meshes <- meshes.result;
+    instances <- instances.result;
+    flags = flags;
+    mask = mask;
+}
+
+// Packs (t, triangle, instance, custom*2 + front) for inspection AND verifies
+// reference and native outputs match on every ray.
+node summary: kernel {
+    requires { field.read; field.write; }
+    input rs: Rows<TraceHit> <- ref_single.hits;
+    input hs: Rows<TraceHit> <- hw_single.hits;
+    input ri: Rows<TraceHit> <- ref_inst.hits;
+    input hi: Rows<TraceHit> <- hw_inst.hits;
+    output result: Rows<Vec4>;
+    domain = 10;
+    compute {
+        let i = element();
+        if i < 4 {
+            let h = at(hs, i);
+            return vec4(h.t, float(h.triangle), float(h.instance), if h.front { 1.0 } else { 0.0 });
+        }
+        if i < 8 {
+            let h = at(hi, i - 4);
+            return vec4(h.t, float(h.triangle), float(h.instance), float(h.custom) + (if h.front { 0.5 } else { 0.0 }));
+        }
+        if i == 8 {
+            let err = loop 4 with e = 0.0 {
+                let k = index();
+                let a = at(rs, k);
+                let b = at(hs, k);
+                let d = abs(a.t - b.t) + length(a.bary - b.bary)
+                    + (if a.triangle == b.triangle && a.instance == b.instance && a.custom == b.custom && a.front == b.front { 0.0 } else { 100.0 });
+                max(e, d)
+            };
+            return vec4(err, 0.0, 0.0, 0.0);
+        }
+        let err = loop 4 with e = 0.0 {
+            let k = index();
+            let a = at(ri, k);
+            let b = at(hi, k);
+            let d = abs(a.t - b.t) + length(a.bary - b.bary)
+                + (if a.triangle == b.triangle && a.instance == b.instance && a.custom == b.custom && a.front == b.front { 0.0 } else { 100.0 });
+            max(e, d)
+        };
+        return vec4(err, 0.0, 0.0, 0.0);
+    }
+}
+
+output result <- summary.result;

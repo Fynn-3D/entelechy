@@ -1067,6 +1067,8 @@ impl Backend for CpuBackend {
             NativeOp::RasterizeCanvas => {
                 entelechy_rules::raster::rasterize_canvas(invocation, scope)
             }
+            NativeOp::Trace => entelechy_rules::trace::trace(invocation, scope),
+            NativeOp::TraceInstances => entelechy_rules::trace::trace_instances(invocation, scope),
         }
     }
 }

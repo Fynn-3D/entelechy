@@ -104,6 +104,9 @@ fn bundle_needs_compute_gpu(
             continue;
         }
         let Some(module) = by_id.get(&node.kernel).copied() else {
+            if node.kernel.name() == "native.trace" {
+                return true;
+            }
             if node.kernel.name() == "native.rasterize" || node.kernel.name() == "native.cover" {
                 has_native_raster = true;
             }

@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 #![warn(missing_docs)]
 //! GPU backend.
 //!
@@ -24,6 +25,7 @@ mod same;
 mod stage;
 mod texture;
 mod timing;
+mod trace;
 mod wait;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 mod webgl;
@@ -87,6 +89,12 @@ pub(crate) struct WgpuBackend {
     unbuilt: Arc<Mutex<Vec<(Validated, String)>>>,
     /// The rasterizer's pipelines, built on first use.
     raster: OnceLock<Result<raster::RasterPipelines, String>>,
+    /// Hardware ray-query pipelines (`enable wgpu_ray_query;`), built on first use.
+    trace_hw: OnceLock<Result<trace::HwTraceSlot, String>>,
+    /// Portable GPU Compute BVH ray-tracing pipelines, built on first use.
+    trace_bvh: OnceLock<Result<trace::BvhTracePipelines, String>>,
+    /// Bounded cache of hardware BLAS/TLAS acceleration structures and GPU BVHs.
+    trace_cache: trace::TraceCache,
     /// The pass that compares two Fields, built on first use.
     same: OnceLock<Result<same::SamePipeline, String>>,
     /// The pass that pads unaligned rows for `copy_buffer_to_texture`, built on first use.
@@ -139,6 +147,8 @@ pub(crate) struct WgpuBackend {
     float32_filterable: bool,
     /// Hardware subgroup (wave / SIMD-group) capabilities (`SUBGROUP`).
     subgroups: wgsl::SubgroupCaps,
+    /// Whether hardware ray tracing (`EXPERIMENTAL_RAY_QUERY`) is enabled on this device.
+    ray_query: bool,
     /// Failure words and their readback buffers, for reuse: a checked node
     /// takes a pair each run.
     failures: Arc<Mutex<Vec<(wgpu::Buffer, wgpu::Buffer)>>>,
@@ -325,6 +335,67 @@ impl WgpuBackend {
         self
     }
 
+    /// Downloads `byte_len` bytes from a resident [`DeviceImage`] while the
+    /// caller already holds `self.lock`.
+    pub(crate) fn download_unlocked(
+        &self,
+        device: &(dyn Any + Send + Sync),
+        byte_len: usize,
+    ) -> Result<Vec<u32>, ExecutionError> {
+        let image = device.downcast_ref::<DeviceImage>().ok_or_else(|| {
+            ExecutionError::Device("image is resident on a different backend".into())
+        })?;
+        let src_buffer = self.buffer_of(image)?;
+        self.batch.flush()?;
+        if byte_len == 0 {
+            return Ok(Vec::new());
+        }
+        let size = byte_len as u64;
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("staging"),
+            size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("entelechy download"),
+            });
+        encoder.copy_buffer_to_buffer(&src_buffer, 0, &staging, 0, size);
+        self.submit(encoder.finish());
+        self.spent
+            .time(|| {
+                self.wait
+                    .map_read(&self.device, &self.queue, staging.slice(..))
+            })
+            .map_err(|error| ExecutionError::Device(told(&self.heard, error)))?;
+        self.page_queue.clear();
+        let words = {
+            let view = staging
+                .slice(..)
+                .get_mapped_range()
+                .map_err(|error| ExecutionError::Device(error.to_string()))?;
+            words_of(&view[..byte_len])
+        };
+        staging.unmap();
+        crate::wait::discard(staging);
+        Ok(words)
+    }
+
+    /// Whether hardware ray tracing (`EXPERIMENTAL_RAY_QUERY` BLAS/TLAS) is
+    /// active on this device.
+    pub fn ray_query(&self) -> bool {
+        self.ray_query
+    }
+
+    /// Disables hardware ray queries on this backend, exercising the portable
+    /// GPU Compute BVH fallback on hardware that supports `EXPERIMENTAL_RAY_QUERY`.
+    pub fn without_ray_query(mut self) -> Self {
+        self.ray_query = false;
+        self
+    }
+
     /// Gives the device a run, work or copy: every run but the empty ones
     /// a wait is marked by goes through here, so a clocked frame counts
     /// each.
@@ -353,7 +424,8 @@ impl WgpuBackend {
         // Every buffer binding the adapter offers: a Kernel binds one buffer
         // for the output and one per input, so this limit bounds the widest
         // Kernel the device runs.
-        let required_limits = wgpu::Limits {
+        #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
+        let mut required_limits = wgpu::Limits {
             max_storage_buffer_binding_size: adapter_limits.max_storage_buffer_binding_size,
             max_buffer_size: adapter_limits.max_buffer_size,
             max_storage_buffers_per_shader_stage: adapter_limits
@@ -441,11 +513,34 @@ impl WgpuBackend {
         } else {
             wgsl::SubgroupCaps::default()
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        let ray_query = adapter
+            .features()
+            .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
+        #[cfg(target_arch = "wasm32")]
+        let ray_query = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        let experimental_features = if ray_query {
+            features |= wgpu::Features::EXPERIMENTAL_RAY_QUERY;
+            required_limits = required_limits.using_acceleration_structure_values(adapter_limits);
+            // SAFETY: Single isolated opt-in for native hardware BLAS/TLAS ray
+            // queries (`wgpu::Features::EXPERIMENTAL_RAY_QUERY`); wasm32 builds
+            // never call this and run the safe GPU Compute BVH fallback.
+            #[allow(unsafe_code)]
+            unsafe {
+                wgpu::ExperimentalFeatures::enabled()
+            }
+        } else {
+            wgpu::ExperimentalFeatures::disabled()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let experimental_features = wgpu::ExperimentalFeatures::disabled();
         let (device, queue) = wait
             .block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("entelechy"),
                 required_features: features,
                 required_limits,
+                experimental_features,
                 ..Default::default()
             }))
             .map_err(|error| GpuError(error.to_string()))?;
@@ -533,6 +628,9 @@ impl WgpuBackend {
             written: Mutex::new((Vec::new(), Vec::new())),
             staging: Mutex::new(StageScratch::default()),
             raster: OnceLock::new(),
+            trace_hw: OnceLock::new(),
+            trace_bvh: OnceLock::new(),
+            trace_cache: trace::TraceCache::default(),
             same: OnceLock::new(),
             row_pad: OnceLock::new(),
             decompress_bc: OnceLock::new(),
@@ -553,6 +651,7 @@ impl WgpuBackend {
             texture_compression_bc,
             float32_filterable,
             subgroups,
+            ray_query,
             uploaded: std::sync::atomic::AtomicU64::new(0),
             failures: Arc::new(Mutex::new(Vec::new())),
             last_nanos: std::sync::atomic::AtomicU64::new(u64::MAX),
@@ -799,6 +898,7 @@ impl Backend for WgpuBackend {
     fn evaluation_begun(&self) {
         self.spare.evaluation_begun();
         self.mirrors.evaluation_begun();
+        self.trace_cache.evaluation_begun();
     }
 
     fn memory(&self) -> Vec<(&'static str, u64)> {
@@ -1389,6 +1489,9 @@ impl Backend for WgpuBackend {
             | NativeOp::RasterizeCutout
             | NativeOp::RasterizeCanvas
             | NativeOp::Cover => raster::rasterize(self, &self.raster, invocation, scope, op),
+            NativeOp::Trace | NativeOp::TraceInstances => {
+                trace::trace(self, &self.trace_hw, &self.trace_bvh, invocation, scope, op)
+            }
         }
     }
 
@@ -1397,46 +1500,12 @@ impl Backend for WgpuBackend {
         device: &(dyn Any + Send + Sync),
         byte_len: usize,
     ) -> Result<Vec<u32>, String> {
-        let image = device
-            .downcast_ref::<DeviceImage>()
-            .ok_or_else(|| "image is resident on a different backend".to_string())?;
         let _guard = self
             .lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let src_buffer = self.buffer_of(image).map_err(|error| error.to_string())?;
-        self.batch.flush().map_err(|error| error.to_string())?;
-        let size = byte_len as u64;
-        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("staging"),
-            size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("entelechy download"),
-            });
-        encoder.copy_buffer_to_buffer(&src_buffer, 0, &staging, 0, size);
-        self.submit(encoder.finish());
-        self.spent
-            .time(|| {
-                self.wait
-                    .map_read(&self.device, &self.queue, staging.slice(..))
-            })
-            .map_err(|error| told(&self.heard, error))?;
-        self.page_queue.clear();
-        let words = {
-            let view = staging
-                .slice(..)
-                .get_mapped_range()
-                .map_err(|error| error.to_string())?;
-            words_of(&view[..byte_len])
-        };
-        staging.unmap();
-        crate::wait::discard(staging);
-        Ok(words)
+        self.download_unlocked(device, byte_len)
+            .map_err(|error| error.to_string())
     }
 
     fn download_later(
@@ -1593,6 +1662,26 @@ impl GpuBackend {
     pub fn without_subgroups(self) -> Self {
         match self.0 {
             Driver::Wgpu(b) => Self(Driver::Wgpu(Box::new((*b).without_subgroups()))),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(b) => Self(Driver::WebGl(b)),
+        }
+    }
+
+    /// Whether hardware ray tracing (`EXPERIMENTAL_RAY_QUERY` BLAS/TLAS) is
+    /// enabled on this backend. Always false on WebGL2 and WebGPU.
+    pub fn ray_query(&self) -> bool {
+        match &self.0 {
+            Driver::Wgpu(b) => b.ray_query(),
+            #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+            Driver::WebGl(_) => false,
+        }
+    }
+
+    /// This backend with hardware ray queries disabled, exercising the
+    /// portable GPU Compute BVH fallback on hardware that supports ray queries.
+    pub fn without_ray_query(self) -> Self {
+        match self.0 {
+            Driver::Wgpu(b) => Self(Driver::Wgpu(Box::new((*b).without_ray_query()))),
             #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
             Driver::WebGl(b) => Self(Driver::WebGl(b)),
         }
