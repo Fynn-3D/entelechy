@@ -851,6 +851,8 @@ struct ServedRunner<'a>(&'a mut WindowRunner<DevHooks>);
 
 impl entelechy_protocol::Served for ServedRunner<'_> {
     fn session(&mut self) -> &mut Session {
+        let view = self.0.view();
+        self.0.session.set_window(Some((view.window, view.scale)));
         &mut self.0.session
     }
 

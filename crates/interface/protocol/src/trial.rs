@@ -102,11 +102,17 @@ pub(crate) fn trial(session: &mut Session, request: &Request) -> Result<Json, Js
         }
         _ => request.json().clone(),
     };
-    let base_ctx = if context_given(&ctx_json).is_empty() {
+    let mut base_ctx = if context_given(&ctx_json).is_empty() {
         session.last_context()
     } else {
         context_of(session, &ctx_json)?
     };
+    if (base_ctx.window[0] <= 0.0 || base_ctx.window[1] <= 0.0)
+        && let Some((w, s)) = session.window()
+    {
+        base_ctx.window = w;
+        base_ctx.scale = s;
+    }
 
     let texts: Vec<(std::path::PathBuf, String)> = changes
         .iter()
@@ -450,11 +456,17 @@ pub(crate) fn diagnose(session: &mut Session, request: &Request) -> Result<Json,
 
     let mut eval_error: Option<Json> = None;
     if ask_measure || session.last_report().is_none() {
-        let ctx = if context_given(request.json()).is_empty() {
+        let mut ctx = if context_given(request.json()).is_empty() {
             session.last_context()
         } else {
             context_of(session, request.json())?
         };
+        if (ctx.window[0] <= 0.0 || ctx.window[1] <= 0.0)
+            && let Some((w, s)) = session.window()
+        {
+            ctx.window = w;
+            ctx.scale = s;
+        }
         session.set_measured(true);
         let res = session.evaluate(&ctx);
         session.set_measured(false);

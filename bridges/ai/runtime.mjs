@@ -90,6 +90,8 @@ function buildTrialRequest(proposal, gates, commit) {
   if (gates.dt != null) req.dt = gates.dt;
   if (gates.fresh_state != null) req.fresh_state = gates.fresh_state;
   if (gates.read_outputs != null) req.read_outputs = gates.read_outputs;
+  if (gates.window != null) req.window = gates.window;
+  if (gates.scale != null) req.scale = gates.scale;
 
   if (Array.isArray(proposal.documents) && proposal.documents.length > 0) {
     req.documents = proposal.documents;
