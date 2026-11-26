@@ -98,6 +98,89 @@ pub(crate) fn kernels(session: &Session) -> Result<Json, Json> {
     }))
 }
 
+/// Searches reachable packages, Kernels, and preset graphs without loading them.
+pub(crate) fn catalog(session: &Session, request: &Request) -> Result<Json, Json> {
+    use entelechy_session::catalog::{CatalogKind, CatalogQuery};
+    let kind = match request.get("kind").and_then(Json::as_str) {
+        None => None,
+        Some("kernel") => Some(CatalogKind::Kernel),
+        Some("graph") => Some(CatalogKind::Graph),
+        Some(other) => {
+            return Err(failure(format!(
+                "`kind` is \"kernel\" or \"graph\", not `{other}`"
+            )));
+        }
+    };
+    let limit = match request.get("limit") {
+        None => Some(50usize),
+        Some(val) => {
+            let n = val
+                .as_i64()
+                .ok_or_else(|| failure("`limit` must be an integer between 1 and 500"))?;
+            if !(1..=500).contains(&n) {
+                return Err(failure(format!(
+                    "`limit` must be between 1 and 500, got {n}"
+                )));
+            }
+            Some(n as usize)
+        }
+    };
+    let filter = CatalogQuery {
+        query: request
+            .get("query")
+            .and_then(Json::as_str)
+            .map(str::to_owned),
+        package: request
+            .get("package")
+            .and_then(Json::as_str)
+            .map(str::to_owned),
+        kind,
+        mode: request
+            .get("mode")
+            .and_then(Json::as_str)
+            .map(str::to_owned),
+        input: request
+            .get("input")
+            .and_then(Json::as_str)
+            .map(str::to_owned),
+        output: request
+            .get("output")
+            .and_then(Json::as_str)
+            .map(str::to_owned),
+        requires: request
+            .get("requires")
+            .and_then(Json::as_str)
+            .map(str::to_owned),
+        limit,
+    };
+    let res = session.catalog(&filter);
+    Ok(json!({
+        "packages": res.packages.iter().map(|p| json!({
+            "name": p.name,
+            "id": p.id,
+            "doc": p.doc,
+            "use_path": p.use_path,
+            "path": p.path.display().to_string(),
+            "kernels": p.kernels,
+            "graphs": p.graphs,
+        })).collect::<Vec<_>>(),
+        "total": res.total,
+        "entries": res.entries.iter().map(|e| json!({
+            "kind": e.kind.as_str(),
+            "id": e.id,
+            "package": e.package,
+            "use": e.use_stmt,
+            "path": e.path.display().to_string(),
+            "doc": e.doc,
+            "mode": e.mode,
+            "requires": e.requires,
+            "inputs": e.inputs.iter().map(|p| json!({ "name": p.name, "type": p.ty, "doc": p.doc })).collect::<Vec<_>>(),
+            "params": e.params.iter().map(|p| json!({ "name": p.name, "type": p.ty, "default": p.default, "doc": p.doc })).collect::<Vec<_>>(),
+            "outputs": e.outputs.iter().map(|p| json!({ "name": p.name, "type": p.ty, "doc": p.doc })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+    }))
+}
+
 /// One Kernel's manifest and the source `publish` takes.
 pub(crate) fn kernel(session: &Session, request: &Request) -> Result<Json, Json> {
     let id = request.kernel()?;

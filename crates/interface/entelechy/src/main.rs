@@ -54,6 +54,7 @@ fn main() -> ExitCode {
         Some("new") => new_scene(&args[1..]),
         Some("bench") => measure(&args[1..]),
         Some("graph") => graph(&args[1..]),
+        Some("catalog") => catalog_cmd(&args[1..]),
         Some("trace") => trace(&args[1..]),
         Some("help") => help(&args[1..]),
         Some("version") => {
@@ -152,6 +153,141 @@ fn check(args: &[String]) -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+fn catalog_cmd(args: &[String]) -> Result<(), String> {
+    use entelechy_session::catalog::{CatalogKind, CatalogQuery};
+    let mut query_terms: Vec<String> = Vec::new();
+    let mut package = None;
+    let mut kind = None;
+    let mut mode = None;
+    let mut input = None;
+    let mut output = None;
+    let mut requires = None;
+    let mut limit = Some(50usize);
+    let mut scene_path: Option<PathBuf> = None;
+    let mut as_json = false;
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        let mut take = |name: &str| {
+            iter.next()
+                .cloned()
+                .ok_or_else(|| format!("{name} needs a value"))
+        };
+        match arg.as_str() {
+            "--package" => package = Some(take(arg)?),
+            "--kind" => {
+                let raw = take(arg)?;
+                kind = Some(match raw.as_str() {
+                    "kernel" => CatalogKind::Kernel,
+                    "graph" => CatalogKind::Graph,
+                    _ => return Err(format!("--kind takes `kernel` or `graph`, not `{raw}`")),
+                });
+            }
+            "--mode" => mode = Some(take(arg)?),
+            "--input" => input = Some(take(arg)?),
+            "--output" => output = Some(take(arg)?),
+            "--requires" => requires = Some(take(arg)?),
+            "--limit" => {
+                let raw = take(arg)?;
+                let n: usize = raw
+                    .parse()
+                    .map_err(|_| format!("--limit takes a positive integer, not `{raw}`"))?;
+                if n == 0 {
+                    return Err("--limit must be at least 1".into());
+                }
+                limit = Some(n);
+            }
+            "--scene" => scene_path = Some(PathBuf::from(take(arg)?)),
+            "--json" => as_json = true,
+            other => query_terms.push(other.to_owned()),
+        }
+    }
+
+    let filter = CatalogQuery {
+        query: (!query_terms.is_empty()).then(|| query_terms.join(" ")),
+        package,
+        kind,
+        mode,
+        input,
+        output,
+        requires,
+        limit,
+    };
+    let store = entelechy_session::Disk::with_packages(entelechy_session::environment_packages());
+    let scene_dir = scene_path.as_deref().map(|p| {
+        if p.is_dir() {
+            p
+        } else {
+            p.parent().unwrap_or(Path::new("."))
+        }
+    });
+    let res = entelechy_session::catalog::query(&store, scene_dir, &filter);
+
+    if as_json {
+        let payload = serde_json::json!({
+            "packages": res.packages.iter().map(|p| serde_json::json!({
+                "name": p.name,
+                "id": p.id,
+                "doc": p.doc,
+                "use_path": p.use_path,
+                "path": p.path.display().to_string(),
+                "kernels": p.kernels,
+                "graphs": p.graphs,
+            })).collect::<Vec<_>>(),
+            "total": res.total,
+            "entries": res.entries.iter().map(|e| serde_json::json!({
+                "kind": e.kind.as_str(),
+                "id": e.id,
+                "package": e.package,
+                "use": e.use_stmt,
+                "path": e.path.display().to_string(),
+                "doc": e.doc,
+                "mode": e.mode,
+                "requires": e.requires,
+                "inputs": e.inputs.iter().map(|p| serde_json::json!({ "name": p.name, "type": p.ty, "doc": p.doc })).collect::<Vec<_>>(),
+                "params": e.params.iter().map(|p| serde_json::json!({ "name": p.name, "type": p.ty, "default": p.default, "doc": p.doc })).collect::<Vec<_>>(),
+                "outputs": e.outputs.iter().map(|p| serde_json::json!({ "name": p.name, "type": p.ty, "doc": p.doc })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        });
+        println!("{payload}");
+        return Ok(());
+    }
+
+    println!(
+        "{} package(s) indexed; {} match(es) (showing {})",
+        res.packages.len(),
+        res.total,
+        res.entries.len()
+    );
+    for e in &res.entries {
+        let ins: Vec<String> = e
+            .inputs
+            .iter()
+            .map(|p| format!("{}: {}", p.name, p.ty))
+            .collect();
+        let outs: Vec<String> = e
+            .outputs
+            .iter()
+            .map(|p| format!("{}: {}", p.name, p.ty))
+            .collect();
+        let tag = e.mode.as_deref().unwrap_or("graph");
+        let pkg = e.package.as_deref().unwrap_or("local");
+        println!(
+            "  [{pkg}] {} ({tag}) ({}) -> ({})",
+            e.id,
+            ins.join(", "),
+            outs.join(", ")
+        );
+        if let Some(doc) = &e.doc {
+            let first = doc.lines().next().unwrap_or("").trim();
+            if !first.is_empty() {
+                println!("      {first}");
+            }
+        }
+    }
+    Ok(())
 }
 
 struct RunOptions {

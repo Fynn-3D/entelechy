@@ -335,16 +335,42 @@ fn coord_json(domain: entelechy_kernel::Domain, index: usize) -> Json {
     }
 }
 
-/// Each number of the elements, over every element: its least, its most,
-/// where each first appears (`min_at`, `max_at`), its sum, mean and
-/// root-mean-square (`rms`, a truth value counted as 0 or 1), how many were
-/// not zero, and when any were not finite: `nonfinite`, `nan`, `inf`, and
-/// `first_nonfinite`.
-fn summary(
+/// Summary statistics for one Field, used by `read`, `trial`, and `diagnose`.
+pub(crate) struct FieldStats {
+    pub(crate) summary: Vec<Json>,
+    pub(crate) nonfinite: u64,
+    pub(crate) nan: u64,
+    pub(crate) inf: u64,
+    pub(crate) first_nonfinite: Option<Json>,
+    pub(crate) first_nonfinite_at: Option<[u32; 3]>,
+}
+
+fn coord_triple(domain: entelechy_kernel::Domain, index: usize) -> [u32; 3] {
+    match domain {
+        entelechy_kernel::Domain::Rows(_) => [index as u32, 0, 0],
+        entelechy_kernel::Domain::Grid(w, _) => {
+            let w = (w as usize).max(1);
+            [(index % w) as u32, (index / w) as u32, 0]
+        }
+        entelechy_kernel::Domain::Volume(w, h, _) => {
+            let w = (w as usize).max(1);
+            let h = (h as usize).max(1);
+            let plane = w * h;
+            [
+                (index % w) as u32,
+                ((index / w) % h) as u32,
+                (index / plane) as u32,
+            ]
+        }
+    }
+}
+
+/// Computes per-component statistics and nonfinite totals across every element
+/// of `handle`.
+pub(crate) fn field_stats(
     session: &mut Session,
     handle: entelechy_kernel::Handle,
-    described: Json,
-) -> Result<Json, Json> {
+) -> Result<FieldStats, Json> {
     let data = session.field(handle).map_err(|e| failure(e.to_string()))?;
     let domain = data.domain();
     let schema = data.schema().clone();
@@ -382,6 +408,7 @@ fn summary(
         }
     }
     let mut seen: Vec<Stat> = Vec::new();
+    let mut first_bad: Option<usize> = None;
     for (idx, element) in words.chunks_exact(per).enumerate() {
         let numbers = Number::of_element(&schema, element);
         if seen.is_empty() {
@@ -419,9 +446,14 @@ fn summary(
                 if slot.first_nonfinite.is_none() {
                     slot.first_nonfinite = Some(idx);
                 }
+                if first_bad.is_none() {
+                    first_bad = Some(idx);
+                }
             }
         }
     }
+    let total_nan: u64 = seen.iter().map(|s| s.nan).sum();
+    let total_inf: u64 = seen.iter().map(|s| s.inf).sum();
     let each: Vec<Json> = seen
         .into_iter()
         .map(|stat| {
@@ -459,9 +491,111 @@ fn summary(
             one
         })
         .collect();
+    Ok(FieldStats {
+        summary: each,
+        nonfinite: total_nan + total_inf,
+        nan: total_nan,
+        inf: total_inf,
+        first_nonfinite: first_bad.map(|at| coord_json(domain, at)),
+        first_nonfinite_at: first_bad.map(|at| coord_triple(domain, at)),
+    })
+}
+
+/// Element-wise numeric delta between two Fields of identical schema and domain.
+pub(crate) fn diff_fields(
+    base: &entelechy_kernel::FieldData,
+    trial: &entelechy_kernel::FieldData,
+) -> Option<Json> {
+    if base.schema() != trial.schema() || base.domain() != trial.domain() {
+        return None;
+    }
+    let schema = base.schema();
+    let per = schema.value_words().max(1);
+    let bw = base.values();
+    let tw = trial.values();
+    let total = base.domain().count();
+    if total == 0 {
+        return Some(json!({
+            "mean_abs": 0.0,
+            "max_abs": 0.0,
+            "changed": 0,
+            "total": 0,
+            "fraction": 0.0,
+        }));
+    }
+    let mut sum_abs = 0.0f64;
+    let mut max_abs = 0.0f64;
+    let mut components = 0u64;
+    let mut changed = 0u64;
+    for (be, te) in bw.chunks_exact(per).zip(tw.chunks_exact(per)) {
+        let bn = Number::of_element(schema, be);
+        let tn = Number::of_element(schema, te);
+        let mut elem_changed = false;
+        for (a, b) in bn.into_iter().zip(tn) {
+            let va = match a {
+                Number::Float(v) => f64::from(v),
+                Number::Double(v) => v,
+                Number::Int(v) => f64::from(v),
+                Number::Long(v) => v as f64,
+                Number::Bool(v) => f64::from(u8::from(v)),
+            };
+            let vb = match b {
+                Number::Float(v) => f64::from(v),
+                Number::Double(v) => v,
+                Number::Int(v) => f64::from(v),
+                Number::Long(v) => v as f64,
+                Number::Bool(v) => f64::from(u8::from(v)),
+            };
+            let d = if va.is_finite() && vb.is_finite() {
+                (va - vb).abs()
+            } else if va.is_nan() && vb.is_nan() {
+                0.0
+            } else {
+                f64::INFINITY
+            };
+            if d > 1e-6 {
+                elem_changed = true;
+            }
+            if d.is_finite() {
+                sum_abs += d;
+                if d > max_abs {
+                    max_abs = d;
+                }
+            }
+            components += 1;
+        }
+        if elem_changed {
+            changed += 1;
+        }
+    }
+    let mean_abs = if components > 0 {
+        sum_abs / (components as f64)
+    } else {
+        0.0
+    };
+    Some(json!({
+        "mean_abs": mean_abs,
+        "max_abs": max_abs,
+        "changed": changed,
+        "total": total,
+        "fraction": (changed as f64) / (total as f64),
+    }))
+}
+
+/// Each number of the elements, over every element: its least, its most,
+/// where each first appears (`min_at`, `max_at`), its sum, mean and
+/// root-mean-square (`rms`, a truth value counted as 0 or 1), how many were
+/// not zero, and when any were not finite: `nonfinite`, `nan`, `inf`, and
+/// `first_nonfinite`.
+fn summary(
+    session: &mut Session,
+    handle: entelechy_kernel::Handle,
+    described: Json,
+) -> Result<Json, Json> {
+    let stats = field_stats(session, handle)?;
     let mut answer = described;
     answer["format"] = json!("summary");
-    answer["summary"] = Json::Array(each);
+    answer["summary"] = Json::Array(stats.summary);
     Ok(answer)
 }
 

@@ -96,12 +96,29 @@ pub(crate) fn compose_with(
     }))
 }
 
-/// [`compose`] of documents of the scene other than its root, or of
-/// several at once: `path` names one (from the scene's directory), or
-/// `documents` lists each with its own `path` (none for the scene),
-/// `text` or `edits`, and `expect`. All are checked together before any
-/// is written, and all are written or none.
-fn compose_documents(session: &mut Session, request: &Request, settle: bool) -> Result<Json, Json> {
+/// One resolved document change prepared for `compose` or `trial`.
+pub(crate) struct StagedChange {
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) text: String,
+    pub(crate) version: String,
+    pub(crate) edited: bool,
+}
+
+/// Resolves document changes (`text` / `edits` / `path` / `documents` /
+/// `expect`) against `session` without writing anything to the store.
+/// Returns `Ok(vec![])` only when `allow_empty` is true and none of the
+/// change fields were supplied.
+pub(crate) fn resolve_changes(
+    session: &Session,
+    request: &Request,
+    allow_empty: bool,
+) -> Result<Vec<StagedChange>, Json> {
+    let has_any = ["text", "edits", "path", "documents", "expect"]
+        .iter()
+        .any(|k| request.get(k).is_some());
+    if !has_any && allow_empty {
+        return Ok(Vec::new());
+    }
     let scene_name = session
         .root()
         .file_name()
@@ -137,12 +154,6 @@ fn compose_documents(session: &mut Session, request: &Request, settle: bool) -> 
                 .ok_or_else(|| failure("a request is an object"))?,
         ],
     };
-    struct Change {
-        path: std::path::PathBuf,
-        text: String,
-        version: String,
-        edited: bool,
-    }
     let mut changes = Vec::new();
     for item in items {
         let named = match item.get("path") {
@@ -204,13 +215,23 @@ fn compose_documents(session: &mut Session, request: &Request, settle: bool) -> 
             (Some(_), None) => return Err(at_fault("`text` is the document's whole text".into())),
             (None, None) => return Err(at_fault("a document changes by `text` or `edits`".into())),
         };
-        changes.push(Change {
+        changes.push(StagedChange {
             path,
             text,
             version,
             edited: item.get("edits").is_some(),
         });
     }
+    Ok(changes)
+}
+
+/// [`compose`] of documents of the scene other than its root, or of
+/// several at once: `path` names one (from the scene's directory), or
+/// `documents` lists each with its own `path` (none for the scene),
+/// `text` or `edits`, and `expect`. All are checked together before any
+/// is written, and all are written or none.
+fn compose_documents(session: &mut Session, request: &Request, settle: bool) -> Result<Json, Json> {
+    let changes = resolve_changes(session, request, false)?;
     let texts: Vec<(std::path::PathBuf, String)> = changes
         .iter()
         .map(|c| (c.path.clone(), c.text.clone()))

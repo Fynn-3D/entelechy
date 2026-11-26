@@ -1141,6 +1141,117 @@ impl Session {
         }
         retired
     }
+
+    /// Opens an isolated shadow session over in-memory document `changes`
+    /// without touching the underlying store or mutating this session.
+    ///
+    /// Changes are checked first; a compile/check refusal returns
+    /// `Ok(Err(refusal))` before opening a shadow runtime. When
+    /// `!fresh_state` and this session has already evaluated, its committed
+    /// `<~` state is restored into the shadow under `context`.
+    pub fn shadow_for(
+        &mut self,
+        changes: &[(PathBuf, String)],
+        fresh_state: bool,
+        context: &entelechy_kernel::Context,
+    ) -> Result<Result<crate::ShadowOpen, crate::Refusal>, String> {
+        let landed = if changes.is_empty() {
+            Vec::new()
+        } else {
+            match self.check_documents(changes) {
+                Ok(landed) => landed,
+                Err(refusal) => return Ok(Err(refusal)),
+            }
+        };
+
+        let (base_store, root, library, overrides, params, grants, fusion, window, backend, words) = {
+            let docs = self.backing.docs();
+            (
+                Arc::clone(docs.scene.store()),
+                docs.scene.root().to_path_buf(),
+                docs.scene.library().map(Path::to_path_buf),
+                docs.scene.overrides().clone(),
+                docs.scene.params().clone(),
+                *self.runtime.grants(),
+                self.fusion(),
+                self.window(),
+                self.runtime.backend_name(),
+                self.runtime.host().budget_words(),
+            )
+        };
+
+        let kept = Arc::new(entelechy_documents::store::Kept::new(base_store));
+        for (path, text) in &landed {
+            kept.write(path, text.as_bytes())
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        let store: Arc<dyn Store> = kept;
+
+        let backend_choice = match backend {
+            "cpu" | "jit" | "gpu" => backend,
+            _ => "best",
+        };
+        let limits = Limits {
+            words,
+            ..Limits::default()
+        };
+        let built = Self::build(backend_choice, limits, entelechy_gpu::Wait::blocking())?;
+        let mut shadow = Self::open_in(store, &root, library.as_deref(), built.runtime);
+        shadow.runtime.set_grants(grants);
+        shadow.set_fusion(fusion);
+        shadow.set_window(window);
+        shadow.start_from_nothing_saved();
+        if !overrides.inputs.is_empty() || !overrides.outputs.is_empty() {
+            let _ = shadow.place(overrides);
+        }
+        for (name, value) in params {
+            let _ = shadow.set_param(&name, value);
+        }
+
+        let events = shadow.sync_settled();
+        if shadow.graph().is_none() {
+            let refusal = events
+                .into_iter()
+                .find_map(|event| match event {
+                    Event::SceneRejected(diagnostic) => Some(crate::Refusal {
+                        path: root.clone(),
+                        diagnostic,
+                    }),
+                    Event::Rejected { path, error } => Some(crate::Refusal {
+                        path,
+                        diagnostic: error,
+                    }),
+                    _ => None,
+                })
+                .unwrap_or_else(|| crate::Refusal {
+                    path: root.clone(),
+                    diagnostic: crate::Diagnostic::new("shadow scene failed to load"),
+                });
+            return Ok(Err(refusal));
+        }
+
+        let mut state_warning = None;
+        if !fresh_state && self.has_evaluated {
+            match self.snapshot() {
+                Ok(snap) => {
+                    if let Err(why) = shadow.restore(
+                        &snap,
+                        crate::Laws::Current,
+                        crate::Structure::Current,
+                        context,
+                    ) {
+                        state_warning = Some(why);
+                    }
+                }
+                Err(why) => state_warning = Some(why),
+            }
+        }
+
+        Ok(Ok(crate::ShadowOpen {
+            session: shadow,
+            state_warning,
+        }))
+    }
 }
 
 fn reached_documents(store: &dyn Store, root: &Path, text: &str) -> Option<BTreeSet<PathBuf>> {

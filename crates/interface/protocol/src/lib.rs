@@ -25,6 +25,7 @@ pub mod ops;
 mod request;
 mod run;
 mod transport;
+mod trial;
 pub mod websocket;
 mod wire;
 
@@ -99,12 +100,15 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
     match request.op() {
         "status" => inspect::status(session),
         "kernels" => inspect::kernels(session),
+        "catalog" => inspect::catalog(session, &request),
         "kernel" => inspect::kernel(session, &request),
         "graph" => inspect::graph(session),
         "document" => inspect::document(session, &request),
         "history" => inspect::history(session, &request),
         "help" => inspect::help(&request),
         "compose" => create::compose(session, &request),
+        "trial" => trial::trial(session, &request),
+        "diagnose" => trial::diagnose(session, &request),
         "sync" => create::sync(session),
         "prepare" => create::prepare(session, &request),
         "publish" => create::publish(session, &request),
@@ -652,6 +656,147 @@ output result <- pic.result;
         )
         .unwrap();
         assert_eq!(traced["at"], json!([2, 1, 0]));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn trial_rejects_bad_edits_without_touching_disk_and_commits_clean_ones() {
+        let (dir, mut session) = session("trial_gates");
+        session.sync();
+        // Establish baseline live evaluation.
+        handle(&mut session, &json!({ "op": "evaluate", "time": 0.0 })).unwrap();
+        let disk_before = std::fs::read_to_string(dir.join("scene.esn")).unwrap();
+
+        // 1) Compile error is caught cleanly with zero disk changes.
+        let bad_syntax = handle(
+            &mut session,
+            &json!({
+                "op": "trial",
+                "text": "node gradient: kernel { requires { field.write; } output result: Image; domain = vec2(8, 8); compute { return nope; } }\noutput result <- gradient.result;\n",
+                "commit": true
+            }),
+        )
+        .unwrap();
+        assert_eq!(bad_syntax["passed"], false);
+        assert_eq!(bad_syntax["committed"], false);
+        assert_eq!(bad_syntax["written"], false);
+        assert_eq!(bad_syntax["gates"][0]["name"], "compile");
+        assert_eq!(bad_syntax["gates"][0]["passed"], false);
+        assert!(
+            bad_syntax["fault"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("nope")
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("scene.esn")).unwrap(),
+            disk_before
+        );
+
+        // 2) NaN output is rejected by the `finite` gate with automatic element `trace`
+        //    even when `commit: true`, leaving disk and live session untouched!
+        let nan_scene = "node gradient: kernel { requires { field.write; } output result: Image; domain = vec2(8, 8); compute { let bad = if icoord().x == 3 && icoord().y == 2 { 0.0 / 0.0 } else { 0.5 }; return vec4(bad, 0.2, 0.4, 1.0); } }\noutput result <- gradient.result;\n";
+        let nan_trial = handle(
+            &mut session,
+            &json!({
+                "op": "trial",
+                "text": nan_scene,
+                "forbid_nonfinite": true,
+                "commit": true
+            }),
+        )
+        .unwrap();
+        assert_eq!(nan_trial["passed"], false);
+        assert_eq!(nan_trial["committed"], false);
+        assert_eq!(nan_trial["written"], false);
+        let finite_gate = nan_trial["gates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["name"] == "finite")
+            .unwrap();
+        assert_eq!(finite_gate["passed"], false);
+        assert_eq!(finite_gate["nonfinite"], 1);
+        assert_eq!(nan_trial["trace"]["at"], json!([3, 2, 0]));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("scene.esn")).unwrap(),
+            disk_before
+        );
+
+        // 3) Valid edit passes dry-run trial (`commit: false`), computes diff vs baseline,
+        //    and leaves disk untouched.
+        let bright_scene = "node gradient: kernel { requires { field.write; } output result: Image; domain = vec2(8, 8); compute { return vec4(1.0, coord().y / 8.0, 0.5, 1.0); } }\noutput result <- gradient.result;\n";
+        let dry = handle(
+            &mut session,
+            &json!({
+                "op": "trial",
+                "text": bright_scene,
+                "steps": 2,
+                "include_png": true,
+                "commit": false
+            }),
+        )
+        .unwrap();
+        assert_eq!(dry["passed"], true);
+        assert_eq!(dry["committed"], false);
+        assert_eq!(dry["written"], false);
+        assert_eq!(dry["steps"], 2);
+        assert!(dry["outputs"][0]["diff"]["changed"].as_u64().unwrap() > 0);
+        assert!(dry["outputs"][0]["png"].as_str().is_some());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("scene.esn")).unwrap(),
+            disk_before
+        );
+
+        // 4) Valid edit with `commit: true` atomically writes and syncs into live session.
+        let promoted = handle(
+            &mut session,
+            &json!({
+                "op": "trial",
+                "text": bright_scene,
+                "commit": true
+            }),
+        )
+        .unwrap();
+        assert_eq!(promoted["passed"], true);
+        assert_eq!(promoted["committed"], true);
+        assert_eq!(promoted["written"], true);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("scene.esn")).unwrap(),
+            bright_scene
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn diagnose_and_catalog_report_structured_world_state() {
+        let (dir, mut session) = session("diagnose_catalog");
+        // Add a local kernel file beside the scene for `catalog`.
+        std::fs::write(
+            dir.join("helpers.ent"),
+            "/// Doubles a float row.\nkernel local.double@1 {\n    requires { field.read; field.write; }\n    input source: Rows<Float>;\n    output result: Rows<Float>;\n    compute { return sample(source) * 2.0; }\n}\n",
+        )
+        .unwrap();
+        session.sync();
+
+        let cat = handle(
+            &mut session,
+            &json!({ "op": "catalog", "package": "local", "query": "double" }),
+        )
+        .unwrap();
+        assert_eq!(cat["total"], 1);
+        assert_eq!(cat["entries"][0]["id"], "local.double@1");
+        assert_eq!(cat["entries"][0]["mode"], "map");
+
+        let diag = handle(&mut session, &json!({ "op": "diagnose", "measure": true })).unwrap();
+        assert_eq!(diag["healthy"], true);
+        assert_eq!(diag["loaded"], true);
+        assert!(!diag["hotspots"].as_array().unwrap().is_empty());
+        assert_eq!(diag["transfers"]["downloaded_bytes"], 0);
+        assert_eq!(diag["outputs"][0]["nonfinite"], 0);
+        assert!(diag["memory"]["budget"].as_u64().unwrap() > 0);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

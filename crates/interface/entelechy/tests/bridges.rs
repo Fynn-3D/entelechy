@@ -543,3 +543,20 @@ fn a_rig_entelechy_wrote_opens_in_blender() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The L7 AI meta-runtime bridge drives `entelechy serve` over stdio and TCP,
+/// using `catalog`, `diagnose`, and `trial` shadow gates to search, auto-repair,
+/// reject NaN outputs with element traces, and atomically promote clean changes.
+#[test]
+fn the_ai_meta_runtime_bridge_evolves_a_scene_through_shadow_gates() {
+    let Some(node) = tool(&["node"]) else {
+        eprintln!("skipped: no node on this machine");
+        return;
+    };
+    let mut command = Command::new(node);
+    command
+        .current_dir(root())
+        .env("ENTELECHY_BIN", env!("CARGO_BIN_EXE_entelechy"))
+        .arg("bridges/ai/test.mjs");
+    passed(command, "the AI meta-runtime bridge", "RESULT: ok");
+}

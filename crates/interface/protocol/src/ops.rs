@@ -308,6 +308,13 @@ fn with_context(mut fields: Vec<Field>) -> Vec<Field> {
     fields
 }
 
+/// Evaluation context fields for operations that already use `text` for
+/// document source (such as `trial`), omitting keyboard `text`.
+fn with_trial_context(mut fields: Vec<Field>) -> Vec<Field> {
+    fields.extend(context().into_iter().filter(|f| f.name != "text"));
+    fields
+}
+
 fn op(
     name: &'static str,
     summary: &'static str,
@@ -336,6 +343,53 @@ pub fn operations() -> Vec<Operation> {
             "Every published Kernel, with its generation.",
             vec![],
             "a list of manifests, each with its generation, which `publish`'s `expect` names",
+        ),
+        op(
+            "catalog",
+            "Searches available packages, Kernels, and preset graphs reachable from the session's store without loading them.",
+            vec![
+                may(
+                    "query",
+                    Ty::Str,
+                    "free-text tokens matched against id, package, docs, port names, and types",
+                ),
+                may(
+                    "package",
+                    Ty::Str,
+                    "filter to one package name (with or without `.entpkg`), or `\"local\"`",
+                ),
+                may(
+                    "kind",
+                    Ty::Words(&["kernel", "graph"]),
+                    "filter to Kernels or preset graphs alone",
+                ),
+                may(
+                    "mode",
+                    Ty::Words(&["map", "reduce", "scan", "scatter", "prefix", "group"]),
+                    "filter Kernels by execution mode",
+                ),
+                may(
+                    "input",
+                    Ty::Str,
+                    "match entries with an input port of this type (`Image` matches `Grid<Vec4>`)",
+                ),
+                may(
+                    "output",
+                    Ty::Str,
+                    "match entries with an output port of this type (`Image` matches `Grid<Vec4>`)",
+                ),
+                may(
+                    "requires",
+                    Ty::Str,
+                    "filter by required capability name, or `\"pure\"` for no `time.read`/`input.read`",
+                ),
+                may(
+                    "limit",
+                    Ty::Int,
+                    "maximum entries returned (50 by default, 1 to 500)",
+                ),
+            ],
+            "packages (name, id, doc, use_path, kernels, graphs), total (matches before limit), entries (kind, id, package, use, path, doc, mode, requires, inputs, params, outputs)",
         ),
         op(
             "kernel",
@@ -414,6 +468,106 @@ pub fn operations() -> Vec<Operation> {
                 ),
             ],
             "events, version, path (the scene), written; with `path` or `documents`, documents (each written document's path and version)",
+        ),
+        op(
+            "trial",
+            "Tests candidate document changes in an isolated in-memory shadow session against automated gates (compile, runtime, finiteness, frame budget, zero mid-frame downloads), optionally promoting them atomically to the live scene when every gate passes.",
+            with_trial_context(vec![
+                may("text", Ty::Str, "the whole document; or `edits`"),
+                may(
+                    "edits",
+                    Ty::List(Box::new(edit())),
+                    "each names a statement, or a node's `member`, with its new `text` or null to remove it",
+                ),
+                may(
+                    "expect",
+                    Ty::Str,
+                    "the version `document` answered; refused when the scene changed since",
+                ),
+                may(
+                    "path",
+                    Ty::Str,
+                    "another document of the scene, from its directory",
+                ),
+                may(
+                    "documents",
+                    Ty::List(Box::new(document_change())),
+                    "several documents tested together in shadow",
+                ),
+                may(
+                    "steps",
+                    Ty::Int,
+                    "frames to evaluate in shadow (1 by default, 1 to 60)",
+                ),
+                may(
+                    "dt",
+                    Ty::Num,
+                    "seconds per step when `steps` > 1 (1/60 by default)",
+                ),
+                may(
+                    "fresh_state",
+                    Ty::Bool,
+                    "start shadow from initial `<~` state instead of the live session's committed state (false by default)",
+                ),
+                may(
+                    "measure",
+                    Ty::Bool,
+                    "measure per-node timings and device transfers on the last shadow step (true by default)",
+                ),
+                may(
+                    "forbid_nonfinite",
+                    Ty::Bool,
+                    "fail the `finite` gate if any output contains NaN or Inf, auto-tracing the first bad element (true by default)",
+                ),
+                may(
+                    "max_frame_ms",
+                    Ty::Num,
+                    "fail the `budget` gate if shadow frame time exceeds this limit in milliseconds",
+                ),
+                may(
+                    "forbid_download",
+                    Ty::Bool,
+                    "fail the `no_download` gate if any node downloads bytes from device mid-frame (false by default)",
+                ),
+                may(
+                    "read_outputs",
+                    Ty::List(Box::new(Ty::Str)),
+                    "outputs to include detailed summary and baseline diff for (all outputs by default)",
+                ),
+                may(
+                    "include_png",
+                    Ty::Bool,
+                    "attach base64 PNG encodings for picture outputs in `outputs` (false by default)",
+                ),
+                may(
+                    "commit",
+                    Ty::Bool,
+                    "atomically write and sync the changes into the live session only when every gate passes (false by default)",
+                ),
+            ]),
+            "passed, committed, written, steps, gates, frame_ms, wall_ms, device_ms, uploaded_bytes, downloaded_bytes, timings, placements, outputs (summary, baseline diff, optional png), state_warning, fault (on compile/runtime failure), trace (auto-captured on fault or first nonfinite element); when committed, version, events, documents",
+        ),
+        op(
+            "diagnose",
+            "Structured health, hotspot, GPU transfer, fusion, output finiteness, memory, and actionable optimization report for the live session.",
+            with_context(vec![
+                may(
+                    "measure",
+                    Ty::Bool,
+                    "run one fresh measured evaluation before diagnosing (false by default; automatically measured once if no frame has run yet)",
+                ),
+                may(
+                    "check_finite",
+                    Ty::Bool,
+                    "scan every graph output for NaN/Inf values (true by default)",
+                ),
+                may(
+                    "top",
+                    Ty::Int,
+                    "maximum hotspots and memory entries returned (10 by default, 1 to 100)",
+                ),
+            ]),
+            "healthy, backend, loaded, revision, frame, failing, frame_ms, device_ms, hotspots, transfers (`uploaded_bytes`, `downloaded_bytes`, `stalls`), fusions (`fused_groups`, `refused`), outputs, memory, recommendations",
         ),
         op(
             "sync",

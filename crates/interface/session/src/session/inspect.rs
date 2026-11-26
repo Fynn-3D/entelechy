@@ -185,6 +185,7 @@ impl Session {
         self.after_tick_committed();
         self.written_after(&report);
         self.follow_rows();
+        self.last_report = Some(report.clone());
         Ok(report)
     }
 
@@ -520,6 +521,32 @@ impl Session {
             .find_map(|traced| self.trace(traced, [x, y, 0], context).ok()?.place)
     }
 
+    /// Traces the exact element that caused `error`, returning `(node_name, Traced)`
+    /// with local bindings, calls, and fault source place when available.
+    pub fn failure_trace(
+        &mut self,
+        error: &EvaluateError,
+        context: &Context,
+    ) -> Option<(String, Traced)> {
+        let EvaluateError::Execution { node, error } = error else {
+            return None;
+        };
+        let (x, y) = match error {
+            entelechy_kernel::ExecutionError::Arithmetic { x, y, .. }
+            | entelechy_kernel::ExecutionError::Exhausted { x, y, .. } => (*x, *y),
+            _ => return None,
+        };
+        let fused = self.evaluator.fused_parts(node);
+        for candidate in fused.iter().chain(std::iter::once(node)) {
+            if let Ok(traced) = self.trace(candidate, [x, y, 0], context)
+                && traced.trace.fault.is_some()
+            {
+                return Some((candidate.to_string(), traced));
+            }
+        }
+        None
+    }
+
     /// One element field of a node's output: its type and words. Named
     /// `node.port[index].field.field` ([`crate::observe::parse_target`]).
     pub fn element_field(
@@ -588,5 +615,14 @@ impl Session {
         y: u32,
     ) -> Result<entelechy_kernel::Pixel, SessionError> {
         observe::read_pixel(&mut self.runtime, image, x, y)
+    }
+
+    /// Searches available packages, Kernels, and preset graphs reachable from
+    /// this session's store and scene directory without loading them.
+    pub fn catalog(
+        &self,
+        query: &entelechy_documents::catalog::CatalogQuery,
+    ) -> entelechy_documents::catalog::CatalogResult {
+        entelechy_documents::catalog::query(self.store(), self.root().parent(), query)
     }
 }

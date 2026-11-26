@@ -169,6 +169,11 @@ impl Scene {
         }
     }
 
+    /// The extra `--library` path handed to the scene, if any.
+    pub fn library(&self) -> Option<&Path> {
+        self.extra_uses.first().map(PathBuf::as_path)
+    }
+
     /// The directories the scene reads: the root's, its placed graphs',
     /// each used directory, each used file's parent, and the parent of
     /// every document those use in turn, with the package it lies in.

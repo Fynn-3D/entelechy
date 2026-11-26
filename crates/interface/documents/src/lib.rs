@@ -15,6 +15,8 @@
 #![warn(missing_docs)]
 
 #[cfg(feature = "documents")]
+pub mod catalog;
+#[cfg(feature = "documents")]
 pub mod check;
 #[cfg(feature = "documents")]
 pub mod devices;

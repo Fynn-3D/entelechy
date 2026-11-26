@@ -495,6 +495,48 @@ as `run` and `render` give it.",
             passes: false,
         },
         Command {
+            name: "catalog",
+            args: "[query...]",
+            summary: "Search available packages, Kernels, and preset graphs.",
+            doc: "\
+Discover packages in ENTELECHY_PACKAGES (and beside --scene), indexing
+every Kernel and preset graph without loading them. Filter by free-text
+tokens, --package, --kind, --mode, --input, --output, or --requires;
+--json prints structured JSON matching the protocol's `catalog` op.",
+            flags: vec![
+                valued("--package", "<name>", "Filter to one package name or `local`."),
+                valued("--kind", "kernel|graph", "Filter to Kernels or preset graphs alone."),
+                valued(
+                    "--mode",
+                    "map|reduce|scan|scatter|prefix|group",
+                    "Filter Kernels by execution mode.",
+                ),
+                valued(
+                    "--input",
+                    "<type>",
+                    "Match entries with an input port of this type (`Image` matches `Grid<Vec4>`).",
+                ),
+                valued(
+                    "--output",
+                    "<type>",
+                    "Match entries with an output port of this type (`Image` matches `Grid<Vec4>`).",
+                ),
+                valued(
+                    "--requires",
+                    "<cap>",
+                    "Match entries declaring this capability, or `pure` for no time/input.",
+                ),
+                valued("--limit", "<n>", "Maximum entries shown (50 by default)."),
+                valued(
+                    "--scene",
+                    "<scene.esn>",
+                    "Also include packages and local `.ent` files beside this scene.",
+                ),
+                switch("--json", "Print structured JSON instead of human-readable lines."),
+            ],
+            passes: false,
+        },
+        Command {
             name: "serve",
             args: "<scene.esn>",
             summary: "Serve the creation protocol on stdin and stdout and on --listen.",

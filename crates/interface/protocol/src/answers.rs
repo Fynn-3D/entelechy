@@ -77,7 +77,7 @@ impl Answers {
         {
             return send(&incoming, envelope(id, Err(error)), false);
         }
-        let changes = matches!(incoming.op(), Some("compose" | "publish"));
+        let changes = matches!(incoming.op(), Some("compose" | "publish" | "trial"));
         if let Some(waiting) = &self.waiting
             && (changes || waiting.incoming.from == incoming.from)
         {

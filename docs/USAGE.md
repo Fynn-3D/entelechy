@@ -111,6 +111,18 @@ one `.entpkg` file and `entelechy unpack` reads it back. A scene uses a
 package by path or by name through `ENTELECHY_PACKAGES`. `entelechy
 version` prints the API, language, IR and package versions.
 
+## Search available capabilities
+
+```sh
+entelechy catalog blur --input Image
+```
+
+Discovers packages across `ENTELECHY_PACKAGES` (and beside `--scene`),
+indexing every Kernel and preset graph without loading them. Filter by
+free-text tokens, `--package`, `--kind`, `--mode`, `--input`, `--output`,
+or `--requires`; `--json` prints structured JSON matching the Creation
+Protocol's `catalog` operation.
+
 ## Inspect a graph
 
 ```sh
@@ -386,9 +398,10 @@ own input, reads an output in place, and sends protocol lines through
 entelechy player --serve --listen 127.0.0.1:7788 examples/mesh/scene.esn
 ```
 
-`bridges/blender`, `bridges/web` and `bridges/godot` speak the protocol
-over `--listen`; each README says how to open it. `cargo test -p
-entelechy --test bridges` runs them where their tools are installed.
+`bridges/blender`, `bridges/web`, `bridges/godot` and `bridges/ai` speak
+the protocol over `--listen` (or stdio); each README says how to open it.
+`cargo test -p entelechy --test bridges` runs them where their tools are
+installed.
 
 ## WebAssembly
 

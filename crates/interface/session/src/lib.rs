@@ -49,7 +49,7 @@ pub use entelechy_documents::store::{
 };
 #[cfg(feature = "documents")]
 pub use entelechy_documents::{
-    Allowance, Diagnostic, Event, Fix, Refusal, SourcePlace, history, overrides, package,
+    Allowance, Diagnostic, Event, Fix, Refusal, SourcePlace, catalog, history, overrides, package,
     parse_allow, store,
 };
 /// How a device is waited for: blocking, or giving a page turns.
@@ -182,6 +182,18 @@ pub struct Loaded {
     pub events: Vec<Event>,
     /// The backends tried first and passed over, as `name: why`.
     pub passed_over: Vec<String>,
+}
+
+/// An isolated shadow session opened over in-memory document changes
+/// ([`Session::shadow_for`]), never writing to the underlying store.
+#[cfg(feature = "documents")]
+pub struct ShadowOpen {
+    /// The isolated shadow session, synced and ready to evaluate.
+    pub session: Session,
+    /// Present when committed `<~` state from the live session could not be
+    /// carried into the shadow (e.g. a layout changed without a migration
+    /// Kernel) and the shadow started from its initial state instead.
+    pub state_warning: Option<String>,
 }
 
 /// A session opened over a compiled [`bundle::Bundle`] ([`Session::open_bundle`]).

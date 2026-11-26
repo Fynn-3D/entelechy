@@ -56,6 +56,8 @@ pub struct Session {
     /// Whether at least one evaluation or warp tick has succeeded since the
     /// scene opened or state was last reset.
     pub(super) has_evaluated: bool,
+    /// The most recent successful evaluation report, for live diagnostics.
+    pub(super) last_report: Option<Report>,
     /// Why the last evaluation failed, until one succeeds.
     pub(super) failing: Option<String>,
     /// Whether what only shows is shown from the processor while the
@@ -268,6 +270,7 @@ impl Session {
             watched: crate::preparing::Watched::default(),
             last_context: Context::default(),
             has_evaluated: false,
+            last_report: None,
             failing: None,
             shown_while_building: false,
             handed: BTreeSet::new(),
@@ -1059,6 +1062,7 @@ impl Session {
         self.written_after(&report);
         #[cfg(feature = "documents")]
         self.follow_rows();
+        self.last_report = Some(report.clone());
         Ok(report)
     }
 
@@ -1188,11 +1192,22 @@ impl Session {
     pub fn reset_state(&mut self) {
         self.evaluator.reset_state(&mut self.runtime);
         self.has_evaluated = false;
+        self.last_report = None;
         #[cfg(feature = "documents")]
         if let Backing::Documents(docs) = &mut self.backing {
             docs.history
                 .changed(crate::Change::Reset, docs.origin.clone());
         }
+    }
+
+    /// The most recent successful evaluation report, if any.
+    pub fn last_report(&self) -> Option<&Report> {
+        self.last_report.as_ref()
+    }
+
+    /// Why the last evaluation failed, until a subsequent evaluation succeeds.
+    pub fn failing(&self) -> Option<&str> {
+        self.failing.as_deref()
     }
 
     /// Sets the window a headless session reports when an evaluation names
