@@ -100,6 +100,13 @@ fn main() -> ExitCode {
             _ => usage_error("package needs a package directory"),
         },
         _ => {
+            entelechy_session::banner::print_stderr(&entelechy_session::banner::BannerInfo {
+                mode: "",
+                version: env!("CARGO_PKG_VERSION"),
+                backend: None,
+                listen: None,
+                stage: None,
+            });
             eprintln!("{}", entelechy::commands::usage());
             return ExitCode::from(2);
         }
@@ -887,11 +894,26 @@ fn serve(args: &[String]) -> Result<(), String> {
     report_events(&session.sync());
     session.set_background(true);
     let (sink, requests) = std::sync::mpsc::channel();
+    let interactive_banner = entelechy_session::banner::should_print();
+    let mut listen_bound = None;
     if let Some(address) = &listen {
         let origins = entelechy_protocol::websocket::Origins::with(origins);
         let bound = entelechy_protocol::listen(address, sink.clone(), origins)
             .map_err(|e| e.to_string())?;
-        eprintln!("listening on {bound}");
+        if !interactive_banner {
+            eprintln!("listening on {bound}");
+        }
+        listen_bound = Some(bound.to_string());
+    }
+    if interactive_banner {
+        let stage_name = entelechy_session::banner::stage_label(session.root());
+        entelechy_session::banner::print_stderr(&entelechy_session::banner::BannerInfo {
+            mode: "serve",
+            version: env!("CARGO_PKG_VERSION"),
+            backend: Some(session.runtime().backend_name()),
+            listen: Some(listen_bound.as_deref().unwrap_or("stdin/stdout")),
+            stage: Some(&stage_name),
+        });
     }
     if entelechy_protocol::stdin_into(sink).is_err() {
         // Without a reader thread, requests are answered in turn here.

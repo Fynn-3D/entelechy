@@ -930,13 +930,16 @@ fn main() -> ExitCode {
 
     let mut requests = None;
     let mut listen_bound = None;
+    let interactive_banner = entelechy_session::banner::should_print();
     if options.serve {
         let (sender, receiver) = channel();
         if let Some(address) = &options.listen {
             let origins = entelechy_protocol::websocket::Origins::with(options.origins.clone());
             match entelechy_protocol::listen(address, sender.clone(), origins) {
                 Ok(bound) => {
-                    eprintln!("listening on {bound}");
+                    if !interactive_banner {
+                        eprintln!("listening on {bound}");
+                    }
                     listen_bound = Some(bound.to_string());
                 }
                 Err(error) => {
@@ -950,7 +953,9 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
         requests = Some(receiver);
-        eprintln!("serving the creation protocol on stdin/stdout");
+        if !interactive_banner {
+            eprintln!("serving the creation protocol on stdin/stdout");
+        }
     }
 
     let backend = options.session.backend.as_deref().unwrap_or("best");
@@ -965,26 +970,51 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    for passed in &passed_over {
-        eprintln!("backend passed over: {passed}");
-    }
     let backend_name = warm.runtime().backend_name();
-    eprintln!("backend: {backend_name}");
-    let gamepad = Gamepad::open();
-    eprintln!(
-        "gamepad: {}",
-        match &gamepad {
-            Some(pad) if pad.connected() > 0 => "connected, mapped to arrows, Z, X, Enter",
-            Some(_) => "none connected; a pad plugged in later maps to arrows, Z, X, Enter",
-            None => "unavailable",
-        }
-    );
-
     let initial_target = match (&options.replay, &options.session.scene) {
         (Some(replay), _) => Target::Replay(replay.clone()),
         (None, Some(scene)) => Target::Scene(scene.clone()),
         (None, None) => Target::EmptyStage,
     };
+    let stage_name = match &initial_target {
+        Target::EmptyStage => "empty stage".to_owned(),
+        Target::Scene(path) => entelechy_session::banner::stage_label(path),
+        Target::Replay(replay) => entelechy_session::banner::stage_label(&replay.scene),
+    };
+    let listen_label = if options.serve {
+        Some(listen_bound.as_deref().unwrap_or("stdin/stdout"))
+    } else {
+        None
+    };
+    let banner_shown =
+        entelechy_session::banner::print_stderr(&entelechy_session::banner::BannerInfo {
+            mode: if options.serve {
+                "player · serve"
+            } else {
+                "player"
+            },
+            version: env!("CARGO_PKG_VERSION"),
+            backend: Some(backend_name),
+            listen: listen_label,
+            stage: Some(&stage_name),
+        });
+    for passed in &passed_over {
+        eprintln!("backend passed over: {passed}");
+    }
+    if !banner_shown {
+        eprintln!("backend: {backend_name}");
+    }
+    let gamepad = Gamepad::open();
+    if !banner_shown || gamepad.as_ref().is_some_and(|p| p.connected() > 0) {
+        eprintln!(
+            "gamepad: {}",
+            match &gamepad {
+                Some(pad) if pad.connected() > 0 => "connected, mapped to arrows, Z, X, Enter",
+                Some(_) => "none connected; a pad plugged in later maps to arrows, Z, X, Enter",
+                None => "unavailable",
+            }
+        );
+    }
     let stage = StageEnv {
         warm,
         backend_name,

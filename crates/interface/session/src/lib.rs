@@ -16,6 +16,8 @@
 #![warn(missing_docs)]
 
 pub mod apart;
+#[cfg(feature = "documents")]
+pub mod banner;
 pub mod bench;
 pub mod bundle;
 mod clipboard;

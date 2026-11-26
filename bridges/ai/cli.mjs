@@ -136,9 +136,30 @@ function buildGates(opts) {
   };
 }
 
+function printChatBanner(providerName, target) {
+  if (process.env.ENTELECHY_NO_BANNER) return;
+  const color = Boolean(process.stderr.isTTY && !process.env.NO_COLOR && process.env.TERM !== "dumb");
+  const c = (code, text) => (color ? `\x1b[${code}m${text}\x1b[0m` : text);
+  const w = (t) => c("1;38;2;255;255;255", t);
+  const b = (t) => c("38;2;232;232;232", t);
+  const s = (t) => c("1;38;2;255;176;0", t);
+  const d = (t) => c("38;2;128;128;128", t);
+  console.error(
+    [
+      "",
+      `${w("  []  []  []  ")}  ${w("entelechy")}  ${d("·")}  ${b("ai-chat")}`,
+      `${w("    []  []    ")}  ${d("model")}    ${b(providerName)}`,
+      `      ${s("[]")}        ${d("target")}   ${b(target)}`,
+      `${d("     ----     ")}  ${d("host is the world · kernel is the law")}`,
+      "",
+    ].join("\n"),
+  );
+}
+
 async function runChat(client, provider, opts) {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  console.log(`Connected (${provider.name}). Type an intent to evolve live, or /status, /files, /reset, /quit.`);
+  printChatBanner(provider.name, opts.connect || opts.scene);
+  console.log("Type an intent to evolve live, or /status, /files, /reset, /quit.");
   try {
     while (true) {
       let line;
