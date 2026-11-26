@@ -897,11 +897,15 @@ be keywords.
    `surface`, a grid of `depth: Float; normal: Vec3; uv: Vec2; id: Int`
    over the node's `domain`: bit for bit the raster package's surface on
    the interpreter and the JIT, the device's rasterizer, approximate at
-   edges, on a GPU ([decision](DECISIONS.md#the-rasterizer-is-a-package-the-native-one-is-its-fast-path)). `native.rasterize@3`
+   edges, on a GPU ([decision](DECISIONS.md#the-rasterizer-is-a-package-the-native-one-is-its-fast-path)). `native.rasterize@2`
+   adds `mask: Image` and `param cutout: Float = 0.5`, dropping fragments
+   whose bilinear `mask` alpha is below `cutout`. `native.rasterize@3`
    takes a `canvas` (a `Grid<Long>`, the empty canvas the package's
    Kernels take their extent from) as well and draws over its extent,
    `domain = size(canvas);`, so a surface sized by another node's output
-   is drawn as the package draws it. `native.cover@1` is the package's
+   is drawn as the package draws it. `native.rasterize@4` combines both
+   (`vertices`, `triangles`, `mask`, `canvas`, and `param cutout: Float = 0.5`)
+   over `domain = size(canvas);`. `native.cover@1` is the package's
    `raster.cover@4`, fast, for what needs only the nearest depth (a
    shadow map): `vertices`, `triangles` and `keys` (a `Grid<Long>`) in,
    `result` out, at each pixel the least of its key and every fragment's

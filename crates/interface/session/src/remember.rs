@@ -200,6 +200,9 @@ impl Backend for Remembered {
     fn has_compute_device(&self) -> bool {
         self.inner.has_compute_device()
     }
+    fn needs_host_trace_instances(&self) -> bool {
+        self.inner.needs_host_trace_instances()
+    }
     fn download(
         &self,
         device: &(dyn Any + Send + Sync),

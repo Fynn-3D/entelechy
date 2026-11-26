@@ -962,6 +962,20 @@ impl Graph {
     /// consumers run last (priority 0). Graphs without `value(...)` domains
     /// return `canonical` unchanged.
     pub fn schedule_for_device(&self, canonical: &[usize]) -> Vec<usize> {
+        self.schedule_for_device_for(canonical, false)
+    }
+
+    /// Like [`Graph::schedule_for_device`], and when `hoist_trace_instances`
+    /// is true (hardware ray-query backends whose `native.trace@2` TLAS build
+    /// reads `meshes`/`instances` in Host memory) also hoists `native.trace@2`
+    /// `meshes`/`instances` producers to priority 2 and schedules their
+    /// `native.trace@2` consumers at priority 0 so async prefetch overlaps
+    /// behind independent GPU work.
+    pub fn schedule_for_device_for(
+        &self,
+        canonical: &[usize],
+        hoist_trace_instances: bool,
+    ) -> Vec<usize> {
         let n = self.nodes.len();
         let index = self.index();
         let producer = |source: &Source| match source {
@@ -987,6 +1001,24 @@ impl Graph {
                             feeds_value[src_idx] = true;
                         }
                     }
+                }
+            }
+            if hoist_trace_instances
+                && node.kernel.name() == "native.trace"
+                && node.kernel.version() == 2
+            {
+                let mut hoisted = false;
+                for port in ["meshes", "instances"] {
+                    if let Some(Binding::Now(source)) = node.inputs.get(port)
+                        && let Some(src_idx) = producer(source)
+                    {
+                        feeds_value[src_idx] = true;
+                        hoisted = true;
+                    }
+                }
+                if hoisted {
+                    any_value_domain = true;
+                    is_value_consumer[u] = true;
                 }
             }
         }

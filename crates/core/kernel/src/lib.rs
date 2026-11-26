@@ -54,6 +54,16 @@ pub const FEW_FRESH_BYTES: u64 = 1 << 20;
 /// device costs; fewer stay, the device's work kept whole.
 pub const FEW_LONG_WORK: u64 = 100_000;
 
+/// Maximum element count for routing a pure host-input producer directly onto
+/// the ordered (CPU/JIT) backend when a downstream hardware ray-query
+/// `native.trace@2` pass requires its output in Host memory (avoiding a
+/// mid-frame GPU->CPU flush and staging download).
+pub const HOST_BOUND_ELEMENTS: u64 = 4_096;
+
+/// Maximum typical operation budget for routing a pure host-input
+/// `native.trace@2` producer directly onto the ordered backend.
+pub const HOST_BOUND_WORK: u64 = 16_000_000;
+
 /// The runs placement remembers what their readers spared, past which
 /// it forgets them all ([`Runtime::begin_evaluation`]).
 const MAX_SPARED: usize = 1 << 14;
@@ -1107,6 +1117,12 @@ impl Runtime {
         self.backend.has_compute_device()
     }
 
+    /// Whether `native.trace@2` reads its `meshes` and `instances` inputs in
+    /// Host memory on the main backend (hardware ray-query TLAS construction).
+    pub fn needs_host_trace_instances(&self) -> bool {
+        self.backend.needs_host_trace_instances()
+    }
+
     /// Waits for the backend's device to finish what it was given. See
     /// [`Backend::settle_device`].
     pub fn settle_device(&self) {
@@ -1742,6 +1758,7 @@ impl Runtime {
         run: &Validated,
         typical: &Typical,
         invocation: &Invocation,
+        prefer_host: bool,
     ) -> (Option<Why>, Option<u64>) {
         if self.small == 0 || self.ordered.is_none() || !self.backend.has_device() {
             return (None, None);
@@ -1807,6 +1824,13 @@ impl Runtime {
         }
         if fresh > 0 {
             return (None, spare);
+        }
+        // When a downstream hardware ray-query `native.trace@2` pass must read
+        // this output on the Host (e.g. dynamic TLAS instances), executing a
+        // pure host-input producer directly on the ordered (CPU/JIT) backend
+        // avoids a GPU batch flush and staging download altogether.
+        if prefer_host && elements.max(carried) <= HOST_BOUND_ELEMENTS && work <= HOST_BOUND_WORK {
+            return (Some(Why::Small { elements, work }), spare);
         }
         let small = work <= budget;
         (small.then_some(Why::Small { elements, work }), spare)
@@ -2020,7 +2044,7 @@ impl Runtime {
             && self.building(version, prepared.as_ref()).is_none()
         {
             let key = run_key(version, invocation, &mut self.param_scratch);
-            if let (None, spare) = self.sized_off(&key, run, typical, invocation) {
+            if let (None, spare) = self.sized_off(&key, run, typical, invocation, false) {
                 self.spare(&key, invocation, spare);
                 let granted = self.scope_grants(version);
                 let backend = Arc::clone(&self.backend);
@@ -2159,6 +2183,27 @@ impl Runtime {
         version: &KernelVersion,
         invocation: &Invocation,
     ) -> Result<Vec<Handle>, ExecutionError> {
+        self.execute_inner(version, invocation, false)
+    }
+
+    /// Executes like [`Runtime::execute`], hinting that a downstream operation
+    /// (such as hardware ray-query `native.trace@2` TLAS construction) must
+    /// read the output in Host memory, so modest pure host-input producers
+    /// prefer the ordered (CPU/JIT) backend over a GPU round-trip.
+    pub fn execute_for_host(
+        &mut self,
+        version: &KernelVersion,
+        invocation: &Invocation,
+    ) -> Result<Vec<Handle>, ExecutionError> {
+        self.execute_inner(version, invocation, true)
+    }
+
+    fn execute_inner(
+        &mut self,
+        version: &KernelVersion,
+        invocation: &Invocation,
+        prefer_host: bool,
+    ) -> Result<Vec<Handle>, ExecutionError> {
         let granted = self.scope_grants(version);
         // Cleared per execution: a backend that does not measure this one
         // answers `None`.
@@ -2179,7 +2224,8 @@ impl Runtime {
                     None => match self.building(version, prepared.as_ref()) {
                         Some(why) => Some(why),
                         None => {
-                            let (why, spare) = self.sized_off(&key, run, typical, invocation);
+                            let (why, spare) =
+                                self.sized_off(&key, run, typical, invocation, prefer_host);
                             self.spare(&key, invocation, spare);
                             why
                         }
@@ -2252,7 +2298,7 @@ impl Runtime {
                         && self.ordered.is_some()
                         && version.leaves(self.backend.as_ref())
                     {
-                        return self.execute(version, invocation);
+                        return self.execute_inner(version, invocation, prefer_host);
                     }
                     if outputs.is_ok() {
                         ran_main.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -2267,6 +2313,19 @@ impl Runtime {
                 Ok(outputs)
             }
             Body::Native(op) => {
+                // Redeem any already-queued async prefetch for hardware RT
+                // `meshes` (3) / `instances` (4) so `trace_hw` reads Host RAM
+                // directly without triggering a redundant synchronous download.
+                if *op == NativeOp::TraceInstances && self.backend.needs_host_trace_instances() {
+                    for slot in [3usize, 4usize] {
+                        if let Some(&handle) = invocation.inputs.get(slot)
+                            && self.coming.contains_key(&handle)
+                        {
+                            let brought = self.bring_home(handle)?;
+                            self.telemetry.moved.downloaded += brought;
+                        }
+                    }
+                }
                 self.last_placement = Some(Placement {
                     backend: self.backend.name(),
                     routed: None,

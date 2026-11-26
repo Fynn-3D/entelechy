@@ -40,6 +40,9 @@ pub enum NativeOp {
     /// The same onto a `canvas`, whose extent the surface takes, as the
     /// raster package's Kernels take theirs.
     RasterizeCanvas,
+    /// Cutout rasterization onto a `canvas`, whose extent the surface takes:
+    /// combines `RasterizeCutout` (`@2`) and `RasterizeCanvas` (`@3`).
+    RasterizeCutoutCanvas,
     /// Each pixel's least key of `keys` and the triangles' fragments: the
     /// raster package's `raster.cover@4`, fast, for what needs only the
     /// nearest depth (a shadow map).
@@ -57,10 +60,11 @@ pub enum NativeOp {
 
 impl NativeOp {
     /// Every native operation.
-    pub const ALL: [NativeOp; 6] = [
+    pub const ALL: [NativeOp; 7] = [
         NativeOp::Rasterize,
         NativeOp::RasterizeCutout,
         NativeOp::RasterizeCanvas,
+        NativeOp::RasterizeCutoutCanvas,
         NativeOp::Cover,
         NativeOp::Trace,
         NativeOp::TraceInstances,
@@ -72,6 +76,7 @@ impl NativeOp {
             Self::Rasterize => KernelId::new("native.rasterize", 1).expect("valid id"),
             Self::RasterizeCutout => KernelId::new("native.rasterize", 2).expect("valid id"),
             Self::RasterizeCanvas => KernelId::new("native.rasterize", 3).expect("valid id"),
+            Self::RasterizeCutoutCanvas => KernelId::new("native.rasterize", 4).expect("valid id"),
             Self::Cover => KernelId::new("native.cover", 1).expect("valid id"),
             Self::Trace => KernelId::new("native.trace", 1).expect("valid id"),
             Self::TraceInstances => KernelId::new("native.trace", 2).expect("valid id"),
@@ -225,6 +230,19 @@ impl NativeOp {
             });
             return manifest;
         }
+        if self == Self::RasterizeCutoutCanvas {
+            let mut manifest = Self::RasterizeCutout.manifest();
+            manifest.id = self.id();
+            manifest.inputs.push(Port {
+                name: "canvas".into(),
+                ty: PortType {
+                    element: Type::Long,
+                    shape: Shape::Grid,
+                    schema: crate::raster::canvas_schema(),
+                },
+            });
+            return manifest;
+        }
         if self == Self::TraceInstances {
             let mut manifest = Self::Trace.manifest();
             manifest.id = self.id();
@@ -252,7 +270,11 @@ impl NativeOp {
             return manifest;
         }
         match self {
-            Self::RasterizeCutout | Self::RasterizeCanvas | Self::Cover | Self::TraceInstances => {
+            Self::RasterizeCutout
+            | Self::RasterizeCanvas
+            | Self::RasterizeCutoutCanvas
+            | Self::Cover
+            | Self::TraceInstances => {
                 unreachable!("answered above")
             }
             Self::Trace => Manifest {
@@ -369,6 +391,20 @@ impl NativeOp {
 // The raster package's `canvas.esn`, fast: as `native.rasterize@1`, over
 // the extent of `canvas`, an empty canvas: the node's domain is
 // `size(canvas)`. Its keys are not read; every pixel starts empty.
+"
+            }
+            Self::RasterizeCutoutCanvas => {
+                "\
+// native.rasterize@4: the backend's cutout rasterizer, onto a canvas.
+//   input vertices: Rows<{ clip: Vec4; normal: Vec3; uv: Vec2; }>
+//   input triangles: Rows<{ a: Int; b: Int; c: Int; }>
+//   input mask: Image
+//   input canvas: Grid<Long>
+//   param cutout: Float = 0.5
+//   output surface: Grid<{ depth: Float; normal: Vec3; uv: Vec2; id: Int; }>
+// As `native.rasterize@2`, over the extent of `canvas`, an empty canvas:
+// the node's domain is `size(canvas)`. Its keys are not read; every pixel
+// starts empty, and fragments whose `mask` alpha is below `cutout` are dropped.
 "
             }
             Self::RasterizeCutout => {
@@ -730,6 +766,14 @@ pub trait Backend: Send + Sync {
     /// fragment-only driver or a processor backend).
     fn has_compute_device(&self) -> bool {
         self.has_device()
+    }
+
+    /// Whether `native.trace@2` reads its `meshes` and `instances` inputs in
+    /// Host memory (e.g. hardware ray-query TLAS construction on `wgpu`, which
+    /// populates CPU-side `TlasInstance` descriptors). Backends using GPU
+    /// compute BVH/TLAS builders return `false` so instances stay on-device.
+    fn needs_host_trace_instances(&self) -> bool {
+        false
     }
 
     /// Downloads the words in the first `byte_len` bytes of a resource

@@ -996,6 +996,10 @@ impl Backend for WgpuBackend {
         true
     }
 
+    fn needs_host_trace_instances(&self) -> bool {
+        self.ray_query
+    }
+
     fn declines(&self, module: &Validated) -> Option<String> {
         self.refusal(module)
             .or_else(|| {
@@ -1524,6 +1528,7 @@ impl Backend for WgpuBackend {
             NativeOp::Rasterize
             | NativeOp::RasterizeCutout
             | NativeOp::RasterizeCanvas
+            | NativeOp::RasterizeCutoutCanvas
             | NativeOp::Cover => raster::rasterize(self, &self.raster, invocation, scope, op),
             NativeOp::Trace | NativeOp::TraceInstances => {
                 trace::trace(self, &self.trace_hw, &self.trace_bvh, invocation, scope, op)
@@ -2042,6 +2047,10 @@ impl Backend for GpuBackend {
 
     fn has_compute_device(&self) -> bool {
         self.inner().has_compute_device()
+    }
+
+    fn needs_host_trace_instances(&self) -> bool {
+        self.inner().needs_host_trace_instances()
     }
 
     fn download(

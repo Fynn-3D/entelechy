@@ -1331,8 +1331,12 @@ impl Backend for WebGlBackend {
                     &words,
                 )?])
             }
-            NativeOp::RasterizeCutout => {
-                let (v, t, mask, alpha) = raster::check_rasterize_cutout(invocation, scope)?;
+            NativeOp::RasterizeCutout | NativeOp::RasterizeCutoutCanvas => {
+                let (v, t, mask, alpha) = if op == NativeOp::RasterizeCutoutCanvas {
+                    raster::check_rasterize_cutout_canvas(invocation, scope)?
+                } else {
+                    raster::check_rasterize_cutout(invocation, scope)?
+                };
                 let mask_size = scope.size(mask)?;
                 let mask_words = self.input_values(scope, mask)?;
                 let words = raster::rasterize_masked(

@@ -2016,10 +2016,31 @@ fn trace_hw(
                 .inner
                 .lock()
                 .unwrap_or_else(|p| p.into_inner());
-            cache.hw_instanced.get_mut(&tlas_key).map(|entry| {
+            if let Some(entry) = cache.hw_instanced.get_mut(&tlas_key) {
                 entry.last_eval = eval_now;
-                entry.tlas.clone()
-            })
+                Some(entry.tlas.clone())
+            } else if insts_id != 0 {
+                // Check double-buffered dynamic TLAS slots BEFORE reading instance
+                // words back so multiple `native.trace@2` passes in the same frame
+                // (e.g. shadows + GI) reuse the already-built TLAS with zero readback.
+                cache
+                    .hw_instanced_dyn
+                    .iter_mut()
+                    .find_map(|(&(v, t, m, _), dyn_entry)| {
+                        if (v, t, m) != (verts_id, tris_id, meshes_id) {
+                            return None;
+                        }
+                        let slot = dyn_entry
+                            .slots
+                            .iter_mut()
+                            .find(|s| s.built_insts_id == insts_id)?;
+                        dyn_entry.last_eval = eval_now;
+                        slot.last_eval = eval_now;
+                        Some(Some(Arc::clone(&slot.tlas)))
+                    })
+            } else {
+                None
+            }
         };
         if let Some(tlas_opt) = cached {
             inst_cached_tlas = Some(tlas_opt);

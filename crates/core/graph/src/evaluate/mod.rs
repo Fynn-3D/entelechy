@@ -585,8 +585,13 @@ struct Layout {
     /// reads, is not among them.
     chill_after: Vec<Vec<NodeId>>,
     /// Output slots of each group that the Host reads directly (`awake`,
-    /// `value` in a domain, or an `async` reader's inputs).
+    /// `value` in a domain, an `async` reader's inputs, or `meshes`/`instances`
+    /// of `native.trace@2` on hardware ray-query backends).
     host_outputs: Vec<Vec<usize>>,
+    /// Groups producing `meshes`/`instances` for `native.trace@2` on a backend
+    /// whose TLAS build reads them in Host memory: modest pure host-input runs
+    /// prefer the ordered (CPU/JIT) backend to avoid a GPU flush and download.
+    prefer_host: Vec<bool>,
     /// `(output_slot, reader)` pairs for each group's executing readers,
     /// prefetched when `reader` runs routed off the main device.
     slot_readers: Vec<Vec<(usize, NodeId)>>,
@@ -725,6 +730,7 @@ impl Layout {
             Some((at, slot))
         };
         let mut host_outputs = vec![Vec::new(); groups.len()];
+        let mut prefer_host = vec![false; groups.len()];
         let mut slot_readers: Vec<Vec<(usize, NodeId)>> = vec![Vec::new(); groups.len()];
         let mark_host = |host_outputs: &mut [Vec<usize>], at: usize, slot: usize| {
             if !host_outputs[at].contains(&slot) {
@@ -782,6 +788,26 @@ impl Layout {
                     }
                 }
             }
+            if runtime.needs_host_trace_instances()
+                && group.version.native() == Some(entelechy_kernel::NativeOp::TraceInstances)
+            {
+                for port_name in ["meshes", "instances"] {
+                    if let Some(binding) = group.node.inputs.get(port_name) {
+                        let source = match binding {
+                            Binding::Now(source) | Binding::Previous { source, .. } => source,
+                        };
+                        if let Source::Node {
+                            node: producer,
+                            port,
+                        } = source
+                            && let Some((at, slot)) = output_slot(producer, port)
+                        {
+                            mark_host(&mut host_outputs, at, slot);
+                            prefer_host[at] = true;
+                        }
+                    }
+                }
+            }
             for binding in group.node.inputs.values() {
                 let source = match binding {
                     Binding::Now(source) | Binding::Previous { source, .. } => source,
@@ -821,6 +847,7 @@ impl Layout {
             moving,
             chill_after,
             host_outputs,
+            prefer_host,
             slot_readers,
             compiled,
         }
@@ -2469,7 +2496,13 @@ impl Evaluator {
                     runtime.execute(&group.version, &fallback)
                 }
             }
-            (None, None) => runtime.execute(&group.version, &invocation),
+            (None, None) => {
+                if frame.layout.prefer_host[at] {
+                    runtime.execute_for_host(&group.version, &invocation)
+                } else {
+                    runtime.execute(&group.version, &invocation)
+                }
+            }
         };
         // A run the Host has no room for runs again once remembered runs
         // and the outputs this frame has done with are let go; they are

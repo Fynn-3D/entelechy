@@ -70,12 +70,14 @@ impl Evaluator {
         // anything is copied.
         self.ensure_state_ports(graph);
         let has_device = runtime.has_device();
+        let hoist_trace = runtime.needs_host_trace_instances();
         if let Some((last, executing)) = &self.planned_from
             && last.kernels == runtime.revision()
             && last.window == context.window
             && last.scale == context.scale
             && last.fusion == self.fusion
             && last.has_device == has_device
+            && last.hoist_trace == hoist_trace
             && last.pinned == self.pinned
             && last.overrides == *overrides
             && last.externals == *externals
@@ -99,6 +101,7 @@ impl Evaluator {
                     pinned: self.pinned.clone(),
                     fusion: self.fusion,
                     has_device,
+                    hoist_trace,
                 },
                 Arc::clone(&made),
             )
@@ -168,8 +171,9 @@ impl Evaluator {
         context: &Context,
     ) -> Result<Arc<Vec<Group>>, EvaluateError> {
         let has_device = runtime.has_device();
+        let hoist_trace = runtime.needs_host_trace_instances();
         let scheduled = if has_device {
-            std::borrow::Cow::Owned(graph.schedule_for_device(order))
+            std::borrow::Cow::Owned(graph.schedule_for_device_for(order, hoist_trace))
         } else {
             std::borrow::Cow::Borrowed(order)
         };
@@ -228,6 +232,7 @@ impl Evaluator {
         if let Some((last, executing)) = &self.last_plan
             && last.fusion == self.fusion
             && last.has_device == has_device
+            && last.hoist_trace == hoist_trace
             && last.parts == parts
             && last.pinned == self.pinned
         {
@@ -238,6 +243,7 @@ impl Evaluator {
             pinned: self.pinned.clone(),
             fusion: self.fusion,
             has_device,
+            hoist_trace,
         };
         let mut groups: Vec<Group> = order
             .iter()
@@ -1273,6 +1279,7 @@ pub(super) struct PlanInputs {
     pinned: BTreeSet<NodeId>,
     fusion: bool,
     has_device: bool,
+    hoist_trace: bool,
 }
 
 /// What a plan was made from besides the graph: each node's law and
@@ -1282,6 +1289,7 @@ pub(super) struct PlanKey {
     pinned: BTreeSet<NodeId>,
     fusion: bool,
     has_device: bool,
+    hoist_trace: bool,
 }
 
 /// What the plan knows of a group before execution.

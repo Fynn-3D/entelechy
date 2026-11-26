@@ -146,12 +146,28 @@ pub fn check_rasterize_cutout(
     Ok((vertices, triangles, mask, cutout))
 }
 
-/// The third input a form of the rasterizer takes, if any.
+/// The same for the cutout-onto-canvas form: `mask` tests cutout alpha and
+/// the surface takes `canvas`'s extent (`domain = size(canvas)`).
+pub fn check_rasterize_cutout_canvas(
+    invocation: &Invocation,
+    scope: &Scope<'_>,
+) -> Result<(Handle, Handle, Handle, f32), ExecutionError> {
+    let (vertices, triangles, mask) = check_rasterize_with(invocation, scope, Extra::MaskCanvas)?;
+    let mask = mask.expect("a cutout asked for its mask");
+    let cutout = match invocation.params.first() {
+        Some(entelechy_abi::Value::Float(value)) => *value,
+        _ => 0.5,
+    };
+    Ok((vertices, triangles, mask, cutout))
+}
+
+/// The extra input(s) a form of the rasterizer takes, if any.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Extra {
     None,
     Mask,
     Canvas,
+    MaskCanvas,
     /// The cover's `keys`: a canvas whose keys are read, and the output's
     /// layout.
     Keys,
@@ -162,7 +178,11 @@ fn check_rasterize_with(
     scope: &Scope<'_>,
     extra: Extra,
 ) -> Result<(Handle, Handle, Option<Handle>), ExecutionError> {
-    let wanted = if extra == Extra::None { 2 } else { 3 };
+    let wanted = match extra {
+        Extra::None => 2,
+        Extra::Mask | Extra::Canvas | Extra::Keys => 3,
+        Extra::MaskCanvas => 4,
+    };
     if invocation.inputs.len() != wanted {
         return Err(ExecutionError::InputCount {
             expected: wanted,
@@ -170,7 +190,7 @@ fn check_rasterize_with(
         });
     }
     let (vertices, triangles) = (invocation.inputs[0], invocation.inputs[1]);
-    let mask = (extra == Extra::Mask).then(|| invocation.inputs[2]);
+    let mask = matches!(extra, Extra::Mask | Extra::MaskCanvas).then(|| invocation.inputs[2]);
     let op = if extra == Extra::Keys {
         "cover"
     } else {
@@ -202,13 +222,14 @@ fn check_rasterize_with(
     if invocation.domain.is_empty() {
         return Err(ExecutionError::EmptyDomain);
     }
-    if matches!(extra, Extra::Canvas | Extra::Keys) {
+    if matches!(extra, Extra::Canvas | Extra::Keys | Extra::MaskCanvas) {
         let (port, drawn) = if extra == Extra::Keys {
             ("keys", "the keys are")
         } else {
             ("canvas", "the surface is")
         };
-        let canvas = invocation.inputs[2];
+        let canvas_slot = if extra == Extra::MaskCanvas { 3 } else { 2 };
+        let canvas = invocation.inputs[canvas_slot];
         if scope.schema(canvas)? != canvas_schema() {
             return Err(contract(format!("`{port}` must be a grid of `Long`")));
         }
@@ -366,6 +387,18 @@ pub fn rasterize_cutout(
         return Err(error.into());
     }
     Ok(vec![output])
+}
+
+/// Rasterizes with a cutout onto a canvas: as [`rasterize_cutout`], over
+/// the canvas's extent.
+pub fn rasterize_cutout_canvas(
+    invocation: &Invocation,
+    scope: &mut Scope<'_>,
+) -> Result<Vec<Handle>, ExecutionError> {
+    check_rasterize_cutout_canvas(invocation, scope)?;
+    let mut drawn = invocation.clone();
+    drawn.inputs.truncate(3);
+    rasterize_cutout(&drawn, scope)
 }
 
 /// The pure rasterization: the surface words for the given vertices and

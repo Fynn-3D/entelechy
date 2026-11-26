@@ -98,14 +98,31 @@ fn corner(t: u32, k: u32) -> u32 {
 }
 ";
 
-/// The cutout's mask, at the binding `{mask}`.
-const MASK_WGSL: &str = "
-@group(0) @binding({mask}) var<storage, read> mask: array<u32>;
+/// Hardware-filtered 2D tiled texture mask sampling (when `FLOAT32_FILTERABLE`
+/// is supported): single hardware TMU bilinear tap sharing the immutable
+/// `DeviceImage` texture mirror with shading passes.
+const MASK_FILTERED_WGSL: &str = "
+@group(0) @binding({mask}) var mask_tex: texture_2d<f32>;
+@group(0) @binding({sampler}) var mask_sampler: sampler;
+
+fn mask_alpha(uv: vec2<f32>) -> f32 {
+    return textureSampleLevel(mask_tex, mask_sampler, uv, 0.0).a;
+}
+
+fn uv_of(v: u32) -> vec2<f32> {
+    return vec2<f32>(bitcast<f32>(vertices[v * 9u + 7u]), bitcast<f32>(vertices[v * 9u + 8u]));
+}
+";
+
+/// 2D tiled texture mask sampling fallback without `FLOAT32_FILTERABLE`:
+/// manual 4-tap bilinear over the 2D tiled hardware texture cache.
+const MASK_LOAD_WGSL: &str = "
+@group(0) @binding({mask}) var mask_tex: texture_2d<f32>;
 
 fn texel(x: i32, y: i32, w: i32, h: i32) -> f32 {
     let cx = clamp(x, 0, max(w - 1, 0));
     let cy = clamp(y, 0, max(h - 1, 0));
-    return bitcast<f32>(mask[u32(cy * w + cx) * 4u + 3u]);
+    return textureLoad(mask_tex, vec2<i32>(cx, cy), 0).a;
 }
 
 // The mask's alpha where `at_linear` would read it: the four texels
@@ -191,9 +208,19 @@ fn hiz_occluded(ux0: u32, uy0: u32, ux1: u32, uy1: u32, min_z: f32) -> bool {
     return min_z > hiz_max + 2e-5;
 }
 
+// Macro-occluder predicate shared by Phase 1 (`occ_only = 1`) and Phase 3
+// (`hiz_mips > 0`) so every triangle belongs to exactly one phase (zero redraw):
+// hardware-rasterized triangles (`>= SMALL` along at least one axis) covering at
+// least a 16x16 pixel tile (>= 128 px^2) draw once in Phase 1 directly into
+// `places` + `depth`, seeding both the MAX-Z Hi-Z pyramid and Phase 4 early-Z.
+fn is_occ(twice_area: f32, x0: f32, y0: f32, x1: f32, y1: f32) -> bool {
+    let not_small = (x1 - x0) >= f32(setup.small) || (y1 - y0) >= f32(setup.small);
+    return not_small && twice_area >= 256.0 && (x1 - x0) >= 15.0 && (y1 - y0) >= 15.0;
+}
+
 // How a triangle is drawn: 0 not at all (unusable, degenerate, offscreen,
-// frustum-Z or Hi-Z occluded), 1 by the device's rasterizer, 2 by the
-// indirect micro-triangle pass.
+// frustum-Z, already drawn in Phase 1, or Hi-Z occluded), 1 by the device's
+// rasterizer, 2 by the indirect micro-triangle pass.
 fn sort(t: u32) -> u32 {
     let ia = corner(t, 0u);
     let ib = corner(t, 1u);
@@ -223,10 +250,9 @@ fn sort(t: u32) -> u32 {
             return 0u;
         }
         if setup.occ_only != 0u {
-            // Solid occluders only (>= 16 px^2 screen area and >= 4x4 pixel box).
-            if twice_area >= 32.0 && (x1 - x0) >= 3.0 && (y1 - y0) >= 3.0 {
-                return 1u;
-            }
+            return select(0u, 1u, is_occ(twice_area, x0, y0, x1, y1));
+        }
+        if setup.hiz_mips != 0u && is_occ(twice_area, x0, y0, x1, y1) {
             return 0u;
         }
         if hiz_occluded(u32(x0), u32(y0), u32(x1), u32(y1), min_z) {
@@ -708,8 +734,12 @@ fn main(
 ";
 
 /// Step 2 where a fragment knows its primitive: the kept triangles drawn
-/// indexed, a vertex shaded once for every triangle that shares it.
+/// indexed, writing their global triangle row + 1 directly into `places` so
+/// Phase 1 (occluders) and Phase 4 (surviving non-occluders) compose cleanly
+/// in a single visibility buffer with zero double-drawing.
 const INDEXED_WGSL: &str = "
+@group(0) @binding(3) var<storage, read> draw_rows: array<u32>;
+
 struct Cut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -728,10 +758,10 @@ fn vs_cut(@builtin(vertex_index) v: u32) -> Cut {
     return out;
 }
 
-// The kept triangle's place, one above it, so a cleared zero is none.
+// Global triangle row + 1, so a cleared zero is none.
 @fragment
 fn fs(@builtin(primitive_index) p: u32) -> @location(0) u32 {
-    return p + 1u;
+    return draw_rows[p] + 1u;
 }
 
 @fragment
@@ -739,23 +769,24 @@ fn fs_cut(in: Cut, @builtin(primitive_index) p: u32) -> @location(0) u32 {
     if mask_alpha(in.uv) < setup.cutout {
         discard;
     }
-    return p + 1u;
+    return draw_rows[p] + 1u;
 }
 ";
 
 /// Step 2 where it does not: each triangle's corners pulled from the kept
-/// index buffer, its place carried flat.
+/// index buffer, its global triangle row carried flat.
 const PULLED_WGSL: &str = "
 @group(0) @binding(2) var<storage, read> indices: array<u32>;
+@group(0) @binding(3) var<storage, read> draw_rows: array<u32>;
 
 struct Plain {
     @builtin(position) clip: vec4<f32>,
-    @location(0) @interpolate(flat) place: u32,
+    @location(0) @interpolate(flat) row: u32,
 };
 
 struct Cut {
     @builtin(position) clip: vec4<f32>,
-    @location(0) @interpolate(flat) place: u32,
+    @location(0) @interpolate(flat) row: u32,
     @location(1) uv: vec2<f32>,
 };
 
@@ -763,13 +794,8 @@ struct Cut {
 fn vs(@builtin(vertex_index) at: u32) -> Plain {
     var out: Plain;
     out.clip = clip_of(indices[at]);
-    out.place = at / 3u;
+    out.row = draw_rows[at / 3u];
     return out;
-}
-
-@vertex
-fn vs_depth(@builtin(vertex_index) at: u32) -> @builtin(position) vec4<f32> {
-    return clip_of(indices[at]);
 }
 
 @vertex
@@ -777,14 +803,14 @@ fn vs_cut(@builtin(vertex_index) at: u32) -> Cut {
     let v = indices[at];
     var out: Cut;
     out.clip = clip_of(v);
-    out.place = at / 3u;
+    out.row = draw_rows[at / 3u];
     out.uv = uv_of(v);
     return out;
 }
 
 @fragment
 fn fs(in: Plain) -> @location(0) u32 {
-    return in.place + 1u;
+    return in.row + 1u;
 }
 
 @fragment
@@ -792,7 +818,7 @@ fn fs_cut(in: Cut) -> @location(0) u32 {
     if mask_alpha(in.uv) < setup.cutout {
         discard;
     }
-    return in.place + 1u;
+    return in.row + 1u;
 }
 ";
 
@@ -861,7 +887,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var found = false;
     var f: Fragment;
     if place != 0u {
-        row = rows[place - 1u];
+        row = place - 1u;
         f = fragment(row, p);
         found = true;
     }
@@ -927,7 +953,7 @@ fn cover(@builtin(global_invocation_id) id: vec3<u32>) {
     var z = 0.0;
     var found = false;
     if place != 0u {
-        row = rows[place - 1u];
+        row = place - 1u;
         z = depth_of(row, p);
         found = true;
     }
@@ -974,19 +1000,20 @@ pub(crate) struct RasterPipelines {
     draw_layout: wgpu::BindGroupLayout,
     draw: wgpu::RenderPipeline,
     draw_cut: wgpu::RenderPipeline,
-    draw_occ: wgpu::RenderPipeline,
     hiz: HizPipelines,
     resolve_layout: wgpu::BindGroupLayout,
     resolve: wgpu::ComputePipeline,
     /// The resolving pass of `native.cover`: keys, not a surface.
     cover: wgpu::ComputePipeline,
-    /// A single unread texel bound when a call carries no cutout mask.
-    empty_mask: wgpu::Buffer,
+    /// A single unread 1x1 texture bound when a call carries no cutout mask.
+    empty_mask_view: wgpu::TextureView,
     /// Whether the draw is indexed: see [`GpuBackend::primitive_index`].
     indexed: bool,
     /// Whether the indirect micro-triangle pass draws small triangles itself:
     /// where the device lands 64-bit atomics.
     here: bool,
+    /// Whether `mask_tex` uses hardware bilinear filtering (`FLOAT32_FILTERABLE`).
+    mask_filtered: bool,
 }
 
 const PLACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
@@ -998,6 +1025,7 @@ fn build(
     indexed: bool,
     here: bool,
     subgroups: crate::wgsl::SubgroupCaps,
+    mask_filtered: bool,
 ) -> Result<RasterPipelines, String> {
     let guard = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let module = |label: &str, parts: &[&str]| {
@@ -1113,24 +1141,55 @@ fn build(
         "place",
     );
 
+    let mask_wgsl = |mask_binding: &str, sampler_binding: &str| {
+        if mask_filtered {
+            MASK_FILTERED_WGSL
+                .replace("{mask}", mask_binding)
+                .replace("{sampler}", sampler_binding)
+        } else {
+            MASK_LOAD_WGSL.replace("{mask}", mask_binding)
+        }
+    };
+    let mask_tex_entry =
+        |binding: u32, visibility: wgpu::ShaderStages| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float {
+                    filterable: mask_filtered,
+                },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+    let mask_sampler_entry =
+        |binding: u32, visibility: wgpu::ShaderStages| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        };
+
     let (draw_small_layout, draw_small) = if here {
-        let small_mask = MASK_WGSL.replace("{mask}", "6");
+        let small_mask = mask_wgsl("6", "7");
         let small_mod = module(
             "entelechy rasterize draw_small",
             &[SETUP_WGSL, TRIANGLES_WGSL, &small_mask, DRAW_SMALL_WGSL],
         );
-        let (sl, spl) = layout(
-            "entelechy rasterize draw_small",
-            &[
-                uniform(c),
-                storage(1, c, true),
-                storage(2, c, true),
-                storage(3, c, true),
-                storage(4, c, true),
-                storage(5, c, false),
-                storage(6, c, true),
-            ],
-        );
+        let mut small_entries = vec![
+            uniform(c),
+            storage(1, c, true),
+            storage(2, c, true),
+            storage(3, c, true),
+            storage(4, c, true),
+            storage(5, c, false),
+            mask_tex_entry(6, c),
+        ];
+        if mask_filtered {
+            small_entries.push(mask_sampler_entry(7, c));
+        }
+        let (sl, spl) = layout("entelechy rasterize draw_small", &small_entries);
         let sp = compute("entelechy rasterize draw_small", &spl, &small_mod, "main");
         (Some(sl), Some(sp))
     } else {
@@ -1144,27 +1203,31 @@ fn build(
     } else {
         ""
     };
+    let draw_mask = mask_wgsl("4", "5");
     let draw_module = module(
         "entelechy rasterize draw",
-        &[enable, SETUP_WGSL, &MASK_WGSL.replace("{mask}", "3"), feed],
+        &[enable, SETUP_WGSL, &draw_mask, feed],
     );
     let vf = wgpu::ShaderStages::VERTEX_FRAGMENT;
-    let (draw_layout, draw_pipeline_layout) = layout(
-        "entelechy rasterize draw",
-        &[
-            uniform(vf),
-            storage(1, wgpu::ShaderStages::VERTEX_FRAGMENT, true),
-            storage(2, wgpu::ShaderStages::VERTEX, true),
-            storage(3, wgpu::ShaderStages::FRAGMENT, true),
-        ],
-    );
-    let render = |vertex: &str, fragment: Option<&str>| {
+    let mut draw_entries = vec![
+        uniform(vf),
+        storage(1, wgpu::ShaderStages::VERTEX_FRAGMENT, true),
+        storage(2, wgpu::ShaderStages::VERTEX, true),
+        storage(3, vf, true),
+        mask_tex_entry(4, wgpu::ShaderStages::FRAGMENT),
+    ];
+    if mask_filtered {
+        draw_entries.push(mask_sampler_entry(5, wgpu::ShaderStages::FRAGMENT));
+    }
+    let (draw_layout, draw_pipeline_layout) = layout("entelechy rasterize draw", &draw_entries);
+    let color_targets = [Some(wgpu::ColorTargetState {
+        format: PLACE_FORMAT,
+        blend: None,
+        write_mask: wgpu::ColorWrites::ALL,
+    })];
+    let render = |vertex: &str, fragment: &str| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(if fragment.is_some() {
-                "entelechy rasterize draw"
-            } else {
-                "entelechy rasterize occ"
-            }),
+            label: Some("entelechy rasterize draw"),
             layout: Some(&draw_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &draw_module,
@@ -1189,23 +1252,18 @@ fn build(
                 bias: Default::default(),
             }),
             multisample: Default::default(),
-            fragment: fragment.map(|ep| wgpu::FragmentState {
+            fragment: Some(wgpu::FragmentState {
                 module: &draw_module,
-                entry_point: Some(ep),
+                entry_point: Some(fragment),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: PLACE_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &color_targets,
             }),
             multiview_mask: None,
             cache: None,
         })
     };
-    let draw = render("vs", Some("fs"));
-    let draw_cut = render("vs_cut", Some("fs_cut"));
-    let draw_occ = render(if indexed { "vs" } else { "vs_depth" }, None);
+    let draw = render("vs", "fs");
+    let draw_cut = render("vs_cut", "fs_cut");
     let hiz = build_hiz_pipelines(device);
 
     let resolve_module = module(
@@ -1246,11 +1304,23 @@ fn build(
         &resolve_module,
         "cover",
     );
-    let empty_mask = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("rasterize mask"),
-        size: 16,
-        usage: wgpu::BufferUsages::STORAGE,
-        mapped_at_creation: false,
+    let empty_mask_tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("rasterize empty mask"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba32Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let empty_mask_view = empty_mask_tex.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2),
+        ..Default::default()
     });
     if let Some(error) = wait.block_on(guard.pop()) {
         return Err(format!(
@@ -1268,14 +1338,14 @@ fn build(
         draw_layout,
         draw,
         draw_cut,
-        draw_occ,
         hiz,
         resolve_layout,
         resolve,
         cover,
-        empty_mask,
+        empty_mask_view,
         indexed,
         here,
+        mask_filtered,
     })
 }
 
@@ -1320,6 +1390,11 @@ pub(crate) fn rasterize(
                 entelechy_rules::raster::check_rasterize_cutout(invocation, scope)?;
             (vertices, triangles, Some(mask), alpha)
         }
+        NativeOp::RasterizeCutoutCanvas => {
+            let (vertices, triangles, mask, alpha) =
+                entelechy_rules::raster::check_rasterize_cutout_canvas(invocation, scope)?;
+            (vertices, triangles, Some(mask), alpha)
+        }
         NativeOp::RasterizeCanvas => {
             let (vertices, triangles) =
                 entelechy_rules::raster::check_rasterize_canvas(invocation, scope)?;
@@ -1342,6 +1417,7 @@ pub(crate) fn rasterize(
             gpu.primitive_index,
             gpu.int64_atomics,
             gpu.subgroups,
+            gpu.float32_filterable,
         )
     }) {
         Ok(pipelines) => pipelines,
@@ -1363,20 +1439,39 @@ pub(crate) fn rasterize(
     let vertex_buffer = gpu.bind_input(scope, vertices)?;
     let triangle_buffer = gpu.bind_input(scope, triangles)?;
 
-    // The mask is always bound; with none it is a single texel the shaders
-    // leave unread.
+    // The mask is always bound as a 2D tiled hardware texture sharing the
+    // immutable `DeviceImage` texture mirror with shading passes (zero extra
+    // copies after first use); with none it is a 1x1 dummy texture left unread.
     let mask_size = match mask {
         Some(mask) => scope.size(mask)?,
         None => entelechy_abi::Domain::Grid(1, 1),
     };
-    let mask_buffer = match mask {
-        Some(mask) => gpu.bind_input(scope, mask)?,
-        None => pipelines.empty_mask.clone(),
+    let (mask_view, mask_src_buf, mask_mirror_plan) = if let Some(mask_h) = mask {
+        let buf = gpu.bind_input(scope, mask_h)?;
+        let image = scope
+            .resident(mask_h)?
+            .and_then(|dev| dev.downcast_ref::<DeviceImage>())
+            .ok_or_else(|| {
+                ExecutionError::Device("rasterize mask is not resident on the GPU".to_owned())
+            })?;
+        let mask_port = entelechy_ir::Port {
+            name: "mask".into(),
+            ty: entelechy_ir::PortType {
+                element: entelechy_ir::Type::Vec4,
+                shape: entelechy_abi::Shape::Grid,
+                schema: entelechy_rules::raster::mask_schema(),
+            },
+        };
+        let (view, plan) =
+            gpu.plan_texture_mirror(image, mask_h, &mask_port, mask_size, 0, false, false, None)?;
+        (view, Some(buf), plan)
+    } else {
+        (pipelines.empty_mask_view.clone(), None, None)
     };
     let block_count = triangle_count.div_ceil(BLOCK);
     let blocks_x = block_count.clamp(1, MOST_GROUPS);
     let blocks_y = block_count.div_ceil(blocks_x).max(1);
-    let use_hiz = triangle_count >= HIZ_TRI_THRESHOLD && mask.is_none();
+    let use_hiz = triangle_count >= HIZ_TRI_THRESHOLD;
     let (_, _, hiz_mip_count) = if use_hiz {
         hiz_dims(width, height)
     } else {
@@ -1407,9 +1502,9 @@ pub(crate) fn rasterize(
         }
         bytes
     };
-    let main_setup_bytes =
-        encode_setup_bytes(if pipelines.here { SMALL } else { 0 }, hiz_mip_count, 0);
-    let occ_setup_bytes = encode_setup_bytes(0, 0, 1);
+    let small_limit = if pipelines.here { SMALL } else { 0 };
+    let main_setup_bytes = encode_setup_bytes(small_limit, hiz_mip_count, 0);
+    let occ_setup_bytes = encode_setup_bytes(small_limit, 0, 1);
     let hiz_payloads = if use_hiz {
         hiz_level_payloads(width, height, before.is_some())
     } else {
@@ -1439,7 +1534,7 @@ pub(crate) fn rasterize(
     if !batched {
         gpu.batch.flush()?;
     }
-    let mut all_uniform_payloads: Vec<&[u8]> = Vec::with_capacity(2 + hiz_payloads.len());
+    let mut all_uniform_payloads: Vec<&[u8]> = Vec::with_capacity(3 + hiz_payloads.len());
     all_uniform_payloads.push(&main_setup_bytes);
     if use_hiz {
         all_uniform_payloads.push(&occ_setup_bytes);
@@ -1447,6 +1542,14 @@ pub(crate) fn rasterize(
             all_uniform_payloads.push(p.as_slice());
         }
     }
+    let mask_pad_idx = mask_mirror_plan
+        .as_ref()
+        .and_then(|plan| plan.pad_params.as_ref())
+        .map(|pad| {
+            let idx = all_uniform_payloads.len();
+            all_uniform_payloads.push(pad.as_slice());
+            idx
+        });
     let mut unbatched_uniforms = Vec::new();
     let uniform_slices = if batched {
         gpu.batch.alloc_uniforms(&all_uniform_payloads)?
@@ -1461,10 +1564,56 @@ pub(crate) fn rasterize(
     };
     let setup_slice = &uniform_slices[0];
     let occ_setup_slice = use_hiz.then(|| &uniform_slices[1]);
-    let hiz_level_slices = if use_hiz { &uniform_slices[2..] } else { &[] };
+    let hiz_level_slices = if use_hiz {
+        &uniform_slices[2..2 + hiz_payloads.len()]
+    } else {
+        &[]
+    };
+    let spare = gpu.spare();
+    let mut extra_scratch: Vec<wgpu::Buffer> = Vec::new();
+    let mut pending_mask_mirror: Option<(
+        Handle,
+        crate::texture::TextureMirror,
+        crate::texture::PendingMirrorCopy,
+    )> = None;
+    if let Some(plan) = mask_mirror_plan {
+        let padded = if let Some(pad_idx) = mask_pad_idx {
+            let byte_size =
+                (u64::from(plan.padded_row_bytes) * u64::from(plan.height) * u64::from(plan.depth))
+                    .max(16)
+                    .div_ceil(16)
+                    * 16;
+            let scratch_buf = spare.take(
+                &gpu.device,
+                byte_size,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            );
+            extra_scratch.push(scratch_buf.clone());
+            Some((
+                scratch_buf,
+                uniform_slices[pad_idx].clone(),
+                plan.padded_row_bytes,
+                plan.fold_x,
+            ))
+        } else {
+            None
+        };
+        let copy = crate::texture::PendingMirrorCopy {
+            src: mask_src_buf.expect("mask source buffer"),
+            dst: plan.mirror.texture.clone(),
+            view_dim: plan.mirror.view_dim,
+            width: plan.width,
+            height: plan.height,
+            depth: plan.depth,
+            row_bytes: plan.row_bytes,
+            padded,
+            mip_scratch: None,
+            mip_levels: Vec::new(),
+        };
+        pending_mask_mirror = Some((plan.handle, plan.mirror, copy));
+    }
 
     // The keeping pass's buffers, from the pile and back to it.
-    let spare = gpu.spare();
     let scratch = |words: u64, usage: wgpu::BufferUsages| {
         spare.take(
             &gpu.device,
@@ -1566,51 +1715,85 @@ pub(crate) fn rasterize(
         ],
     });
     let draw_small_group = pipelines.draw_small_layout.as_ref().map(|sl| {
+        let mut entries = vec![
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: setup_slice.binding(),
+            },
+            entry(1, &vertex_buffer),
+            entry(2, &triangle_buffer),
+            entry(3, &small_rows),
+            entry(4, &args),
+            entry(5, &keys),
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(&mask_view),
+            },
+        ];
+        if pipelines.mask_filtered {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::Sampler(&gpu.sampler_clamp),
+            });
+        }
         gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("entelechy rasterize draw_small"),
             layout: sl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: setup_slice.binding(),
-                },
-                entry(1, &vertex_buffer),
-                entry(2, &triangle_buffer),
-                entry(3, &small_rows),
-                entry(4, &args),
-                entry(5, &keys),
-                entry(6, &mask_buffer),
-            ],
+            entries: &entries,
         })
     });
     let occ_draw_group = occ_setup_slice.map(|occ_u| {
+        let mut entries = vec![
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: occ_u.binding(),
+            },
+            entry(1, &vertex_buffer),
+            entry(2, &indices),
+            entry(3, &rows),
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&mask_view),
+            },
+        ];
+        if pipelines.mask_filtered {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::Sampler(&gpu.sampler_clamp),
+            });
+        }
         gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("entelechy rasterize occ draw"),
             layout: &pipelines.draw_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: occ_u.binding(),
-                },
-                entry(1, &vertex_buffer),
-                entry(2, &indices),
-                entry(3, &mask_buffer),
-            ],
+            entries: &entries,
         })
     });
-    let draw_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("entelechy rasterize draw"),
-        layout: &pipelines.draw_layout,
-        entries: &[
+    let draw_group = {
+        let mut entries = vec![
             wgpu::BindGroupEntry {
                 binding: 0,
                 resource: setup_slice.binding(),
             },
             entry(1, &vertex_buffer),
             entry(2, &indices),
-            entry(3, &mask_buffer),
-        ],
-    });
+            entry(3, &rows),
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&mask_view),
+            },
+        ];
+        if pipelines.mask_filtered {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::Sampler(&gpu.sampler_clamp),
+            });
+        }
+        gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("entelechy rasterize draw"),
+            layout: &pipelines.draw_layout,
+            entries: &entries,
+        })
+    };
 
     // A surface, or two words a key.
     let (schema, words) = match before {
@@ -1656,9 +1839,26 @@ pub(crate) fn rasterize(
             })
     };
     let drawing = triangle_count > 0;
+    if let Some((mask_h, mirror, copy)) = pending_mask_mirror {
+        gpu.encode_mirror_copy(&mut encoder, &copy)?;
+        if let Some(image) = scope
+            .resident(mask_h)?
+            .and_then(|dev| dev.downcast_ref::<DeviceImage>())
+        {
+            *image.mirror.lock().unwrap_or_else(|p| p.into_inner()) = Some(mirror);
+        }
+    }
 
-    // Phase 1 + Phase 2 (dense opaque draws): depth-only occluder pre-pass +
-    // conservative MAX-Z Hi-Z mip pyramid.
+    // Phase 1 + Phase 2 (zero-redraw 2-phase Hi-Z, opaque and alpha-cutout):
+    // draw macro-occluders ONCE directly into `places` (global row + 1) and
+    // `depth`, then build the conservative MAX-Z Hi-Z pyramid. Transparent
+    // cutout holes leave depth at 1.0, so MAX-Z over any tile containing holes
+    // stays 1.0 and never falsely culls.
+    let draw_pipeline = if mask.is_some() {
+        &pipelines.draw_cut
+    } else {
+        &pipelines.draw
+    };
     if use_hiz {
         encoder.clear_buffer(&args, 0, None);
         {
@@ -1679,7 +1879,15 @@ pub(crate) fn rasterize(
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("entelechy rasterize occ draw"),
-                color_attachments: &[],
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &places_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &depth_view,
                     depth_ops: Some(wgpu::Operations {
@@ -1692,7 +1900,7 @@ pub(crate) fn rasterize(
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&pipelines.draw_occ);
+            pass.set_pipeline(draw_pipeline);
             pass.set_bind_group(0, occ_draw_group.as_ref().expect("occ draw"), &[]);
             if pipelines.indexed {
                 pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -1714,7 +1922,7 @@ pub(crate) fn rasterize(
         );
     }
 
-    // Phase 3: main visibility culling + compaction + indirect micro-triangles.
+    // Phase 3: visibility culling of non-occluders + compaction + indirect micro-triangles.
     if pipelines.here {
         encoder.clear_buffer(&keys, 0, None);
     }
@@ -1740,7 +1948,9 @@ pub(crate) fn rasterize(
             pass.dispatch_workgroups_indirect(&args, 32);
         }
     }
-    // Phase 4: hardware visibility rasterization of surviving triangles in exact row order.
+    // Phase 4: hardware visibility rasterization of surviving non-occluders in
+    // exact row order, loading Phase 1's visibility + depth buffers when Hi-Z
+    // ran so no macro-occluder is ever shaded twice and hardware early-Z stays warm.
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("entelechy rasterize draw"),
@@ -1749,14 +1959,22 @@ pub(crate) fn rasterize(
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    load: if use_hiz {
+                        wgpu::LoadOp::Load
+                    } else {
+                        wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                    },
                     store: wgpu::StoreOp::Store,
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &depth_view,
                 depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
+                    load: if use_hiz {
+                        wgpu::LoadOp::Load
+                    } else {
+                        wgpu::LoadOp::Clear(1.0)
+                    },
                     store: wgpu::StoreOp::Discard,
                 }),
                 stencil_ops: None,
@@ -1769,11 +1987,7 @@ pub(crate) fn rasterize(
             multiview_mask: None,
         });
         if drawing {
-            pass.set_pipeline(if mask.is_some() {
-                &pipelines.draw_cut
-            } else {
-                &pipelines.draw
-            });
+            pass.set_pipeline(draw_pipeline);
             pass.set_bind_group(0, &draw_group, &[]);
             if pipelines.indexed {
                 pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -1810,13 +2024,10 @@ pub(crate) fn rasterize(
             .wait
             .parks_with_host()
             .then(|| gpu.page_pace_ops_budget());
-        gpu.batch.finish_node(
-            encoder,
-            est_ops,
-            vec![marks, offsets, indices, rows, args, small_rows, keys],
-            keep_textures,
-            page_budget,
-        )?;
+        let mut keep_buffers = vec![marks, offsets, indices, rows, args, small_rows, keys];
+        keep_buffers.extend(extra_scratch);
+        gpu.batch
+            .finish_node(encoder, est_ops, keep_buffers, keep_textures, page_budget)?;
         if gpu.wait.parks_with_host() && gpu.page_queue.full(0, gpu.page_pace_ops_budget()) {
             gpu.batch.flush()?;
             gpu.drain_page()?;
@@ -1845,6 +2056,7 @@ pub(crate) fn rasterize(
         for buffer in unbatched_uniforms
             .into_iter()
             .chain([marks, offsets, indices, rows, args, small_rows, keys])
+            .chain(extra_scratch)
         {
             spare.keep(buffer, None);
         }

@@ -7559,3 +7559,563 @@ fn hardware_shader_f16_and_packed_f16_storage_matches_cpu() {
     );
     assert_eq!(fb_scan, cpu_scan, "fallback Vec3 scan mismatched CPU");
 }
+
+#[test]
+fn cutout_rasterize_canvas_and_hiz_matches_cpu() {
+    use entelechy_rules::raster::{
+        Cutout, SURFACE_WORDS, canvas_schema, mask_schema, rasterize_masked, triangle_schema,
+        vertex_schema,
+    };
+
+    let Some(gpu_backend) = gpu() else { return };
+    let Some(pulled) = gpu() else { return };
+    let pulled = pulled.with_pulled_vertices();
+    let Some(no_atomics) = gpu() else { return };
+    let no_atomics = no_atomics.with_long_pairs();
+    let Some(unfiltered) = gpu() else { return };
+    let unfiltered = unfiltered.without_float32_filterable();
+    let cpu = CpuBackend;
+
+    let (width, height) = (128u32, 96u32);
+    // 32x32 cutout mask: left half (u < 0.5) is solid opaque (alpha = 1.0),
+    // right half (u >= 0.5) is a coarse 4x4 checkerboard of alpha 1.0 / 0.0 holes.
+    let (mask_w, mask_h) = (32u32, 32u32);
+    let mut mask = Vec::with_capacity((mask_w * mask_h * 4) as usize);
+    for y in 0..mask_h {
+        for x in 0..mask_w {
+            let alpha = if x < mask_w / 2 || ((x / 4) + (y / 4)) % 2 == 0 {
+                1.0f32
+            } else {
+                0.0f32
+            };
+            mask.extend([
+                1.0f32.to_bits(),
+                1.0f32.to_bits(),
+                1.0f32.to_bits(),
+                alpha.to_bits(),
+            ]);
+        }
+    }
+
+    let mut verts: Vec<u32> = Vec::new();
+    let mut tris: Vec<u32> = Vec::new();
+    let mut push_vert = |x: f32, y: f32, z: f32, u: f32, v: f32| -> u32 {
+        let id = (verts.len() / 9) as u32;
+        verts.extend([
+            x.to_bits(),
+            y.to_bits(),
+            z.to_bits(),
+            1.0f32.to_bits(),
+            0.0f32.to_bits(),
+            0.0f32.to_bits(),
+            1.0f32.to_bits(),
+            u.to_bits(),
+            v.to_bits(),
+        ]);
+        id
+    };
+    let mut push_quad = |x0: f32, y0: f32, x1: f32, y1: f32, z: f32, u0: f32, u1: f32| {
+        let a = push_vert(x0, y0, z, u0, 0.0);
+        let b = push_vert(x1, y0, z, u1, 0.0);
+        let c = push_vert(x1, y1, z, u1, 1.0);
+        let d = push_vert(x0, y1, z, u0, 1.0);
+        tris.extend([a, b, c, a, c, d]);
+    };
+
+    // 1. Large near cutout occluder covering almost the whole frame (z = 0.25):
+    //    left half (u in 0.0..0.48) is solid opaque, right half (u in 0.52..1.0) is lacy holes.
+    push_quad(-0.92, -0.92, 0.92, 0.92, 0.25, 0.0, 1.0);
+
+    // 2. Large far solid quad behind the whole screen (z = 0.75, u in 0.1..0.4 -> solid alpha):
+    //    must be occluded on the left half, and visible through the lacy holes on the right half!
+    push_quad(-0.95, -0.95, 0.95, 0.95, 0.75, 0.1, 0.4);
+
+    // 3. Visible foreground cutout micro-triangles (< 8x8 px) at z = 0.10 (and occluded micro
+    //    duplicates behind them at z = 0.15) to exercise `draw_small` early-Z skip + mask test.
+    for i in 0..32u32 {
+        let cx = -0.75 + (i % 8) as f32 * 0.20;
+        let cy = -0.60 + (i / 8) as f32 * 0.35;
+        let r = 0.03;
+        push_quad(cx - r, cy - r, cx + r, cy + r, 0.10, 0.1, 0.4);
+        push_quad(cx - r, cy - r, cx + r, cy + r, 0.15, 0.1, 0.4);
+    }
+
+    // 4. Push triangle count well above `HIZ_TRI_THRESHOLD` (16_384) with 17_000 triangles
+    //    strictly behind the solid left-half occluder (x in -0.85..-0.10, z in 0.40..0.90).
+    for i in 0..8_500u32 {
+        let fx = -0.82 + (i % 64) as f32 * 0.01;
+        let fy = -0.82 + ((i / 64) % 133) as f32 * 0.012;
+        let z = 0.40 + (i % 50) as f32 * 0.01;
+        push_quad(fx, fy, fx + 0.06, fy + 0.06, z, 0.1, 0.4);
+    }
+
+    let vert_count = (verts.len() / 9) as u32;
+    let tri_count = (tris.len() / 3) as u32;
+    assert!(
+        tri_count > 17_000,
+        "must exceed HIZ_TRI_THRESHOLD: {tri_count}"
+    );
+
+    let canvas_words = vec![0u32; (width * height * 2) as usize];
+    let surface_bytes = (width * height) as usize * SURFACE_WORDS * 4;
+    let run_op = |backend: &dyn Backend, op: entelechy_rules::NativeOp| {
+        let mut host = Host::new(1 << 26);
+        let vh = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    vertex_schema(),
+                    Domain::Rows(vert_count),
+                    verts.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let th = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    triangle_schema(),
+                    Domain::Rows(tri_count),
+                    tris.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mh = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    mask_schema(),
+                    Domain::Grid(mask_w, mask_h),
+                    mask.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut inputs = vec![vh, th, mh];
+        if op == entelechy_rules::NativeOp::RasterizeCutoutCanvas {
+            let ch = host
+                .adopt(
+                    entelechy_abi::FieldData::from_storage(
+                        canvas_schema(),
+                        Domain::Grid(width, height),
+                        canvas_words.clone(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            inputs.push(ch);
+        }
+        let inv = Invocation {
+            inputs,
+            params: vec![entelechy_abi::Value::Float(0.5)],
+            domain: Domain::Grid(width, height),
+            context: Context::default(),
+        };
+        let out_h = Backend::execute_native(backend, op, &inv, &mut Scope::new(&mut host, all()))
+            .unwrap()[0];
+        if let Some(dev) = host.resident(out_h).unwrap() {
+            Backend::download(backend, dev, surface_bytes).unwrap()
+        } else {
+            host.data(out_h).unwrap().storage().to_vec()
+        }
+    };
+
+    let cpu_cut = run_op(&cpu, entelechy_rules::NativeOp::RasterizeCutout);
+    let cpu_can = run_op(&cpu, entelechy_rules::NativeOp::RasterizeCutoutCanvas);
+    assert_eq!(
+        cpu_cut, cpu_can,
+        "CPU native.rasterize@4 must match native.rasterize@2 bit-for-bit"
+    );
+
+    let gpu_cut = run_op(&gpu_backend, entelechy_rules::NativeOp::RasterizeCutout);
+    let gpu_can = run_op(
+        &gpu_backend,
+        entelechy_rules::NativeOp::RasterizeCutoutCanvas,
+    );
+    let pulled_can = run_op(&pulled, entelechy_rules::NativeOp::RasterizeCutoutCanvas);
+    let no_atomics_can = run_op(
+        &no_atomics,
+        entelechy_rules::NativeOp::RasterizeCutoutCanvas,
+    );
+    let unfiltered_can = run_op(
+        &unfiltered,
+        entelechy_rules::NativeOp::RasterizeCutoutCanvas,
+    );
+    assert_eq!(
+        gpu_cut, gpu_can,
+        "GPU native.rasterize@4 must match native.rasterize@2 bit-for-bit"
+    );
+    assert_eq!(
+        gpu_can, pulled_can,
+        "pulled-vertex cutout Hi-Z must match indexed cutout Hi-Z bit-for-bit"
+    );
+    assert_eq!(
+        gpu_can, unfiltered_can,
+        "unfiltered tiled texture cutout fallback must match filtered cutout Hi-Z bit-for-bit"
+    );
+
+    let reference = rasterize_masked(
+        &verts,
+        &tris,
+        width,
+        height,
+        Some(Cutout {
+            words: &mask,
+            width: mask_w,
+            height: mask_h,
+            alpha: 0.5,
+        }),
+    );
+    assert_eq!(cpu_can, reference);
+
+    let id_at =
+        |words: &[u32], x: u32, y: u32| words[(y * width + x) as usize * SURFACE_WORDS + 6] as i32;
+    let depth_at = |words: &[u32], x: u32, y: u32| {
+        f32::from_bits(words[(y * width + x) as usize * SURFACE_WORDS])
+    };
+
+    let mut far_through_holes = 0usize;
+    let mut near_solid = 0usize;
+    let mut micro_front = 0usize;
+    let mut compared = 0usize;
+    for y in 1..height - 1 {
+        for x in 1..width - 1 {
+            let id = id_at(&reference, x, y);
+            if (4..132).contains(&id) && id_at(&gpu_can, x, y) == id {
+                micro_front += 1;
+            }
+            let interior =
+                (0..3).all(|dy| (0..3).all(|dx| id_at(&reference, x + dx - 1, y + dy - 1) == id));
+            if !interior {
+                continue;
+            }
+            assert_eq!(
+                id_at(&gpu_can, x, y),
+                id,
+                "cutout Hi-Z mismatch at ({x}, {y}): gpu={} ref={id}",
+                id_at(&gpu_can, x, y)
+            );
+            assert_eq!(
+                id_at(&no_atomics_can, x, y),
+                id,
+                "cutout Hi-Z (no 64-bit atomics) mismatch at ({x}, {y})"
+            );
+            assert!(
+                (depth_at(&gpu_can, x, y) - depth_at(&reference, x, y)).abs() < 0.002,
+                "depth mismatch at ({x}, {y})"
+            );
+            if id == 0 || id == 1 {
+                near_solid += 1;
+            } else if id == 2 || id == 3 {
+                far_through_holes += 1;
+            }
+            compared += 1;
+        }
+    }
+    assert!(compared > 4000, "compared={compared}");
+    assert!(near_solid > 2000, "near_solid={near_solid}");
+    assert!(
+        far_through_holes > 600,
+        "far quad must show through lacy holes: far_through_holes={far_through_holes}"
+    );
+    assert!(micro_front > 100, "micro_front={micro_front}");
+}
+
+#[test]
+fn hw_trace_instances_dynamic_multi_pass_zero_stall() {
+    use entelechy_graph::{Binding, DomainSpec, Evaluator, Graph, Node, NodeId, Source};
+    use entelechy_kernel::Runtime;
+    use std::collections::BTreeMap;
+
+    let Some(gpu_backend) = gpu() else { return };
+    let needs_host = gpu_backend.needs_host_trace_instances();
+
+    let verts_src = "kernel test.dyn_verts@1 {
+        requires { field.write; }
+        output result: Rows<Vec3>;
+        compute {
+            let i = element();
+            if i == 0 { return vec3(-0.4, -0.4, 0.0); }
+            if i == 1 { return vec3(0.4, -0.4, 0.0); }
+            return vec3(0.0, 0.4, 0.0);
+        }
+    }";
+    let tris_src = "kernel test.dyn_tris@1 {
+        requires { field.write; }
+        struct Tri { a: Int; b: Int; c: Int; }
+        output result: Rows<Tri>;
+        compute { return Tri { a: 0, b: 1, c: 2 }; }
+    }";
+    let meshes_src = "kernel test.dyn_meshes@1 {
+        requires { field.write; }
+        struct TraceMesh { vertex_offset: Int; vertex_count: Int; triangle_offset: Int; triangle_count: Int; }
+        output result: Rows<TraceMesh>;
+        compute {
+            return TraceMesh { vertex_offset: 0, vertex_count: 3, triangle_offset: 0, triangle_count: 1 };
+        }
+    }";
+    let insts_src = "kernel test.dyn_insts@1 {
+        requires { field.write; time.read; }
+        struct TraceInstance { row0: Vec4; row1: Vec4; row2: Vec4; mesh: Int; custom: Int; mask: Int; }
+        output result: Rows<TraceInstance>;
+        compute {
+            let i = element();
+            let t = time();
+            let x = float(i % 16) * 1.2 - 9.0 + sin(t * 2.0) * 0.15;
+            let y = float(i / 16) * 1.2 - 9.0 + cos(t * 2.0) * 0.15;
+            let z = 2.0 + float(i % 4) * 0.25;
+            return TraceInstance {
+                row0: vec4(1.0, 0.0, 0.0, x),
+                row1: vec4(0.0, 1.0, 0.0, y),
+                row2: vec4(0.0, 0.0, 1.0, z),
+                mesh: 0,
+                custom: i + 10,
+                mask: 1
+            };
+        }
+    }";
+    let rays_src = "kernel test.dyn_rays@1 {
+        requires { field.write; }
+        struct Ray { origin: Vec3; tmin: Float; dir: Vec3; tmax: Float; }
+        param z_bias: Float = 0.0;
+        output result: Rows<Ray>;
+        compute {
+            let i = element();
+            let x = float(i % 16) * 1.2 - 9.0;
+            let y = float(i / 16) * 1.2 - 9.0;
+            return Ray {
+                origin: vec3(x, y, z_bias),
+                tmin: 0.01,
+                dir: vec3(0.0, 0.0, 1.0),
+                tmax: 20.0
+            };
+        }
+    }";
+    let pack_src = "kernel test.pack_hits@1 {
+        requires { field.read; field.write; }
+        struct Hit { t: Float; bary: Vec2; triangle: Int; instance: Int; custom: Int; front: Bool; }
+        input a: Rows<Hit>;
+        input b: Rows<Hit>;
+        output result: Rows<Vec4>;
+        compute {
+            let i = element();
+            let ha = at(a, i);
+            let hb = at(b, i);
+            return vec4(ha.t, float(ha.custom), hb.t, float(hb.custom));
+        }
+    }";
+
+    let sources = [
+        verts_src, tris_src, meshes_src, insts_src, rays_src, pack_src,
+    ];
+    let make_runtime = |backend: Box<dyn Backend>, ordered: Option<Box<dyn Backend>>| {
+        let mut rt = Runtime::with_backends(1 << 26, backend, ordered);
+        for s in sources {
+            rt.load(compile(s).unwrap(), s).unwrap();
+        }
+        rt
+    };
+
+    let n_insts = 256u32;
+    let node = |id: &str, kernel: &str, inputs: Vec<(&str, &str, &str)>, domain: Domain| Node {
+        id: NodeId(id.into()),
+        kernel: kernel.parse().unwrap(),
+        inputs: inputs
+            .into_iter()
+            .map(|(p, n, out)| {
+                (
+                    p.to_owned(),
+                    Binding::Now(Source::Node {
+                        node: NodeId(n.into()),
+                        port: out.to_owned(),
+                    }),
+                )
+            })
+            .collect(),
+        params: BTreeMap::new(),
+        domain: Some(DomainSpec::Literal(domain)),
+        is_async: false,
+        awake: Vec::new(),
+        at: None,
+    };
+    let mut rays_b = node("rays_b", "test.dyn_rays@1", vec![], Domain::Rows(n_insts));
+    rays_b.params.insert(
+        "z_bias".into(),
+        entelechy_graph::ParamValue::Literal(entelechy_abi::Value::Float(-0.5)),
+    );
+    let graph = Graph {
+        name: "hw_trace_dyn_test".into(),
+        externals: Vec::new(),
+        texts: Vec::new(),
+        fallbacks: Vec::new(),
+        params: Vec::new(),
+        requirements: Vec::new(),
+        times_params: Vec::new(),
+        times_rows: Vec::new(),
+        nodes: vec![
+            node("verts", "test.dyn_verts@1", vec![], Domain::Rows(3)),
+            node("tris", "test.dyn_tris@1", vec![], Domain::Rows(1)),
+            node("meshes", "test.dyn_meshes@1", vec![], Domain::Rows(1)),
+            node("insts", "test.dyn_insts@1", vec![], Domain::Rows(n_insts)),
+            node("rays_a", "test.dyn_rays@1", vec![], Domain::Rows(n_insts)),
+            rays_b,
+            node(
+                "trace_a",
+                "native.trace@2",
+                vec![
+                    ("rays", "rays_a", "result"),
+                    ("vertices", "verts", "result"),
+                    ("triangles", "tris", "result"),
+                    ("meshes", "meshes", "result"),
+                    ("instances", "insts", "result"),
+                ],
+                Domain::Rows(n_insts),
+            ),
+            node(
+                "trace_b",
+                "native.trace@2",
+                vec![
+                    ("rays", "rays_b", "result"),
+                    ("vertices", "verts", "result"),
+                    ("triangles", "tris", "result"),
+                    ("meshes", "meshes", "result"),
+                    ("instances", "insts", "result"),
+                ],
+                Domain::Rows(n_insts),
+            ),
+            node(
+                "pack",
+                "test.pack_hits@1",
+                vec![("a", "trace_a", "hits"), ("b", "trace_b", "hits")],
+                Domain::Rows(n_insts),
+            ),
+        ],
+        outputs: vec![(
+            "out".into(),
+            Source::Node {
+                node: NodeId("pack".into()),
+                port: "result".into(),
+            },
+        )],
+        placed: Vec::new(),
+        repeated: Vec::new(),
+    };
+
+    // Verify device scheduler hoists `insts` and `meshes` ahead of independent passes
+    // when `hoist_trace_instances = true`, while keeping canonical order when false.
+    let canonical = graph.order().unwrap();
+    let hoisted = graph.schedule_for_device_for(&canonical, true);
+    let pos = |order: &[usize], name: &str| {
+        order
+            .iter()
+            .position(|&idx| graph.nodes[idx].id.0.as_str() == name)
+            .unwrap()
+    };
+    assert!(
+        pos(&hoisted, "insts") < pos(&hoisted, "rays_a"),
+        "hoisted schedule must run insts before rays_a"
+    );
+    assert!(
+        pos(&hoisted, "rays_b") < pos(&hoisted, "trace_a"),
+        "hoisted schedule must defer trace_a behind independent rays_b"
+    );
+
+    let mut rt_cpu = make_runtime(Box::new(CpuBackend), None);
+    let mut rt_gpu = make_runtime(Box::new(gpu_backend), Some(Box::new(CpuBackend)));
+    let mut ev_cpu = Evaluator::new();
+    let mut ev_gpu = Evaluator::new();
+    let externals = BTreeMap::new();
+    let params = BTreeMap::new();
+
+    for step in 0..4u32 {
+        let ctx = Context {
+            time: step as f64 * 0.35,
+            ..Context::default()
+        };
+        let rep_cpu = ev_cpu
+            .evaluate(&graph, &mut rt_cpu, &externals, &ctx, &params)
+            .unwrap();
+        let rep_gpu = ev_gpu
+            .evaluate(&graph, &mut rt_gpu, &externals, &ctx, &params)
+            .unwrap();
+        rt_gpu.materialize(rep_gpu.output).unwrap();
+        let c_words = rt_cpu.host().data(rep_cpu.output).unwrap().storage();
+        let g_words = rt_gpu.host().data(rep_gpu.output).unwrap().storage();
+        assert_eq!(c_words.len(), g_words.len());
+        for (i, (&cw, &gw)) in c_words.iter().zip(g_words).enumerate() {
+            let cf = f32::from_bits(cw);
+            let gf = f32::from_bits(gw);
+            assert!(
+                (cf - gf).abs() < 1e-3,
+                "step {step} word {i}: cpu={cf} gpu={gf}"
+            );
+        }
+        // On hardware ray-query GPUs, pure host-input `insts` (256 rows) routes to the
+        // ordered backend directly into Host RAM, so neither `trace_a` nor `trace_b`
+        // ever stalls downloading from GPU!
+        if needs_host && step >= 1 {
+            let insts_p = rep_gpu
+                .placements
+                .iter()
+                .find(|p| p.node.0.as_str() == "insts")
+                .expect("insts ran");
+            assert!(
+                insts_p.routed.is_some(),
+                "step {step}: insts should route to ordered backend on hw RT: {insts_p:?}"
+            );
+            for trace_name in ["trace_a", "trace_b"] {
+                let tp = rep_gpu
+                    .placements
+                    .iter()
+                    .find(|p| p.node.0.as_str() == trace_name)
+                    .expect("trace ran");
+                assert_eq!(
+                    tp.downloaded, 0,
+                    "step {step}: {trace_name} must incur zero GPU->CPU download"
+                );
+            }
+        }
+    }
+
+    // Also verify the GPU-resident dynamic instances path (`set_small(0)` keeps
+    // `insts` on GPU): `host_outputs` triggers async prefetch via `coming`, `trace_a`
+    // redeems it once, and `trace_b` reuses the dynamic TLAS slot with zero download.
+    if needs_host && let Some(gpu_only) = gpu() {
+        let mut rt_gpu_only = make_runtime(Box::new(gpu_only), None);
+        rt_gpu_only.set_small(0);
+        let mut ev_gpu_only = Evaluator::new();
+        let mut ev_cpu_only = Evaluator::new();
+        let mut rt_cpu_only = make_runtime(Box::new(CpuBackend), None);
+        for step in 0..3u32 {
+            let ctx = Context {
+                time: step as f64 * 0.4 + 0.1,
+                ..Context::default()
+            };
+            let rep_c = ev_cpu_only
+                .evaluate(&graph, &mut rt_cpu_only, &externals, &ctx, &params)
+                .unwrap();
+            let rep_g = ev_gpu_only
+                .evaluate(&graph, &mut rt_gpu_only, &externals, &ctx, &params)
+                .unwrap();
+            rt_gpu_only.materialize(rep_g.output).unwrap();
+            let cw = rt_cpu_only.host().data(rep_c.output).unwrap().storage();
+            let gw = rt_gpu_only.host().data(rep_g.output).unwrap().storage();
+            for (i, (&c, &g)) in cw.iter().zip(gw).enumerate() {
+                assert!(
+                    (f32::from_bits(c) - f32::from_bits(g)).abs() < 1e-3,
+                    "gpu-only step {step} word {i}"
+                );
+            }
+            if step >= 1 {
+                let tb = rep_g
+                    .placements
+                    .iter()
+                    .find(|p| p.node.0.as_str() == "trace_b")
+                    .expect("trace_b ran");
+                assert_eq!(
+                    tb.downloaded, 0,
+                    "gpu-only step {step}: trace_b must reuse built dynamic TLAS with 0 download"
+                );
+            }
+        }
+    }
+}

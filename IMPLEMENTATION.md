@@ -201,16 +201,24 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
 - Repetition: one Kernel over its own output is one group, one GPU
   encoder ([`Backend::execute_repeated`](crates/core/rules/src/backend.rs)).
 - Native operations are versions at generation zero
-  ([`NativeOp`](crates/core/rules/src/backend.rs)). The rasterizer skips a
-  triangle with any `w <= 0` whole
+  ([`NativeOp`](crates/core/rules/src/backend.rs)). The rasterizer
+  (`native.rasterize@1` plain, `@2` cutout, `@3` canvas-sized, `@4`
+  cutout canvas-sized, and `native.cover@1`) skips a triangle with any
+  `w <= 0` whole
   ([rules](crates/core/rules/src/raster.rs), [near-plane replay](packages/raster.entpkg/tests/near.replay));
   its ports are read by field ([native replay](examples/mesh/tests/native.replay)).
   On the GPU ([raster](crates/backends/gpu/src/raster.rs),
-  [Hi-Z](crates/backends/gpu/src/raster_hiz.rs)), dense opaque calls run a
-  2-phase conservative MAX-Z Hi-Z occlusion pre-pass (odd-dimension safe,
-  seeding `native.cover@1` from prior canvas depth) and compact surviving
-  triangles in exact row order while dispatching surviving micro-triangles
-  via `dispatch_workgroups_indirect`.
+  [Hi-Z](crates/backends/gpu/src/raster_hiz.rs)), dense opaque and
+  alpha-cutout calls run a zero-redraw 2-phase conservative MAX-Z Hi-Z
+  pipeline (macro-occluders draw once directly into `places` with global
+  row + 1 and `depth`, seeding both the odd-dimension-safe MAX-Z Hi-Z
+  pyramid and Phase 4 hardware early-Z via `LoadOp::Load`, while
+  `native.cover@1` seeds from prior canvas depth), sample cutout `mask`
+  inputs through the shared 2D tiled `DeviceImage` hardware texture
+  mirror (`textureSampleLevel` when `FLOAT32_FILTERABLE` is available,
+  tiled `textureLoad` otherwise), compact surviving non-occluders in
+  exact row order, and dispatch surviving micro-triangles via
+  `dispatch_workgroups_indirect`.
   The ray tracer (`native.trace@1` single-mesh, `native.trace@2` instanced
   multi-mesh) builds pure-Rust SAH BVHs on CPU/JIT
   ([rules](crates/core/rules/src/trace.rs)) and on GPU
@@ -218,7 +226,10 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   [gpu LBVH](crates/backends/gpu/src/trace_lbvh.rs)) executes batched,
   GPU-timed hardware ray queries (`EXPERIMENTAL_RAY_QUERY`, with automatic
   double-buffered `DynamicHwBlas` and `DynamicHwTlas` promotion for
-  deforming meshes and animating instances) or a zero-readback full-GPU
+  deforming meshes and animating instances, same-frame `DynamicHwTlas`
+  slot reuse before any Host readback, and hardware-RT-only Host routing
+  + scheduler hoisting/async prefetch for `meshes`/`instances` producers
+  via `Backend::needs_host_trace_instances`) or a zero-readback full-GPU
   LBVH builder (30-bit Morton + 8-pass GPU radix sort + Karras binary
   radix tree + race-free 2-tier in-place dynamic AABB refit, multi-mesh
   BLAS slicing via `encode_slice_into`, and full-GPU dynamic TLAS LBVH
