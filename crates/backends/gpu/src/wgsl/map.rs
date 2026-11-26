@@ -190,6 +190,14 @@ pub fn emit_full_with_caps(
     }
     emit_functions(module, half, &mut out);
     for (index, function) in module.functions.iter().enumerate() {
+        if shader_f16 && function.name == entelechy_ir::QUANTIZE_F16_FN {
+            let _ = writeln!(
+                out,
+                "fn {}(a0: f32) -> f32 {{\n    return f32(f16(a0));\n}}\n",
+                function_name(index)
+            );
+            continue;
+        }
         emit_function(
             &mut out,
             module,

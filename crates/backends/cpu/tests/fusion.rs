@@ -435,3 +435,280 @@ fn rows_read_in_the_entry_outside_loops_are_counted_by_the_places_that_read_them
     );
     assert_eq!(reads("return third(a);"), None, "read in a function");
 }
+
+#[test]
+fn narrow_format_pointwise_and_indexed_fusion_is_bit_identical_across_all_eight_encodings() {
+    // Exercises every narrow encoding supported by Entelechy (`f16`, `unorm8`,
+    // `unorm16`, `snorm8`, `u8`, `i8`, `u16`, `i16`), including IEEE-754 half
+    // edge cases (subnormals, ties-to-even, overflow to ±inf, underflow to ±0,
+    // NaN), mixed-encoding structs, chained f16 fusion, and indexed fusion.
+    let f16_prod = compile(
+        "kernel test.f16_prod@1 {
+            requires { field.write; }
+            output result: Rows<Float as f16>;
+            compute {
+                let i = element();
+                if i == 0 { return 0.0; }
+                if i == 1 { return -0.0; }
+                if i == 2 { return 1.00048828125; }
+                if i == 3 { return 1.00146484375; }
+                if i == 4 { return 65504.0; }
+                if i == 5 { return 65520.0; }
+                if i == 6 { return -70000.0; }
+                if i == 7 { return 5.9604645e-8; }
+                if i == 8 { return 2.9802322e-8; }
+                if i == 9 { return 3.0e-8; }
+                if i == 10 { return 6.097555e-5; }
+                if i == 11 { return 6.1035156e-5; }
+                if i == 12 { return -1.0e-10; }
+                if i == 13 { return 1.0e-10; }
+                if i == 14 { return sqrt(-1.0); }
+                if i == 15 { return 1.0 / 0.0; }
+                return (float(i) - 20.0) * 0.137;
+            }
+        }",
+    )
+    .unwrap();
+    let f16_mid = compile(
+        "kernel test.f16_mid@1 {
+            requires { field.read; field.write; }
+            input src: Rows<Float as f16>;
+            output result: Rows<Float as f16>;
+            compute {
+                let v = sample(src);
+                return v * 1.5 - 0.125;
+            }
+        }",
+    )
+    .unwrap();
+    let f16_cons = compile(
+        "kernel test.f16_cons@1 {
+            requires { field.read; field.write; }
+            input src: Rows<Float as f16>;
+            output result: Rows<Int>;
+            compute {
+                return bits(sample(src));
+            }
+        }",
+    )
+    .unwrap();
+    let f16_idx_cons = compile(
+        "kernel test.f16_idx_cons@1 {
+            requires { field.read; field.write; }
+            input src: Rows<Float as f16>;
+            output result: Rows<Int>;
+            compute {
+                let n = count(src);
+                return bits(at(src, n - 1 - element()));
+            }
+        }",
+    )
+    .unwrap();
+
+    // Direct fusion AND chained fusion (`prod -> mid -> cons`) share one `#quantize_f16`.
+    let fused_once = fuse(&f16_cons, 0, &f16_prod, "prod").unwrap();
+    let fused_mid = fuse(&f16_mid, 0, &f16_prod, "prod").unwrap();
+    let fused_chain = fuse(&f16_cons, 0, &fused_mid, "mid").unwrap();
+    let fused_idx = fuse_indexed(&f16_idx_cons, &[(0, 0)], &f16_prod, "prod").unwrap();
+    assert_eq!(
+        fused_chain
+            .functions
+            .iter()
+            .filter(|f| f.name == entelechy_ir::QUANTIZE_F16_FN)
+            .count(),
+        1,
+        "chained f16 fusion must deduplicate #quantize_f16"
+    );
+
+    let count = 32u32;
+    let mut host = Host::new(1 << 20);
+    let (h_prod, _) = run_rows(&f16_prod, vec![], vec![], count, &mut host);
+    let (_, sep_once) = run_rows(&f16_cons, vec![h_prod], vec![], count, &mut host);
+    let (_, tog_once) = run_rows(&fused_once, vec![], vec![], count, &mut host);
+    assert_eq!(sep_once, tog_once, "f16 pointwise fusion bit mismatch");
+
+    let (h_mid, _) = run_rows(&f16_mid, vec![h_prod], vec![], count, &mut host);
+    let (_, sep_chain) = run_rows(&f16_cons, vec![h_mid], vec![], count, &mut host);
+    let (_, tog_chain) = run_rows(&fused_chain, vec![], vec![], count, &mut host);
+    assert_eq!(sep_chain, tog_chain, "f16 chained fusion bit mismatch");
+
+    let (_, sep_idx) = run_rows(&f16_idx_cons, vec![h_prod], vec![], count, &mut host);
+    let (_, tog_idx) = run_rows(
+        &fused_idx,
+        vec![],
+        vec![Value::Int(count as i32), Value::Int(count as i32)],
+        count,
+        &mut host,
+    );
+    assert_eq!(sep_idx, tog_idx, "f16 indexed fusion bit mismatch");
+
+    // All remaining 7 narrow encodings (`unorm8`, `unorm16`, `snorm8`, `u8`, `i8`, `u16`, `i16`).
+    let float_encodings = [
+        ("unorm8", "Rows<Vec2 as unorm8>"),
+        ("unorm16", "Rows<Vec2 as unorm16>"),
+        ("snorm8", "Rows<Vec2 as snorm8>"),
+    ];
+    for (name, ty) in float_encodings {
+        let prod = compile(&format!(
+            "kernel test.p_{name}@1 {{
+                requires {{ field.write; }}
+                output result: {ty};
+                compute {{
+                    let i = element();
+                    if i == 0 {{ return vec2(-2.0, 2.0); }}
+                    if i == 1 {{ return vec2(0.0, -0.0); }}
+                    if i == 2 {{ return vec2(sqrt(-1.0), 1.0 / 0.0); }}
+                    if i == 3 {{ return vec2(-1.0 / 0.0, -1.0); }}
+                    let t = (float(i) - 10.0) / 17.0;
+                    return vec2(t, t * 0.5 + 0.25);
+                }}
+            }}"
+        ))
+        .unwrap();
+        let cons = compile(&format!(
+            "kernel test.c_{name}@1 {{
+                requires {{ field.read; field.write; }}
+                input src: {ty};
+                output result: Rows<Vec2>;
+                compute {{ return sample(src); }}
+            }}"
+        ))
+        .unwrap();
+        let fused = fuse(&cons, 0, &prod, "src").unwrap();
+        let (h, _) = run_rows(&prod, vec![], vec![], 24, &mut host);
+        let (_, sep) = run_rows(&cons, vec![h], vec![], 24, &mut host);
+        let (_, tog) = run_rows(&fused, vec![], vec![], 24, &mut host);
+        assert_eq!(sep, tog, "{name} fusion bit mismatch");
+    }
+
+    let int_encodings = [
+        ("u8", "Rows<Int as u8>"),
+        ("i8", "Rows<Int as i8>"),
+        ("u16", "Rows<Int as u16>"),
+        ("i16", "Rows<Int as i16>"),
+    ];
+    for (name, ty) in int_encodings {
+        let prod = compile(&format!(
+            "kernel test.p_{name}@1 {{
+                requires {{ field.write; }}
+                output result: {ty};
+                compute {{
+                    let i = element();
+                    if i == 0 {{ return -100000; }}
+                    if i == 1 {{ return 100000; }}
+                    if i == 2 {{ return -129; }}
+                    if i == 3 {{ return -128; }}
+                    if i == 4 {{ return 127; }}
+                    if i == 5 {{ return 128; }}
+                    if i == 6 {{ return 255; }}
+                    if i == 7 {{ return 256; }}
+                    if i == 8 {{ return -32769; }}
+                    if i == 9 {{ return -32768; }}
+                    if i == 10 {{ return 32767; }}
+                    if i == 11 {{ return 32768; }}
+                    if i == 12 {{ return 65535; }}
+                    if i == 13 {{ return 65536; }}
+                    return (i - 20) * 19;
+                }}
+            }}"
+        ))
+        .unwrap();
+        let cons = compile(&format!(
+            "kernel test.c_{name}@1 {{
+                requires {{ field.read; field.write; }}
+                input src: {ty};
+                output result: Rows<Int>;
+                compute {{ return sample(src); }}
+            }}"
+        ))
+        .unwrap();
+        let fused = fuse(&cons, 0, &prod, "src").unwrap();
+        let (h, _) = run_rows(&prod, vec![], vec![], 24, &mut host);
+        let (_, sep) = run_rows(&cons, vec![h], vec![], 24, &mut host);
+        let (_, tog) = run_rows(&fused, vec![], vec![], 24, &mut host);
+        assert_eq!(sep, tog, "{name} fusion bit mismatch");
+    }
+
+    // Struct encoded `as f16` (exercises recursive struct + vector + scalar quantization).
+    let struct_prod = compile(
+        "kernel test.s_prod@1 {
+            requires { field.write; }
+            struct Packed { rgb: Vec3; a: Float; }
+            output result: Rows<Packed as f16>;
+            compute {
+                let i = element();
+                let x = (float(i) - 5.0) * 0.37;
+                return Packed {
+                    rgb: vec3(x, x * x, -x * 0.125),
+                    a: float(i) / 13.0,
+                };
+            }
+        }",
+    )
+    .unwrap();
+    let struct_cons = compile(
+        "kernel test.s_cons@1 {
+            requires { field.read; field.write; }
+            struct Packed { rgb: Vec3; a: Float; }
+            input src: Rows<Packed as f16>;
+            output result: Rows<Vec4>;
+            compute {
+                let p = sample(src);
+                return vec4(p.rgb.x + p.rgb.y, p.rgb.z, p.a, 1.0);
+            }
+        }",
+    )
+    .unwrap();
+    let struct_fused = fuse(&struct_cons, 0, &struct_prod, "src").unwrap();
+    let (h, _) = run_rows(&struct_prod, vec![], vec![], 16, &mut host);
+    let (_, sep) = run_rows(&struct_cons, vec![h], vec![], 16, &mut host);
+    let (_, tog) = run_rows(&struct_fused, vec![], vec![], 16, &mut host);
+    assert_eq!(sep, tog, "struct `as f16` fusion bit mismatch");
+
+    // Self-coordinate Grid `at(input, coord())` reads recognize as pointwise
+    // and fuse across narrow `f16` outputs identically to `sample(...)`.
+    let grid_prod = compile(
+        "kernel test.grid_f16_prod@1 {
+            requires { field.write; }
+            output result: Grid<Vec4 as f16>;
+            compute {
+                let p = coord() / domain();
+                return vec4(p.x * 3.1, p.y * 2.7, 0.3333333, 1.0);
+            }
+        }",
+    )
+    .unwrap();
+    let grid_cons = compile(
+        "kernel test.grid_at_coord_cons@1 {
+            requires { field.read; field.write; }
+            input src: Grid<Vec4 as f16>;
+            output result: Image;
+            compute {
+                let q = coord();
+                let c = at(src, q);
+                return vec4(c.x + c.y, c.z * 2.0, c.w, 1.0);
+            }
+        }",
+    )
+    .unwrap();
+    assert!(samples_only(&grid_cons, 0));
+    let grid_fused = fuse(&grid_cons, 0, &grid_prod, "src").unwrap();
+    let grid_inv = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain: Domain::Grid(5, 4),
+        context: Context::default(),
+    };
+    let h_grid = {
+        let mut scope = Scope::new(&mut host, granted());
+        CpuBackend
+            .execute(&grid_prod, &grid_inv, &mut scope)
+            .unwrap()[0]
+    };
+    let sep_grid = run(&grid_cons, vec![h_grid], vec![], &mut host);
+    let tog_grid = run(&grid_fused, vec![], vec![], &mut host);
+    assert_eq!(
+        sep_grid, tog_grid,
+        "at(grid, coord()) f16 fusion bit mismatch"
+    );
+}

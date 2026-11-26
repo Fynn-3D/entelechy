@@ -181,8 +181,14 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
 
 - Fusion: [`fuse`](crates/core/ir/src/fuse.rs), `fuse_outputs`,
   `fuse_indexed` (a producer called at the rows its reader reads:
-  `offset_read`, `row_reads`) and `counted` (an input only counted); the
-  [planner](crates/core/graph/src/evaluate/plan.rs) calls a producer
+  `offset_read`, `row_reads`) and `counted` (an input only counted);
+  recognizes self-coordinate `at(grid_or_volume, coord())` reads as
+  pointwise, fuses across all eight narrow storage encodings (`f16`,
+  `unorm8`, `unorm16`, `snorm8`, `u8`, `i8`, `u16`, `i16`) by inserting
+  bit-exact non-failing IR quantization (`#quantize_f16`, emitted as a
+  single `f32(f16(a0))` instruction on `SHADER_F16` GPUs), and proves
+  equal dynamic extents across `size(port)` chains in the
+  [planner](crates/core/graph/src/evaluate/plan.rs); calls a producer
   read at rows while the rows asked for are no more than it would make
   ([decision](docs/DECISIONS.md#work-is-spared-only-where-the-answer-is-the-same)),
   and stops fusing past node, instruction and carried-word bounds
@@ -210,15 +216,22 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   On the GPU ([raster](crates/backends/gpu/src/raster.rs),
   [Hi-Z](crates/backends/gpu/src/raster_hiz.rs)), dense opaque and
   alpha-cutout calls run a zero-redraw 2-phase conservative MAX-Z Hi-Z
-  pipeline (macro-occluders draw once directly into `places` with global
-  row + 1 and `depth`, seeding both the odd-dimension-safe MAX-Z Hi-Z
-  pyramid and Phase 4 hardware early-Z via `LoadOp::Load`, while
-  `native.cover@1` seeds from prior canvas depth), sample cutout `mask`
-  inputs through the shared 2D tiled `DeviceImage` hardware texture
-  mirror (`textureSampleLevel` when `FLOAT32_FILTERABLE` is available,
-  tiled `textureLoad` otherwise), compact surviving non-occluders in
-  exact row order, and dispatch surviving micro-triangles via
-  `dispatch_workgroups_indirect`.
+  pipeline (non-transparent macro-occluders draw once directly into
+  `places` with global row + 1 and `depth`, seeding both the
+  odd-dimension-safe MAX-Z Hi-Z pyramid and Phase 4 hardware early-Z via
+  `LoadOp::Load` while recording a Phase-1 `alive` bitmask in the second
+  half of `marks` so Phase 3 skips culled and Phase-1 triangles with a
+  single bit test; `native.cover@1` seeds from prior canvas depth),
+  sample cutout `mask` inputs through the shared 2D tiled `DeviceImage`
+  hardware texture mirror (`textureSampleLevel` when `FLOAT32_FILTERABLE`
+  is available, tiled `textureLoad` otherwise) paired with a lazily cached
+  conservative `Rgba8Unorm` MIN/MAX alpha pyramid (`AlphaMinMaxPyramid`,
+  culling 100% transparent triangles and tagging provably opaque
+  micro-triangles in `small_rows` to bypass `mask_alpha`), apply exact
+  1-pixel-box coverage and depth rejection before compaction, dispatch
+  surviving micro-triangles via `dispatch_workgroups_indirect` with
+  Phase-1 `depth_tex` early-Z for cutout triangles, and resolve each
+  pixel with a single `fragment()` evaluation.
   The ray tracer (`native.trace@1` single-mesh, `native.trace@2` instanced
   multi-mesh) builds pure-Rust SAH BVHs on CPU/JIT
   ([rules](crates/core/rules/src/trace.rs)) and on GPU
@@ -290,7 +303,12 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   skip redundant polls), `Pipeline.main` binds context, params, and failure
   storage with dynamic offsets backed by an evaluation-aged `BindGroupCache`
   and view-preserving `SpareMirrors` ([pool](crates/backends/gpu/src/pool.rs),
-  [texture](crates/backends/gpu/src/texture.rs)), and the background `Waiter`
+  [texture](crates/backends/gpu/src/texture.rs)), plain non-mipmapped
+  non-loop 2D `at_linear` inputs produced fresh in the current evaluation
+  (`created_eval == now`) bind directly as zero-copy L2-cached storage
+  buffers via a lazy dynamic pipeline variant ([prepare](crates/backends/gpu/src/prepare.rs))
+  while static `ONCE`, Host-uploaded, mipmapped, volume, and loop-sampled
+  textures stay hardware-mirrored, and the background `Waiter`
   defers polling while passes encode and backs off when idle
   ([wait](crates/backends/gpu/src/wait.rs)). [`Runtime::sized_off`](crates/core/kernel/src/lib.rs)
   guards un-prefetched GPU-resident inputs from pulling small runs back to

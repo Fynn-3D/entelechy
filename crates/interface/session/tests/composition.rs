@@ -2051,9 +2051,10 @@ const PACK: &str = "kernel image.pack@1 { requires { field.read; field.write; } 
 const SHOW: &str = "kernel image.show@1 { requires { field.read; field.write; } input packed: Grid<Vec4 as unorm8>; output result: Image; compute { return sample(packed) * 2.0; } }";
 
 #[test]
-fn a_narrow_field_between_two_nodes_is_written_and_read_not_fused_away() {
-    // The gradient stored as bytes: every pixel is its byte widened, so
-    // nothing fuses across the rounding.
+fn a_narrow_field_between_two_nodes_fuses_with_exact_narrow_rounding() {
+    // The gradient stored as unorm8 bytes fuses into `show` with explicit
+    // bit-exact byte rounding, matching the materialized `--no-fusion` run
+    // bit-for-bit while avoiding the intermediate buffer.
     let mut runtime = runtime();
     load(&mut runtime, PACK);
     load(&mut runtime, SHOW);
@@ -2076,14 +2077,31 @@ fn a_narrow_field_between_two_nodes_is_written_and_read_not_fused_away() {
         .unwrap();
     assert_eq!(
         report.executed,
-        ids(&["pack", "show"]),
-        "the gradient fuses into pack; pack does not fuse into show"
+        ids(&["show"]),
+        "source -> pack -> show fuses across the unorm8 link into show"
     );
-    // Pixel (3, 1) of a 6 by 4 gradient: u = 3/5, v = 1/3, as bytes.
+    // Pixel (3, 1) of a 6 by 4 gradient: u = 3/5, v = 1/3, rounded as bytes.
     let byte = |x: f32| (x * 255.0).round_ties_even() * entelechy_kernel::encoding::UNORM8 * 2.0;
     let pixel = runtime.host().read_pixel(report.output, 3, 1).unwrap();
     assert_eq!(pixel, [byte(0.6), byte(1.0 / 3.0), 0.0, 2.0]);
-    let packed = evaluator.cached(&NodeId("pack".into()), "result").unwrap();
+
+    // Without fusion, `pack` materializes its 4-byte pixels and produces the
+    // exact same output as the fused run.
+    let mut unfused = Evaluator::new();
+    unfused.set_fusion(false);
+    let sep = unfused
+        .evaluate(
+            &graph,
+            &mut runtime,
+            &BTreeMap::new(),
+            &Context::default(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+    assert_eq!(sep.executed, ids(&["source", "pack", "show"]));
+    let sep_pixel = runtime.host().read_pixel(sep.output, 3, 1).unwrap();
+    assert_eq!(pixel, sep_pixel);
+    let packed = unfused.cached(&NodeId("pack".into()), "result").unwrap();
     assert_eq!(
         runtime.host().data(packed).unwrap().storage().len(),
         24,

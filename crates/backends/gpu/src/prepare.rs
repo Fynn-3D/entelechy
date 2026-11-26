@@ -446,6 +446,10 @@ pub(crate) struct Lazy {
     pub(crate) packed: Vec<Vec<usize>>,
     /// Its inputs mirrored into hardware 2D/3D textures, known before it is built.
     pub(crate) textured: Vec<usize>,
+    /// Subset of `textured` that are plain non-mipmapped 2D Grids read outside
+    /// loops, eligible for zero-copy storage binding when dynamically generated
+    /// every frame.
+    plain_2d_linear: Vec<usize>,
     /// Its inputs requiring full hardware mipmap chains, known before it is built.
     pub(crate) mipmapped: Vec<usize>,
     /// Its `Volume` inputs bound as 2D texture arrays for 2D gradient sampling.
@@ -461,6 +465,9 @@ pub(crate) struct Lazy {
     /// Lazily built storage-buffer fallback used only when a runtime input's
     /// extent exceeds the device's `max_texture_dimension_2d` / `3d`.
     untextured: OnceLock<Result<BuiltPipeline, String>>,
+    /// Lazily built variant omitting per-frame dynamic plain-2D-linear Grid
+    /// mirrors while keeping all static/mipmapped/volume hardware textures.
+    dynamic: OnceLock<Result<(Vec<usize>, BuiltPipeline), String>>,
 }
 
 impl Lazy {
@@ -584,12 +591,43 @@ impl Lazy {
             .map(|(pipeline, _)| pipeline)
             .map_err(|error| ExecutionError::Device(error.clone()))
     }
+    /// Lazily builds a variant whose hardware-textured set is `textured`
+    /// (dropping per-frame dynamic plain-2D-linear Grids while retaining all
+    /// static/mipmapped/volume hardware textures). Returns `None` if an earlier
+    /// invocation already locked `dynamic` to a different textured subset.
+    pub(crate) fn built_dynamic(
+        &self,
+        backend: &WgpuBackend,
+        textured: Vec<usize>,
+    ) -> Option<Result<&Pipeline, ExecutionError>> {
+        let slot = self.dynamic.get_or_init(|| {
+            let shaders = backend
+                .shaders_with_textures(&self.module, textured.clone())
+                .map_err(Unbuilt::said)?;
+            let mut kept = Vec::new();
+            shaders
+                .made(&mut |shader: Shader| {
+                    shader.built(&self.device, self.wait, &self.passes, &mut kept)
+                })
+                .map(|pipeline| (textured.clone(), (pipeline, kept)))
+                .map_err(|error| crate::told(&self.heard, error.said()))
+        });
+        match slot {
+            Ok((built_textured, (pipeline, _))) if *built_textured == textured => {
+                Some(Ok(pipeline))
+            }
+            Ok(_) => None,
+            Err(error) => Some(Err(ExecutionError::Device(error.clone()))),
+        }
+    }
 }
 
 impl WgpuBackend {
     /// Returns the built pipeline for `invocation`: the hardware-textured
     /// pipeline whenever all textured input extents fit the device's 2D/3D
-    /// texture dimension limits, else a lazily compiled storage-buffer fallback.
+    /// texture dimension limits, a dynamic zero-copy storage-buffer variant for
+    /// per-frame dynamic plain-2D-linear Grids, or a lazily compiled untextured
+    /// fallback if an extent exceeds hardware texture limits.
     pub(crate) fn built_for<'a>(
         &self,
         prepared: &'a dyn Prepared,
@@ -644,6 +682,44 @@ impl WgpuBackend {
                     )));
                 }
                 return lazy.built_untextured(self);
+            }
+            // After Frame 0, detect plain non-mipmapped, non-loop 2D Grids that
+            // are freshly generated on the GPU every frame (`created_eval == now`),
+            // and keep them as zero-copy L2-cached storage buffers instead of
+            // paying `RowPad + copy_buffer_to_texture` mirror copies each frame.
+            let now = self.spare.current_eval();
+            if now >= 1 && !lazy.plain_2d_linear.is_empty() {
+                let mut drop_dynamic = Vec::new();
+                for &index in &lazy.plain_2d_linear {
+                    let handle = invocation.inputs[index];
+                    if let Ok(Some(dev)) = scope.resident(handle)
+                        && let Some(img) = dev.downcast_ref::<DeviceImage>()
+                        && img.holds.is_none()
+                        && img.compressed.is_none()
+                        && img.created_eval == now
+                        && img
+                            .mirror
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .is_none()
+                    {
+                        drop_dynamic.push(index);
+                    }
+                }
+                if !drop_dynamic.is_empty() {
+                    let desired: Vec<usize> = lazy
+                        .textured
+                        .iter()
+                        .copied()
+                        .filter(|idx| !drop_dynamic.contains(idx))
+                        .collect();
+                    let extra_packs = self.packing(module, &desired).len();
+                    if extra_packs <= lazy.packed.len()
+                        && let Some(result) = lazy.built_dynamic(self, desired)
+                    {
+                        return result;
+                    }
+                }
             }
         }
         lazy.built()
@@ -932,11 +1008,13 @@ impl WgpuBackend {
             .map_err(|error| Unbuilt::from(format!("`{}`: {error}", module.manifest.id)))?;
         let module = carried.as_ref().unwrap_or(module);
         let shaders = self.shaders(module)?;
+        let plain_2d_linear = wgsl::plain_2d_linear_inputs(module, &shaders.textured);
         Ok(Lazy {
             id: module.manifest.id.to_string(),
             module: module.clone(),
             packed: shaders.packed.clone(),
             textured: shaders.textured.clone(),
+            plain_2d_linear,
             mipmapped: shaders.mipmapped.clone(),
             grad_volumes: shaders.grad_volumes.clone(),
             device: self.device.clone(),
@@ -948,6 +1026,7 @@ impl WgpuBackend {
             shaders: Mutex::new(Some(shaders)),
             built: OnceLock::new(),
             untextured: OnceLock::new(),
+            dynamic: OnceLock::new(),
         })
     }
 

@@ -747,6 +747,111 @@ pub fn textured_inputs_for_limits(
     chosen
 }
 
+/// Subset of `textured` inputs that are plain non-mipmapped 2D `Grid`s read
+/// only outside loops. Static (`ONCE` / Host-uploaded) Grids benefit from
+/// mirroring once, whereas freshly-produced per-frame dynamic Grids avoid a
+/// redundant full-grid `RowPad + copy_buffer_to_texture` copy every frame by
+/// sampling directly from L2-cached storage buffers.
+pub fn plain_2d_linear_inputs(module: &Module, textured: &[usize]) -> Vec<usize> {
+    if textured.is_empty() || !matches!(module.manifest.mode, Mode::Map | Mode::Group { .. }) {
+        return Vec::new();
+    }
+    #[derive(Default)]
+    struct Reads {
+        mipmapped: std::collections::BTreeSet<usize>,
+        loop_read: std::collections::BTreeSet<usize>,
+        calls: std::collections::BTreeSet<usize>,
+        loop_calls: std::collections::BTreeSet<usize>,
+    }
+    fn walk(body: &[Instruction], in_loop: bool, out: &mut Reads) {
+        for instr in body {
+            match &instr.op {
+                Op::AtLinear(idx, _) | Op::At(idx, _) => {
+                    if in_loop {
+                        out.loop_read.insert(*idx as usize);
+                    }
+                }
+                Op::AtFiltered {
+                    input, lod, grad, ..
+                } => {
+                    let idx = *input as usize;
+                    if lod.is_some() || grad.is_some() {
+                        out.mipmapped.insert(idx);
+                    }
+                    if in_loop {
+                        out.loop_read.insert(idx);
+                    }
+                }
+                Op::Call(callee, _) => {
+                    out.calls.insert(*callee as usize);
+                    if in_loop {
+                        out.loop_calls.insert(*callee as usize);
+                    }
+                }
+                _ => {}
+            }
+            let child_loop = in_loop || matches!(instr.op, Op::Loop { .. } | Op::Each { .. });
+            for block in instr.op.blocks() {
+                walk(&block.body, child_loop, out);
+            }
+        }
+    }
+    let fn_count = module.functions.len();
+    let mut funcs: Vec<Reads> = (0..=fn_count).map(|_| Reads::default()).collect();
+    for (idx, func) in module.functions.iter().enumerate() {
+        walk(&func.body, false, &mut funcs[idx]);
+    }
+    walk(&module.entry.body, false, &mut funcs[fn_count]);
+    let mut in_loop_fn = vec![false; fn_count];
+    let mut stack: Vec<usize> = funcs
+        .iter()
+        .flat_map(|f| f.loop_calls.iter().copied())
+        .filter(|&c| c < fn_count)
+        .collect();
+    while let Some(c) = stack.pop() {
+        if !in_loop_fn[c] {
+            in_loop_fn[c] = true;
+            for &next in &funcs[c].calls {
+                if next < fn_count && !in_loop_fn[next] {
+                    stack.push(next);
+                }
+            }
+        }
+    }
+    let mut mipmapped = std::collections::BTreeSet::new();
+    let mut loop_read = std::collections::BTreeSet::new();
+    for (idx, f) in funcs.iter().enumerate() {
+        mipmapped.extend(f.mipmapped.iter().copied());
+        loop_read.extend(f.loop_read.iter().copied());
+        if idx < fn_count && in_loop_fn[idx] {
+            // Propagate any read inside a loop-called helper.
+            fn walk_any(body: &[Instruction], out: &mut std::collections::BTreeSet<usize>) {
+                for instr in body {
+                    match &instr.op {
+                        Op::AtLinear(i, _) | Op::At(i, _) | Op::AtFiltered { input: i, .. } => {
+                            out.insert(*i as usize);
+                        }
+                        _ => {}
+                    }
+                    for block in instr.op.blocks() {
+                        walk_any(&block.body, out);
+                    }
+                }
+            }
+            walk_any(&module.functions[idx].body, &mut loop_read);
+        }
+    }
+    textured
+        .iter()
+        .copied()
+        .filter(|&idx| {
+            module.manifest.inputs[idx].shape() == Shape::Grid
+                && !mipmapped.contains(&idx)
+                && !loop_read.contains(&idx)
+        })
+        .collect()
+}
+
 fn packing_candidates(module: &Module, textured: &[usize]) -> (Vec<usize>, usize) {
     let inputs = &module.manifest.inputs;
     let read_only =

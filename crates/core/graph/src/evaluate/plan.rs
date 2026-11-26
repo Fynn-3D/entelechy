@@ -446,19 +446,6 @@ impl Evaluator {
                     keep_apart(&mut groups[position], &producer_id, why);
                     continue;
                 }
-                // A narrow output rounds its values, so it stays
-                // materialized.
-                let narrow = links.iter().any(|link| {
-                    !producer_manifest.outputs[link.2 as usize]
-                        .ty
-                        .schema
-                        .is_wide()
-                });
-                if narrow {
-                    let why = "it keeps its scalars narrow, rounded as they pass".to_owned();
-                    keep_apart(&mut groups[position], &producer_id, why);
-                    continue;
-                }
                 // Only IR maps fuse: native operations have no IR, and a
                 // reduction is not one element per consumer element.
                 let (Some(consumer_module), Some(producer_module)) =
@@ -584,6 +571,28 @@ impl Evaluator {
                             unreachable!("just matched")
                         };
                         Some(expr.clone())
+                    }
+                    (None, None)
+                        if !indexed
+                            && same_extent_origin(&groups, &at, producer_position, position) =>
+                    {
+                        match &consumer.node.domain {
+                            Some(DomainSpec::Expr(DomainExpr::Size(port)))
+                                if links.iter().any(|link| link.0 == *port) =>
+                            {
+                                match &groups[producer_position].node.domain {
+                                    Some(DomainSpec::Expr(expr)) => Some(expr.clone()),
+                                    None => groups[producer_position]
+                                        .version
+                                        .manifest()
+                                        .inputs
+                                        .first()
+                                        .map(|p| DomainExpr::Size(p.name.clone())),
+                                    _ => None,
+                                }
+                            }
+                            _ => None,
+                        }
                     }
                     _ => {
                         let why =
@@ -795,14 +804,11 @@ impl Evaluator {
                 group.node.params = params;
                 if let Some(domain) = indexed_domain {
                     group.node.domain = domain;
+                } else if let Some(expr) = carried {
+                    group.node.domain =
+                        Some(DomainSpec::Expr(expr.renamed(&prefix, &producer_params)));
                 } else if group.node.domain.is_none() {
-                    group.node.domain = match (runs, carried) {
-                        (Some(domain), _) => Some(DomainSpec::Literal(domain)),
-                        (None, Some(expr)) => {
-                            Some(DomainSpec::Expr(expr.renamed(&prefix, &producer_params)))
-                        }
-                        (None, None) => None,
-                    };
+                    group.node.domain = runs.map(DomainSpec::Literal);
                 }
                 for (owner, module) in readers_now {
                     let reader = &mut groups[owner];
@@ -1400,4 +1406,52 @@ fn keep_apart(group: &mut Group, producer: &NodeId, why: String) {
     if !group.apart.iter().any(|(node, _)| node == producer) {
         group.apart.push((producer.clone(), why));
     }
+}
+
+#[derive(PartialEq, Eq)]
+enum ExtentOrigin {
+    Node(NodeId),
+    External(String),
+}
+
+/// Follows `domain = size(port)` and inherited-input-0 links through `Map`
+/// nodes to prove two dynamic-extent nodes execute over the exact same Domain.
+fn extent_origin(
+    groups: &[Group],
+    at: &BTreeMap<NodeId, usize>,
+    mut pos: usize,
+) -> Option<ExtentOrigin> {
+    for _ in 0..32 {
+        let group = &groups[pos];
+        let manifest = group.manifest();
+        if manifest.mode != entelechy_ir::Mode::Map {
+            return Some(ExtentOrigin::Node(group.node.id.clone()));
+        }
+        let port = match &group.node.domain {
+            Some(DomainSpec::Expr(DomainExpr::Size(port))) => port.as_str(),
+            None => manifest.inputs.first()?.name.as_str(),
+            _ => return Some(ExtentOrigin::Node(group.node.id.clone())),
+        };
+        match group.node.inputs.get(port)? {
+            Binding::Now(Source::Node { node: upstream, .. }) => {
+                if let Some(&up_pos) = at.get(upstream) {
+                    pos = up_pos;
+                } else {
+                    return Some(ExtentOrigin::Node(upstream.clone()));
+                }
+            }
+            Binding::Now(Source::External(name)) => {
+                return Some(ExtentOrigin::External(name.clone()));
+            }
+            Binding::Previous { .. } => return None,
+        }
+    }
+    None
+}
+
+fn same_extent_origin(groups: &[Group], at: &BTreeMap<NodeId, usize>, a: usize, b: usize) -> bool {
+    let Some(oa) = extent_origin(groups, at, a) else {
+        return false;
+    };
+    extent_origin(groups, at, b).is_some_and(|ob| oa == ob)
 }

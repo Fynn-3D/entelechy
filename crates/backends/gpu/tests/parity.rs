@@ -8393,3 +8393,555 @@ fn batched_indirect_domain_check_shares_failure_slab_and_reports_non_positive() 
         let _ = host.release(count_h);
     }
 }
+
+#[test]
+fn narrow_format_fusion_and_dynamic_mirror_policy_match_cpu_bit_for_bit() {
+    let Some(gpu_hw) = gpu() else { return };
+    let gpu_no_f16 = GpuBackend::new().unwrap().without_shader_f16();
+
+    // 1. Multi-output narrow-format fusion (`f16` + `unorm8` + `snorm8` + `i8`)
+    //    across CPU, GPU with hardware SHADER_F16 fast-path, and GPU without SHADER_F16.
+    let f16_prod = compile(
+        "kernel test.gpu_f16_prod@1 {
+            requires { field.write; }
+            output hdr: Rows<Vec2 as f16>;
+            output u: Rows<Float as unorm8>;
+            output s: Rows<Float as snorm8>;
+            output tag: Rows<Int as i8>;
+            compute {
+                let i = element();
+                let x = if i == 0 { 1.00048828125 }
+                    else if i == 1 { 1.00146484375 }
+                    else if i == 2 { 65520.0 }
+                    else if i == 3 { -70000.0 }
+                    else if i == 4 { 5.9604645e-8 }
+                    else if i == 5 { -1.0e-10 }
+                    else { (float(i) - 10.0) * 0.371 };
+                return {
+                    hdr: vec2(x, -x * 0.5 + 0.125),
+                    u: float(i) * 0.0625 - 0.125,
+                    s: if i == 0 { -0.0 } else { float(i) * 0.0625 - 1.125 },
+                    tag: mul_wrap(sub_wrap(i, 8), 31),
+                };
+            }
+        }",
+    )
+    .unwrap();
+    let f16_cons = compile(
+        "kernel test.gpu_f16_cons@1 {
+            requires { field.read; field.write; }
+            input hdr: Rows<Vec2 as f16>;
+            input u: Rows<Float as unorm8>;
+            input s: Rows<Float as snorm8>;
+            input tag: Rows<Int as i8>;
+            output result: Rows<Vec4>;
+            compute {
+                let h = sample(hdr);
+                return vec4(h.x, sample(u), sample(s), float(sample(tag)));
+            }
+        }",
+    )
+    .unwrap();
+    let fused = entelechy_ir::fuse_outputs(
+        &f16_cons,
+        &[(0, 0), (1, 1), (2, 2), (3, 3)],
+        &f16_prod,
+        "src",
+    )
+    .unwrap();
+    assert!(
+        !entelechy_gpu::wgsl::can_fail(&fused),
+        "narrow quantization must remain non-failing on GPU"
+    );
+    let wgsl_f16 = entelechy_gpu::wgsl::emit_full_with_caps(
+        &fused,
+        &[],
+        &[],
+        entelechy_gpu::wgsl::Longs::Native,
+        entelechy_gpu::wgsl::Half::High,
+        true,
+        entelechy_gpu::wgsl::SubgroupCaps::default(),
+        true,
+    );
+    assert!(
+        wgsl_f16.contains("enable f16;") && wgsl_f16.contains("f32(f16(a0))"),
+        "hardware shader_f16 mode should emit enable f16 + single-instruction f32(f16(a0)):\n{wgsl_f16}"
+    );
+
+    let domain = Domain::Rows(32);
+    let inv = Invocation {
+        inputs: vec![],
+        params: vec![],
+        domain,
+        context: Context::default(),
+    };
+    let mut cpu_host = Host::new(4 << 20);
+    let cpu_prod_outs = CpuBackend
+        .execute(&f16_prod, &inv, &mut Scope::new(&mut cpu_host, all()))
+        .unwrap();
+    let cpu_sep_h = CpuBackend
+        .execute(
+            &f16_cons,
+            &Invocation {
+                inputs: cpu_prod_outs,
+                params: vec![],
+                domain,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut cpu_host, all()),
+        )
+        .unwrap()[0];
+    let cpu_sep = cpu_host.data(cpu_sep_h).unwrap().storage().to_vec();
+    let cpu_fused_h = CpuBackend
+        .execute(&fused, &inv, &mut Scope::new(&mut cpu_host, all()))
+        .unwrap()[0];
+    let cpu_fused = cpu_host.data(cpu_fused_h).unwrap().storage().to_vec();
+    assert_eq!(cpu_sep, cpu_fused, "CPU fused vs materialized mismatch");
+
+    for (tag, backend) in [("shader_f16", &gpu_hw), ("no_f16", &gpu_no_f16)] {
+        let mut host = Host::new(4 << 20);
+        let prep_prod = Backend::prepare(backend, &f16_prod).unwrap();
+        let prep_cons = Backend::prepare(backend, &f16_cons).unwrap();
+        let prep_fused = Backend::prepare(backend, &fused).unwrap();
+        let prod_outs = Backend::execute(
+            backend,
+            prep_prod.as_ref(),
+            &f16_prod,
+            &inv,
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap();
+        let sep_h = Backend::execute(
+            backend,
+            prep_cons.as_ref(),
+            &f16_cons,
+            &Invocation {
+                inputs: prod_outs,
+                params: vec![],
+                domain,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap()[0];
+        let sep_words = Backend::download(
+            backend,
+            host.resident(sep_h).unwrap().unwrap(),
+            domain.count() * 16,
+        )
+        .unwrap();
+        let out_h = Backend::execute(
+            backend,
+            prep_fused.as_ref(),
+            &fused,
+            &inv,
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap()[0];
+        let dev = host.resident(out_h).unwrap().unwrap();
+        let words = Backend::download(backend, dev, domain.count() * 16).unwrap();
+        assert_eq!(words, sep_words, "{tag}: GPU fused vs unfused bit mismatch");
+        assert_eq!(words, cpu_sep, "{tag}: GPU narrow-fused words mismatch CPU");
+    }
+
+    // 2. Dynamic plain-2D-linear TextureMirror policy across multiple evaluations:
+    //    static ONCE f16 Grid stays hardware-mirrored, while per-frame dynamic f16
+    //    Grid sampled via non-loop `at_linear` uses the zero-copy dynamic pipeline
+    //    on Frame 1+ and matches CPU on every frame.
+    let static_src = compile(
+        "kernel test.static_tex@1 {
+            requires { field.write; }
+            output out: Grid<Vec4 as f16>;
+            compute {
+                let p = coord() / domain();
+                return vec4(p.x, p.y, 0.25, 1.0);
+            }
+        }",
+    )
+    .unwrap();
+    let dynamic_src = compile(
+        "kernel test.dynamic_tex@1 {
+            requires { field.write; time.read; }
+            output out: Grid<Vec4 as f16>;
+            compute {
+                let p = coord() / domain();
+                let t = float(time());
+                return vec4(p.x + t, p.y * 0.5 + t * 0.25, 0.5, 1.0);
+            }
+        }",
+    )
+    .unwrap();
+    let consumer = compile(
+        "kernel test.mix_static_dynamic@1 {
+            requires { field.read; field.write; }
+            input static_g: Grid<Vec4 as f16>;
+            input dyn_g: Grid<Vec4 as f16>;
+            output out: Image;
+            compute {
+                let uv = (coord() + vec2(0.35, 0.65)) / domain();
+                let a = at_linear(static_g, uv);
+                let b = at_linear(dyn_g, uv);
+                return a * 0.5 + b * 0.5;
+            }
+        }",
+    )
+    .unwrap();
+
+    let prep_static = gpu_hw.prepare(&static_src).unwrap();
+    let prep_dyn = gpu_hw.prepare(&dynamic_src).unwrap();
+    let prep_cons = gpu_hw.prepare(&consumer).unwrap();
+    // Odd width (37x23) specifically exercises the unaligned RowPad path that
+    // the dynamic zero-copy policy eliminates on Frame 1+.
+    let gdom = Domain::Grid(37, 23);
+    let mut cpu_h = Host::new(8 << 20);
+    let mut gpu_h = Host::new(8 << 20);
+
+    gpu_hw.evaluation_begun();
+    let cpu_static = CpuBackend
+        .execute(
+            &static_src,
+            &Invocation {
+                inputs: vec![],
+                params: vec![],
+                domain: gdom,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut cpu_h, all()),
+        )
+        .unwrap()[0];
+    let gpu_static = gpu_hw
+        .execute(
+            prep_static.as_ref(),
+            &static_src,
+            &Invocation {
+                inputs: vec![],
+                params: vec![],
+                domain: gdom,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut gpu_h, all()),
+        )
+        .unwrap()[0];
+
+    for frame in 0..4u32 {
+        if frame > 0 {
+            gpu_hw.evaluation_begun();
+        }
+        let ctx = Context {
+            time: frame as f64 * 0.25,
+            ..Context::default()
+        };
+        let cpu_dyn = CpuBackend
+            .execute(
+                &dynamic_src,
+                &Invocation {
+                    inputs: vec![],
+                    params: vec![],
+                    domain: gdom,
+                    context: ctx,
+                },
+                &mut Scope::new(&mut cpu_h, all()),
+            )
+            .unwrap()[0];
+        let cpu_out = CpuBackend
+            .execute(
+                &consumer,
+                &Invocation {
+                    inputs: vec![cpu_static, cpu_dyn],
+                    params: vec![],
+                    domain: gdom,
+                    context: ctx,
+                },
+                &mut Scope::new(&mut cpu_h, all()),
+            )
+            .unwrap()[0];
+        let cpu_words = cpu_h.data(cpu_out).unwrap().storage().to_vec();
+
+        let gpu_dyn = gpu_hw
+            .execute(
+                prep_dyn.as_ref(),
+                &dynamic_src,
+                &Invocation {
+                    inputs: vec![],
+                    params: vec![],
+                    domain: gdom,
+                    context: ctx,
+                },
+                &mut Scope::new(&mut gpu_h, all()),
+            )
+            .unwrap()[0];
+        let gpu_out = gpu_hw
+            .execute(
+                prep_cons.as_ref(),
+                &consumer,
+                &Invocation {
+                    inputs: vec![gpu_static, gpu_dyn],
+                    params: vec![],
+                    domain: gdom,
+                    context: ctx,
+                },
+                &mut Scope::new(&mut gpu_h, all()),
+            )
+            .unwrap()[0];
+        let dev = gpu_h.resident(gpu_out).unwrap().unwrap();
+        let gpu_words = gpu_hw.download(dev, gdom.count() * 16).unwrap();
+        for (idx, (&cw, &gw)) in cpu_words.iter().zip(&gpu_words).enumerate() {
+            let cf = f32::from_bits(cw);
+            let gf = f32::from_bits(gw);
+            assert!(
+                (cf - gf).abs() < 2e-3,
+                "frame {frame} word {idx}: cpu={cf} gpu={gf}"
+            );
+        }
+        let _ = cpu_h.release(cpu_dyn);
+        let _ = cpu_h.release(cpu_out);
+        let _ = gpu_h.release(gpu_dyn);
+        let _ = gpu_h.release(gpu_out);
+    }
+}
+
+#[test]
+fn cutout_alpha_minmax_pyramid_culls_transparent_and_enables_opaque_early_z_with_cpu_parity() {
+    use entelechy_rules::raster::{SURFACE_WORDS, mask_schema, triangle_schema, vertex_schema};
+
+    let Some(gpu_hw) = gpu() else { return };
+    let no_sg = GpuBackend::new().unwrap().without_subgroups();
+    let no_filter = GpuBackend::new().unwrap().without_float32_filterable();
+    let no_atomics = GpuBackend::new().unwrap().with_long_pairs();
+    let cpu = CpuBackend;
+
+    // Odd-sized cutout mask (137x93) exercising non-power-of-two alpha pyramid
+    // downsampling, 1-texel bilinear halo, and 3 UV alpha regimes:
+    //   u in [0.00, 0.30]: 100% opaque (alpha = 1.0 -> alpha_cls = 2)
+    //   u in [0.35, 0.65]: lacy checkerboard (alpha = 0.0 / 1.0 -> alpha_cls = 1)
+    //   u in [0.70, 1.00]: 100% transparent (alpha = 0.0 -> alpha_cls = 0)
+    let (mask_w, mask_h) = (137u32, 93u32);
+    let mut mask = Vec::with_capacity((mask_w * mask_h * 4) as usize);
+    for y in 0..mask_h {
+        for x in 0..mask_w {
+            let u = (x as f32 + 0.5) / mask_w as f32;
+            let a = if u < 0.33 {
+                1.0f32
+            } else if u < 0.67 {
+                if ((x / 5) + (y / 5)) % 2 == 0 {
+                    1.0f32
+                } else {
+                    0.0f32
+                }
+            } else {
+                0.0f32
+            };
+            mask.extend([
+                1.0f32.to_bits(),
+                0.5f32.to_bits(),
+                0.25f32.to_bits(),
+                a.to_bits(),
+            ]);
+        }
+    }
+
+    let (width, height) = (128u32, 96u32);
+    let mut verts: Vec<u32> = Vec::new();
+    let mut tris: Vec<u32> = Vec::new();
+    let mut push_v = |x: f32, y: f32, z: f32, u: f32, v: f32| -> u32 {
+        let id = (verts.len() / 9) as u32;
+        verts.extend([
+            x.to_bits(),
+            y.to_bits(),
+            z.to_bits(),
+            1.0f32.to_bits(),
+            0.0f32.to_bits(),
+            0.0f32.to_bits(),
+            1.0f32.to_bits(),
+            u.to_bits(),
+            v.to_bits(),
+        ]);
+        id
+    };
+    let mut push_quad = |x0: f32, y0: f32, x1: f32, y1: f32, z: f32, u0: f32, u1: f32| {
+        let a = push_v(x0, y0, z, u0, 0.05);
+        let b = push_v(x1, y0, z, u1, 0.05);
+        let c = push_v(x1, y1, z, u1, 0.95);
+        let d = push_v(x0, y1, z, u0, 0.95);
+        tris.extend([a, b, c, a, c, d]);
+    };
+
+    // 1. Macro opaque occluder on the left (Phase 1 Early-Z draw, zero discard).
+    push_quad(-0.90, -0.90, -0.05, 0.90, 0.25, 0.02, 0.28);
+    // 2. Macro mixed cutout quad on the right (Phase 1 alive bitmask -> Phase 4 draw_cut).
+    push_quad(0.05, -0.90, 0.90, 0.90, 0.25, 0.38, 0.62);
+    // 3. Macro fully transparent quad in front of everything (culled by alpha_cls == 0!).
+    push_quad(-0.95, -0.95, 0.95, 0.95, 0.05, 0.72, 0.98);
+    // 4. Far solid backdrop visible through right-side cutout holes.
+    push_quad(-0.95, -0.95, 0.95, 0.95, 0.80, 0.05, 0.25);
+
+    // 5. Opaque micro-triangles (< 8x8 px, tagged opaque in small_rows) AND
+    //    cutout micro-triangles AND transparent micro-triangles, plus occluded
+    //    micro-triangles strictly behind the Phase-1 left occluder.
+    for i in 0..24u32 {
+        let cx = -0.70 + (i % 6) as f32 * 0.28;
+        let cy = -0.60 + (i / 6) as f32 * 0.40;
+        let r = 0.035;
+        let (u0, u1) = match i % 3 {
+            0 => (0.04, 0.26), // opaque micro
+            1 => (0.38, 0.62), // cutout micro
+            _ => (0.74, 0.96), // transparent micro (culled!)
+        };
+        push_quad(cx - r, cy - r, cx + r, cy + r, 0.12, u0, u1);
+        // Occluded micro behind Phase-1 left occluder (tests draw_small depth_tex Early-Z).
+        push_quad(
+            -0.75 + (i % 6) as f32 * 0.10,
+            cy - r,
+            -0.75 + (i % 6) as f32 * 0.10 + r,
+            cy + r,
+            0.60,
+            u0,
+            u1,
+        );
+    }
+
+    // 6. Push triangle count above HIZ_TRI_THRESHOLD (16_384) with a mix of
+    //    transparent (culled in Phase 1) and occluded opaque quads behind the left wall.
+    for i in 0..8_500u32 {
+        let fx = -0.84 + (i % 64) as f32 * 0.011;
+        let fy = -0.84 + ((i / 64) % 133) as f32 * 0.012;
+        let z = 0.45 + (i % 40) as f32 * 0.01;
+        let (u0, u1) = if i % 2 == 0 {
+            (0.75, 0.95)
+        } else {
+            (0.05, 0.25)
+        };
+        push_quad(fx, fy, fx + 0.05, fy + 0.05, z, u0, u1);
+    }
+
+    // 7. Subpixel 1-pixel-box slivers: some missing the pixel center (dropped
+    //    by exact 1px coverage test), some hitting it cleanly.
+    let px_w = 2.0 / width as f32;
+    let px_h = 2.0 / height as f32;
+    for i in 0..16u32 {
+        let x = -0.5 + (i as f32) * px_w * 4.0;
+        let y = 0.0;
+        // Thin sliver that hugs the top-left corner of pixel box and misses center.
+        let a = push_v(x + px_w * 0.05, y + px_h * 0.05, 0.08, 0.1, 0.1);
+        let b = push_v(x + px_w * 0.25, y + px_h * 0.05, 0.08, 0.2, 0.1);
+        let c = push_v(x + px_w * 0.05, y + px_h * 0.25, 0.08, 0.1, 0.2);
+        tris.extend([a, b, c]);
+        // Small 1px triangle centered right on a pixel center.
+        let d = push_v(x + px_w * 0.1, y - px_h * 0.4, 0.08, 0.1, 0.1);
+        let e = push_v(x + px_w * 0.9, y - px_h * 0.4, 0.08, 0.2, 0.1);
+        let f = push_v(x + px_w * 0.5, y - px_h * 0.95, 0.08, 0.15, 0.2);
+        tris.extend([d, e, f]);
+    }
+
+    let vert_count = (verts.len() / 9) as u32;
+    let tri_count = (tris.len() / 3) as u32;
+    assert!(tri_count > 17_000);
+    let surface_bytes = (width * height) as usize * SURFACE_WORDS * 4;
+
+    let run_twice = |backend: &dyn Backend| -> (Vec<u32>, Vec<u32>) {
+        let mut host = Host::new(1 << 26);
+        let vh = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    vertex_schema(),
+                    Domain::Rows(vert_count),
+                    verts.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let th = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    triangle_schema(),
+                    Domain::Rows(tri_count),
+                    tris.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mh = host
+            .adopt(
+                entelechy_abi::FieldData::from_storage(
+                    mask_schema(),
+                    Domain::Grid(mask_w, mask_h),
+                    mask.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let inv = Invocation {
+            inputs: vec![vh, th, mh],
+            params: vec![entelechy_abi::Value::Float(0.5)],
+            domain: Domain::Grid(width, height),
+            context: Context::default(),
+        };
+        let mut run_one = || {
+            let out_h = Backend::execute_native(
+                backend,
+                entelechy_rules::NativeOp::RasterizeCutout,
+                &inv,
+                &mut Scope::new(&mut host, all()),
+            )
+            .unwrap()[0];
+            if let Some(dev) = host.resident(out_h).unwrap() {
+                Backend::download(backend, dev, surface_bytes).unwrap()
+            } else {
+                host.data(out_h).unwrap().storage().to_vec()
+            }
+        };
+        // Second call reuses the cached `alpha_minmax` pyramid on `mh`!
+        let first = run_one();
+        let second = run_one();
+        (first, second)
+    };
+
+    let id_at =
+        |words: &[u32], x: u32, y: u32| words[(y * width + x) as usize * SURFACE_WORDS + 6] as i32;
+    let depth_at = |words: &[u32], x: u32, y: u32| {
+        f32::from_bits(words[(y * width + x) as usize * SURFACE_WORDS])
+    };
+
+    let (cpu_out, _) = run_twice(&cpu);
+    for (tag, backend) in [
+        ("hw", &gpu_hw as &dyn Backend),
+        ("no_subgroups", &no_sg as &dyn Backend),
+        ("no_filter", &no_filter as &dyn Backend),
+        ("no_atomics", &no_atomics as &dyn Backend),
+    ] {
+        let (first, second) = run_twice(backend);
+        assert_eq!(
+            first, second,
+            "{tag}: cached alpha_minmax second call diverged"
+        );
+        // Every interior pixel (where all 3x3 neighbors share one triangle ID)
+        // must match the CPU reference in both triangle ID and depth.
+        let mut compared = 0usize;
+        for y in 1..height - 1 {
+            for x in 1..width - 1 {
+                let id = id_at(&cpu_out, x, y);
+                let interior =
+                    (0..3).all(|dy| (0..3).all(|dx| id_at(&cpu_out, x + dx - 1, y + dy - 1) == id));
+                if !interior {
+                    continue;
+                }
+                compared += 1;
+                let gid = id_at(&first, x, y);
+                let cz = depth_at(&cpu_out, x, y);
+                let gz = depth_at(&first, x, y);
+                assert_eq!(
+                    gid, id,
+                    "{tag}: interior pixel ({x},{y}) triangle mismatch: gpu={gid} cpu={id} (gz={gz} cz={cz})"
+                );
+                assert!(
+                    (cz - gz).abs() <= 1e-4,
+                    "{tag}: interior pixel ({x},{y}) depth mismatch: gpu={gz} cpu={cz}"
+                );
+            }
+        }
+        assert!(
+            compared > 4_000,
+            "{tag}: too few interior pixels compared: {compared}"
+        );
+    }
+}

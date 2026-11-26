@@ -160,7 +160,11 @@ pub(crate) fn shader_uses_f16(
         .any(|i| native_f16_input(module, i, packs, textured, shader_f16, &parts).is_some());
     let any_out = with_output
         && (0..written_outputs(module)).any(|k| native_f16_output(module, k, shader_f16).is_some());
-    any_in || any_out
+    let any_quantize = module
+        .functions
+        .iter()
+        .any(|f| f.name == entelechy_ir::QUANTIZE_F16_FN);
+    any_in || any_out || any_quantize
 }
 
 /// Generates a native `array<f16>` / `array<vec2<f16>>` / `array<vec4<f16>>`

@@ -16,6 +16,10 @@ pub(crate) struct DeviceImage {
     /// Monotonic unique identity for this immutable resident Field, preventing
     /// stale cache hits when a recycled buffer from [`Spare`] backs a new Field.
     pub(crate) id: u64,
+    /// Evaluation generation in which this resident Field was adopted, letting
+    /// the GPU backend distinguish static `ONCE` textures from dynamic
+    /// per-frame Grids without extra buffer-to-texture mirror copies.
+    pub(crate) created_eval: u64,
     pub(crate) buffer: Option<wgpu::Buffer>,
     /// Where the buffer goes when its Field is released, for the next output
     /// of its size. `None` when the buffer is not the backend's to keep.
@@ -25,6 +29,10 @@ pub(crate) struct DeviceImage {
     pub(crate) holds: Option<Held>,
     /// Lazily populated hardware 2D/3D texture mirror (`TYPED-FIELD-ARCHITECTURE.md` §2).
     pub(crate) mirror: Mutex<Option<crate::texture::TextureMirror>>,
+    /// Lazily populated conservative MIN/MAX alpha pyramid for immutable cutout
+    /// masks, enabling opaque Early-Z Phase-1 occluders and transparent triangle
+    /// culling in [`crate::raster`].
+    pub(crate) alpha_minmax: Mutex<Option<crate::raster_hiz::AlphaMinMaxPyramid>>,
     /// Direct hardware block-compressed texture (`BC1`/`BC4`/`BC5`/`BC7`), when
     /// resident without an uncompressed storage buffer.
     pub(crate) compressed: Option<crate::texture::CompressedTexture>,
@@ -35,12 +43,15 @@ pub(crate) struct DeviceImage {
 
 impl DeviceImage {
     pub(crate) fn new(buffer: wgpu::Buffer, spare: Option<Spare>, holds: Option<Held>) -> Self {
+        let created_eval = spare.as_ref().map_or(0, Spare::current_eval);
         Self {
             id: NEXT_IMAGE_ID.fetch_add(1, Ordering::Relaxed),
+            created_eval,
             buffer: Some(buffer),
             spare,
             holds,
             mirror: Mutex::new(None),
+            alpha_minmax: Mutex::new(None),
             compressed: None,
             unpacked: Mutex::new(None),
         }
@@ -50,12 +61,15 @@ impl DeviceImage {
         texture: crate::texture::CompressedTexture,
         spare: Option<Spare>,
     ) -> Self {
+        let created_eval = spare.as_ref().map_or(0, Spare::current_eval);
         Self {
             id: NEXT_IMAGE_ID.fetch_add(1, Ordering::Relaxed),
+            created_eval,
             buffer: None,
             spare,
             holds: None,
             mirror: Mutex::new(None),
+            alpha_minmax: Mutex::new(None),
             compressed: Some(texture),
             unpacked: Mutex::new(None),
         }
@@ -217,6 +231,11 @@ fn lock_gone<T>(gone: &Mutex<Vec<T>>) -> std::sync::MutexGuard<'_, Vec<T>> {
 }
 
 impl Spare {
+    /// The current evaluation counter (bumped at each [`Spare::evaluation_begun`]).
+    pub(crate) fn current_eval(&self) -> u64 {
+        self.evaluations.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// A buffer at least this size, from the pile or from the device: the
     /// smallest that fits, at most twice the size. Shaders read only up to the
     /// element count the uniform gives, so a larger buffer's tail is never

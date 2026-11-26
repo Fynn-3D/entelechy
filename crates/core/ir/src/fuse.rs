@@ -8,13 +8,19 @@
 //! a Field its count or size reads the extent from params instead. Each
 //! result is an ordinary module that validates and runs on any backend.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::{
-    Block, Capabilities, Function, Instruction, Manifest, Mode, Module, Op, Param, Port, PortType,
-    Step, StructDef, Type, Validated, Value, ValueId, validate,
+    BinaryOp, Block, Capabilities, Encoding, Function, Instruction, Intrinsic, Manifest, Mode,
+    Module, Op, Param, Port, PortType, Schema, Step, StructDef, Type, Validated, Value, ValueId,
+    validate,
 };
+
+/// Internal helper name emitted by [`fuse_outputs`] / [`fuse_indexed`] when a
+/// fused link crosses an [`Encoding::F16`] port, rounding IEEE-754 `f32 -> f16 -> f32`
+/// bit-for-bit identically to Host storage across every backend.
+pub const QUANTIZE_F16_FN: &str = "#quantize_f16";
 
 /// Why two modules cannot fuse.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,13 +69,32 @@ pub struct InputUse {
     pub counted: bool,
 }
 
-fn use_in(instructions: &[Instruction], input: u32, use_: &mut InputUse) {
+fn use_in(
+    instructions: &[Instruction],
+    input: u32,
+    self_coord_ok: bool,
+    coords: &mut BTreeSet<u32>,
+    use_: &mut InputUse,
+) {
     for instruction in instructions {
+        if matches!(instruction.op, Op::Coord) {
+            coords.insert(instruction.id.0);
+        }
         match &instruction.op {
             Op::Sample(i) if *i == input => use_.sampled = true,
             Op::Part {
                 input: i, at: None, ..
             } if *i == input => use_.sampled = true,
+            Op::At(i, addr) if *i == input && self_coord_ok && coords.contains(&addr.0) => {
+                use_.sampled = true;
+            }
+            Op::Part {
+                input: i,
+                at: Some(addr),
+                ..
+            } if *i == input && self_coord_ok && coords.contains(&addr.0) => {
+                use_.sampled = true;
+            }
             Op::Count(i) | Op::Size(i) if *i == input => use_.counted = true,
             Op::At(i, _)
             | Op::AtLinear(i, _)
@@ -81,7 +106,7 @@ fn use_in(instructions: &[Instruction], input: u32, use_: &mut InputUse) {
             }
             op => {
                 for block in op.blocks() {
-                    use_in(&block.body, input, use_);
+                    use_in(&block.body, input, self_coord_ok, coords, use_);
                 }
             }
         }
@@ -91,13 +116,23 @@ fn use_in(instructions: &[Instruction], input: u32, use_: &mut InputUse) {
 /// Reports how `module` reads `input`.
 pub fn input_use(module: &Module, input: u32) -> InputUse {
     let mut use_ = InputUse::default();
-    for function in module
-        .functions
-        .iter()
-        .chain(std::iter::once(&module.entry))
-    {
-        use_in(&function.body, input, &mut use_);
+    let grid_or_volume = module
+        .manifest
+        .inputs
+        .get(input as usize)
+        .is_some_and(|port| matches!(port.shape(), crate::Shape::Grid | crate::Shape::Volume));
+    for function in &module.functions {
+        let mut coords = BTreeSet::new();
+        use_in(&function.body, input, false, &mut coords, &mut use_);
     }
+    let mut coords = BTreeSet::new();
+    use_in(
+        &module.entry.body,
+        input,
+        grid_or_volume,
+        &mut coords,
+        &mut use_,
+    );
     use_
 }
 
@@ -133,7 +168,8 @@ pub fn offset_read(module: &Module, input: u32) -> bool {
     // A function may ask the count or size, nothing more.
     let mut in_functions = InputUse::default();
     for function in &module.functions {
-        use_in(&function.body, input, &mut in_functions);
+        let mut coords = BTreeSet::new();
+        use_in(&function.body, input, false, &mut coords, &mut in_functions);
     }
     if in_functions.sampled || in_functions.addressed {
         return false;
@@ -173,7 +209,8 @@ pub fn row_reads(module: &Module, input: u32) -> Option<usize> {
     // A function may ask the count or size, nothing more.
     let mut in_functions = InputUse::default();
     for function in &module.functions {
-        use_in(&function.body, input, &mut in_functions);
+        let mut coords = BTreeSet::new();
+        use_in(&function.body, input, false, &mut coords, &mut in_functions);
     }
     if in_functions.sampled || in_functions.addressed {
         return None;
@@ -552,18 +589,6 @@ fn fuse_links(
             "only map Kernels fuse; reductions and scans run on their own".into(),
         ));
     }
-    // A narrow output rounds its values, which the consumer must read.
-    if let Some((_, output)) = links.iter().find(|(_, output)| {
-        !producer_manifest.outputs[*output as usize]
-            .ty
-            .schema
-            .is_wide()
-    }) {
-        return Err(FuseError::new(format!(
-            "output `{}` keeps its scalars narrow; what passes through it is rounded, and a fused read would not be",
-            producer_manifest.outputs[*output as usize].name
-        )));
-    }
     // Ports match by shape and layout; struct indices are module-local.
     for (input, output) in links {
         let (written, read) = (
@@ -735,9 +760,30 @@ fn fuse_links(
         let mut renumber = Renumber::new(&producer_ops, &shift_struct, BTreeMap::new());
         // `function` has already shifted the argument types.
         let mut fused = renumber.function(function);
-        fused.name = rename(&function.name);
+        if function.name != QUANTIZE_F16_FN {
+            fused.name = rename(&function.name);
+        }
         fused
     }));
+    // Ensure `#quantize_f16` exists once if any narrow fused link uses `Encoding::F16`.
+    let needs_f16_helper = links.iter().any(|(_, output)| {
+        producer_manifest.outputs[*output as usize]
+            .ty
+            .schema
+            .encodings()
+            .contains(&Encoding::F16)
+    });
+    let quantize_f16_fn = if needs_f16_helper {
+        if let Some(existing) = functions.iter().position(|f| f.name == QUANTIZE_F16_FN) {
+            Some(existing as u32)
+        } else {
+            let idx = functions.len() as u32;
+            functions.push(build_quantize_f16_function());
+            Some(idx)
+        }
+    } else {
+        None
+    };
     let producer_bindings = |renumber: &Renumber| -> Vec<(ValueId, String)> {
         producer
             .entry
@@ -754,22 +800,36 @@ fn fuse_links(
 
     let (body, results, bindings) = match reading {
         Reading::Pointwise => {
-            // The producer's body first, then the consumer's with its
-            // sample of the fused input replaced by the producer's result.
+            // The producer's body first, then explicit bit-exact narrowing for
+            // any narrow linked output, then the consumer's body with its
+            // sample of the fused input replaced by the (rounded) value.
             let mut entry_renumber = Renumber::new(&producer_ops, &shift_struct, BTreeMap::new());
             let mut body = entry_renumber.block(&producer.entry.body);
-            // Each linked input reads the producer's value for its output;
-            // a path into it is walked against that output's element in the
-            // fused table.
-            let replace = links
-                .iter()
-                .map(|(input, output)| {
-                    let produced = entry_renumber.map(producer.entry.results[*output as usize]);
-                    let element =
-                        shift_struct(producer_manifest.outputs[*output as usize].element());
-                    (*input, (produced, element))
-                })
-                .collect();
+            // Cache rounded outputs so two consumer inputs reading the same
+            // narrow producer output only round once.
+            let mut rounded_outputs: BTreeMap<u32, ValueId> = BTreeMap::new();
+            let mut replace = BTreeMap::new();
+            for &(input, output) in links {
+                let output_port = &producer_manifest.outputs[output as usize];
+                let element = shift_struct(output_port.element());
+                let produced = *rounded_outputs.entry(output).or_insert_with(|| {
+                    let raw = entry_renumber.map(producer.entry.results[output as usize]);
+                    if output_port.ty.schema.is_wide() {
+                        raw
+                    } else {
+                        emit_quantize_value(
+                            &mut body,
+                            &mut entry_renumber.next,
+                            raw,
+                            element,
+                            &output_port.ty.schema,
+                            &structs,
+                            quantize_f16_fn,
+                        )
+                    }
+                });
+                replace.insert(input, (produced, element));
+            }
             let mut consumer_renumber = Renumber::new(&consumer_ops, &identity, replace);
             consumer_renumber.next = entry_renumber.next;
             consumer_renumber.structs = Some(&structs);
@@ -790,7 +850,7 @@ fn fuse_links(
                 }
             };
             // One function per output read by address: the producer's
-            // entry at a row, yielding that output.
+            // entry at a row, yielding that output (narrowed if non-wide).
             let mut rows: BTreeMap<u32, u32> = BTreeMap::new();
             let mut called = BTreeMap::new();
             for (input, output) in links {
@@ -811,11 +871,26 @@ fn fuse_links(
                         }];
                         body.extend(renumber.block(&producer.entry.body));
                         let output_port = &producer_manifest.outputs[*output as usize];
+                        let element = shift_struct(output_port.element());
+                        let raw = renumber.map(producer.entry.results[*output as usize]);
+                        let result = if output_port.ty.schema.is_wide() {
+                            raw
+                        } else {
+                            emit_quantize_value(
+                                &mut body,
+                                &mut renumber.next,
+                                raw,
+                                element,
+                                &output_port.ty.schema,
+                                &structs,
+                                quantize_f16_fn,
+                            )
+                        };
                         functions.push(Function {
                             name: format!("{prefix}/{} at a row", output_port.name),
                             args: vec![Type::Int],
                             body,
-                            results: renumber.results(&[producer.entry.results[*output as usize]]),
+                            results: vec![result],
                             bindings: producer_bindings(&renumber),
                         });
                         let function = (functions.len() - 1) as u32;
@@ -860,6 +935,458 @@ fn fuse_links(
         ));
     }
     Ok(fused)
+}
+
+/// Tiny helper for building pre-order SSA instructions cleanly.
+struct IrBuilder<'a> {
+    out: &'a mut Vec<Instruction>,
+    next: &'a mut u32,
+}
+
+impl<'a> IrBuilder<'a> {
+    fn push(&mut self, ty: Type, op: Op) -> ValueId {
+        let id = ValueId(*self.next);
+        *self.next += 1;
+        self.out.push(Instruction { id, ty, op });
+        id
+    }
+
+    fn int(&mut self, v: i32) -> ValueId {
+        self.push(Type::Int, Op::Const(Value::Int(v)))
+    }
+
+    fn float(&mut self, v: f32) -> ValueId {
+        self.push(Type::Float, Op::Const(Value::Float(v)))
+    }
+
+    fn bin(&mut self, ty: Type, op: BinaryOp, a: ValueId, b: ValueId) -> ValueId {
+        self.push(ty, Op::Binary(op, a, b))
+    }
+
+    fn intr(&mut self, ty: Type, i: Intrinsic, args: Vec<ValueId>) -> ValueId {
+        self.push(ty, Op::Intrinsic(i, args))
+    }
+
+    fn push_if(
+        &mut self,
+        ty: Type,
+        condition: ValueId,
+        then_fn: impl FnOnce(&mut IrBuilder<'_>) -> ValueId,
+        else_fn: impl FnOnce(&mut IrBuilder<'_>) -> ValueId,
+    ) -> ValueId {
+        let id = ValueId(*self.next);
+        *self.next += 1;
+        let mut then_body = Vec::new();
+        let then_res = {
+            let mut b = IrBuilder {
+                out: &mut then_body,
+                next: self.next,
+            };
+            then_fn(&mut b)
+        };
+        let mut else_body = Vec::new();
+        let else_res = {
+            let mut b = IrBuilder {
+                out: &mut else_body,
+                next: self.next,
+            };
+            else_fn(&mut b)
+        };
+        self.out.push(Instruction {
+            id,
+            ty,
+            op: Op::If {
+                condition,
+                then: Block {
+                    body: then_body,
+                    result: then_res,
+                },
+                otherwise: Block {
+                    body: else_body,
+                    result: else_res,
+                },
+            },
+        });
+        id
+    }
+}
+
+/// Builds the pure, non-failing IR function [`QUANTIZE_F16_FN`] rounding an
+/// `f32` through IEEE-754 binary16 and back (`f16_to_f32(f32_to_f16(bits(x)))`),
+/// matching `entelechy_abi::Encoding::F16` bit-for-bit across all backends.
+fn build_quantize_f16_function() -> Function {
+    let mut body = Vec::new();
+    let mut next = 0u32;
+    let result = {
+        let mut b = IrBuilder {
+            out: &mut body,
+            next: &mut next,
+        };
+        let arg = b.push(Type::Float, Op::Arg(0));
+        let x = b.intr(Type::Int, Intrinsic::Bits, vec![arg]);
+        let c16 = b.int(16);
+        let c0x8000 = b.int(0x8000);
+        let x_shr16 = b.bin(Type::Int, BinaryOp::Ushr, x, c16);
+        let sign16 = b.bin(Type::Int, BinaryOp::BitAnd, x_shr16, c0x8000);
+        let c23 = b.int(23);
+        let c0xff = b.int(0xFF);
+        let x_shr23 = b.bin(Type::Int, BinaryOp::Ushr, x, c23);
+        let exponent = b.bin(Type::Int, BinaryOp::BitAnd, x_shr23, c0xff);
+        let c_mant_mask = b.int(0x7F_FFFF);
+        let mantissa = b.bin(Type::Int, BinaryOp::BitAnd, x, c_mant_mask);
+        let is_inf_nan = b.bin(Type::Bool, BinaryOp::Equal, exponent, c0xff);
+
+        let h = b.push_if(
+            Type::Int,
+            is_inf_nan,
+            |b| {
+                let c0 = b.int(0);
+                let is_nan = b.bin(Type::Bool, BinaryOp::NotEqual, mantissa, c0);
+                let c0x7c00 = b.int(0x7C00);
+                let inf = b.bin(Type::Int, BinaryOp::BitOr, sign16, c0x7c00);
+                b.push_if(
+                    Type::Int,
+                    is_nan,
+                    |b| {
+                        let c13 = b.int(13);
+                        let m_hi = b.bin(Type::Int, BinaryOp::Ushr, mantissa, c13);
+                        let c0x200 = b.int(0x200);
+                        let qnan = b.bin(Type::Int, BinaryOp::BitOr, c0x200, m_hi);
+                        b.bin(Type::Int, BinaryOp::BitOr, inf, qnan)
+                    },
+                    |_| inf,
+                )
+            },
+            |b| {
+                let c112 = b.int(112);
+                let e = b.intr(Type::Int, Intrinsic::SubWrap, vec![exponent, c112]);
+                let c31 = b.int(31);
+                let overflow = b.bin(Type::Bool, BinaryOp::GreaterEqual, e, c31);
+                b.push_if(
+                    Type::Int,
+                    overflow,
+                    |b| {
+                        let c0x7c00 = b.int(0x7C00);
+                        b.bin(Type::Int, BinaryOp::BitOr, sign16, c0x7c00)
+                    },
+                    |b| {
+                        let c0 = b.int(0);
+                        let subnormal = b.bin(Type::Bool, BinaryOp::LessEqual, e, c0);
+                        b.push_if(
+                            Type::Int,
+                            subnormal,
+                            |b| {
+                                let cm10 = b.int(-10);
+                                let underflow = b.bin(Type::Bool, BinaryOp::Less, e, cm10);
+                                b.push_if(
+                                    Type::Int,
+                                    underflow,
+                                    |_| sign16,
+                                    |b| {
+                                        let c_imp = b.int(0x80_0000);
+                                        let full =
+                                            b.bin(Type::Int, BinaryOp::BitOr, mantissa, c_imp);
+                                        let c14 = b.int(14);
+                                        let shift =
+                                            b.intr(Type::Int, Intrinsic::SubWrap, vec![c14, e]);
+                                        let val = b.bin(Type::Int, BinaryOp::Ushr, full, shift);
+                                        let c1 = b.int(1);
+                                        let one_sh = b.bin(Type::Int, BinaryOp::Shl, c1, shift);
+                                        let mask =
+                                            b.intr(Type::Int, Intrinsic::SubWrap, vec![one_sh, c1]);
+                                        let dropped =
+                                            b.bin(Type::Int, BinaryOp::BitAnd, full, mask);
+                                        let sh_m1 =
+                                            b.intr(Type::Int, Intrinsic::SubWrap, vec![shift, c1]);
+                                        let half = b.bin(Type::Int, BinaryOp::Shl, c1, sh_m1);
+                                        let gt =
+                                            b.bin(Type::Bool, BinaryOp::Greater, dropped, half);
+                                        let eq = b.bin(Type::Bool, BinaryOp::Equal, dropped, half);
+                                        let lsb = b.bin(Type::Int, BinaryOp::BitAnd, val, c1);
+                                        let odd = b.bin(Type::Bool, BinaryOp::Equal, lsb, c1);
+                                        let tie = b.bin(Type::Bool, BinaryOp::And, eq, odd);
+                                        let up = b.bin(Type::Bool, BinaryOp::Or, gt, tie);
+                                        let inc =
+                                            b.push_if(Type::Int, up, |b| b.int(1), |b| b.int(0));
+                                        let rounded =
+                                            b.intr(Type::Int, Intrinsic::AddWrap, vec![val, inc]);
+                                        b.bin(Type::Int, BinaryOp::BitOr, sign16, rounded)
+                                    },
+                                )
+                            },
+                            |b| {
+                                let c10 = b.int(10);
+                                let c13 = b.int(13);
+                                let e_sh = b.bin(Type::Int, BinaryOp::Shl, e, c10);
+                                let m_hi = b.bin(Type::Int, BinaryOp::Ushr, mantissa, c13);
+                                let val = b.bin(Type::Int, BinaryOp::BitOr, e_sh, m_hi);
+                                let c0x1fff = b.int(0x1FFF);
+                                let dropped = b.bin(Type::Int, BinaryOp::BitAnd, mantissa, c0x1fff);
+                                let c0x1000 = b.int(0x1000);
+                                let gt = b.bin(Type::Bool, BinaryOp::Greater, dropped, c0x1000);
+                                let eq = b.bin(Type::Bool, BinaryOp::Equal, dropped, c0x1000);
+                                let c1 = b.int(1);
+                                let lsb = b.bin(Type::Int, BinaryOp::BitAnd, val, c1);
+                                let odd = b.bin(Type::Bool, BinaryOp::Equal, lsb, c1);
+                                let tie = b.bin(Type::Bool, BinaryOp::And, eq, odd);
+                                let up = b.bin(Type::Bool, BinaryOp::Or, gt, tie);
+                                let inc = b.push_if(Type::Int, up, |b| b.int(1), |b| b.int(0));
+                                let rounded = b.intr(Type::Int, Intrinsic::AddWrap, vec![val, inc]);
+                                b.bin(Type::Int, BinaryOp::BitOr, sign16, rounded)
+                            },
+                        )
+                    },
+                )
+            },
+        );
+
+        // Decode f16 bits `h` back into f32 bits.
+        let h_sign = b.bin(Type::Int, BinaryOp::BitAnd, h, c0x8000);
+        let sign32 = b.bin(Type::Int, BinaryOp::Shl, h_sign, c16);
+        let c10 = b.int(10);
+        let c0x1f = b.int(0x1F);
+        let h_shr10 = b.bin(Type::Int, BinaryOp::Ushr, h, c10);
+        let he = b.bin(Type::Int, BinaryOp::BitAnd, h_shr10, c0x1f);
+        let c0x3ff = b.int(0x3FF);
+        let hm = b.bin(Type::Int, BinaryOp::BitAnd, h, c0x3ff);
+        let c0 = b.int(0);
+        let he_zero = b.bin(Type::Bool, BinaryOp::Equal, he, c0);
+        let out_bits = b.push_if(
+            Type::Int,
+            he_zero,
+            |b| {
+                let hm_zero = b.bin(Type::Bool, BinaryOp::Equal, hm, c0);
+                b.push_if(
+                    Type::Int,
+                    hm_zero,
+                    |_| sign32,
+                    |b| {
+                        let lz = b.intr(Type::Int, Intrinsic::Clz, vec![hm]);
+                        let c21 = b.int(21);
+                        let sh = b.intr(Type::Int, Intrinsic::SubWrap, vec![lz, c21]);
+                        let hm_sh = b.bin(Type::Int, BinaryOp::Shl, hm, sh);
+                        let nm = b.bin(Type::Int, BinaryOp::BitAnd, hm_sh, c0x3ff);
+                        let c113 = b.int(113);
+                        let exp = b.intr(Type::Int, Intrinsic::SubWrap, vec![c113, sh]);
+                        let exp_sh = b.bin(Type::Int, BinaryOp::Shl, exp, c23);
+                        let c13 = b.int(13);
+                        let nm_sh = b.bin(Type::Int, BinaryOp::Shl, nm, c13);
+                        let s_e = b.bin(Type::Int, BinaryOp::BitOr, sign32, exp_sh);
+                        b.bin(Type::Int, BinaryOp::BitOr, s_e, nm_sh)
+                    },
+                )
+            },
+            |b| {
+                let he_inf = b.bin(Type::Bool, BinaryOp::Equal, he, c0x1f);
+                b.push_if(
+                    Type::Int,
+                    he_inf,
+                    |b| {
+                        let c_inf = b.int(0x7F80_0000);
+                        let c13 = b.int(13);
+                        let hm_sh = b.bin(Type::Int, BinaryOp::Shl, hm, c13);
+                        let s_i = b.bin(Type::Int, BinaryOp::BitOr, sign32, c_inf);
+                        b.bin(Type::Int, BinaryOp::BitOr, s_i, hm_sh)
+                    },
+                    |b| {
+                        let c112 = b.int(112);
+                        let exp = b.intr(Type::Int, Intrinsic::AddWrap, vec![he, c112]);
+                        let exp_sh = b.bin(Type::Int, BinaryOp::Shl, exp, c23);
+                        let c13 = b.int(13);
+                        let hm_sh = b.bin(Type::Int, BinaryOp::Shl, hm, c13);
+                        let s_e = b.bin(Type::Int, BinaryOp::BitOr, sign32, exp_sh);
+                        b.bin(Type::Int, BinaryOp::BitOr, s_e, hm_sh)
+                    },
+                )
+            },
+        );
+        b.intr(Type::Float, Intrinsic::FromBits, vec![out_bits])
+    };
+    Function {
+        name: QUANTIZE_F16_FN.to_owned(),
+        args: vec![Type::Float],
+        body,
+        results: vec![result],
+        bindings: Vec::new(),
+    }
+}
+
+/// Emits bit-exact narrow-encoding round-trip operations for `value` of type
+/// `ty` matching `schema`'s per-scalar [`Encoding`]s.
+fn emit_quantize_value(
+    out: &mut Vec<Instruction>,
+    next: &mut u32,
+    value: ValueId,
+    ty: Type,
+    schema: &Schema,
+    structs: &[StructDef],
+    quantize_f16_fn: Option<u32>,
+) -> ValueId {
+    let encodings = schema.encodings();
+    let mut cursor = 0usize;
+    let mut b = IrBuilder { out, next };
+    quantize_rec(
+        &mut b,
+        value,
+        ty,
+        encodings,
+        &mut cursor,
+        structs,
+        quantize_f16_fn,
+    )
+}
+
+fn scalar_count(ty: Type, structs: &[StructDef]) -> usize {
+    match ty {
+        Type::Struct(index) => structs[index as usize]
+            .fields
+            .iter()
+            .map(|f| scalar_count(f.ty, structs))
+            .sum(),
+        Type::Vector(_, lanes) => usize::from(lanes),
+        Type::Matrix(_, order) => usize::from(order) * usize::from(order),
+        Type::Scalar(_) => 1,
+    }
+}
+
+fn quantize_scalar(
+    b: &mut IrBuilder<'_>,
+    value: ValueId,
+    ty: Type,
+    encoding: Encoding,
+    quantize_f16_fn: Option<u32>,
+) -> ValueId {
+    if encoding == Encoding::Word || ty == Type::Bool {
+        return value;
+    }
+    match (ty, encoding) {
+        (Type::Float, Encoding::F16) => {
+            let f = quantize_f16_fn.expect("F16 quantize helper registered");
+            b.push(Type::Float, Op::Call(f, vec![value]))
+        }
+        (Type::Float, Encoding::Unorm8 | Encoding::Unorm16 | Encoding::Snorm8) => {
+            let (low, scale, recip) = match encoding {
+                Encoding::Unorm8 => (0.0f32, 255.0f32, 1.0f32 / 255.0f32),
+                Encoding::Unorm16 => (0.0f32, 65535.0f32, 1.0f32 / 65535.0f32),
+                Encoding::Snorm8 => (-1.0f32, 127.0f32, 1.0f32 / 127.0f32),
+                _ => unreachable!(),
+            };
+            let is_not_nan = b.bin(Type::Bool, BinaryOp::Equal, value, value);
+            let clamped = b.push_if(
+                Type::Float,
+                is_not_nan,
+                |b| {
+                    let lo = b.float(low);
+                    let hi = b.float(1.0);
+                    b.intr(Type::Float, Intrinsic::Clamp, vec![value, lo, hi])
+                },
+                |b| b.float(0.0),
+            );
+            let s = b.float(scale);
+            let scaled = b.bin(Type::Float, BinaryOp::Mul, clamped, s);
+            let rounded = b.intr(Type::Float, Intrinsic::Round, vec![scaled]);
+            // Round-trip through Int so `-0.0` canonicalizes to `+0.0`,
+            // matching `Encoding::encode` (`as i32`) + `Encoding::decode` (`as f32`).
+            let as_int = b.intr(Type::Int, Intrinsic::ToInt, vec![rounded]);
+            let as_float = b.intr(Type::Float, Intrinsic::ToFloat, vec![as_int]);
+            let r = b.float(recip);
+            b.bin(Type::Float, BinaryOp::Mul, as_float, r)
+        }
+        (Type::Int, Encoding::U8) => {
+            let mask = b.int(0xFF);
+            b.bin(Type::Int, BinaryOp::BitAnd, value, mask)
+        }
+        (Type::Int, Encoding::U16) => {
+            let mask = b.int(0xFFFF);
+            b.bin(Type::Int, BinaryOp::BitAnd, value, mask)
+        }
+        (Type::Int, Encoding::I8) => {
+            let c24 = b.int(24);
+            let hi = b.bin(Type::Int, BinaryOp::Shl, value, c24);
+            b.bin(Type::Int, BinaryOp::Shr, hi, c24)
+        }
+        (Type::Int, Encoding::I16) => {
+            let c16 = b.int(16);
+            let hi = b.bin(Type::Int, BinaryOp::Shl, value, c16);
+            b.bin(Type::Int, BinaryOp::Shr, hi, c16)
+        }
+        _ => value,
+    }
+}
+
+fn quantize_rec(
+    b: &mut IrBuilder<'_>,
+    value: ValueId,
+    ty: Type,
+    encodings: &[Encoding],
+    cursor: &mut usize,
+    structs: &[StructDef],
+    quantize_f16_fn: Option<u32>,
+) -> ValueId {
+    let n = scalar_count(ty, structs);
+    if encodings[*cursor..*cursor + n]
+        .iter()
+        .all(|&e| e == Encoding::Word)
+    {
+        *cursor += n;
+        return value;
+    }
+    match ty {
+        Type::Scalar(_) => {
+            let enc = encodings[*cursor];
+            *cursor += 1;
+            quantize_scalar(b, value, ty, enc, quantize_f16_fn)
+        }
+        Type::Vector(scalar, lanes) => {
+            let lane_ty = Type::Scalar(scalar);
+            let mut parts = Vec::with_capacity(usize::from(lanes));
+            for k in 0..u32::from(lanes) {
+                let extracted = b.push(lane_ty, Op::Extract(value, k));
+                let enc = encodings[*cursor];
+                *cursor += 1;
+                parts.push(quantize_scalar(b, extracted, lane_ty, enc, quantize_f16_fn));
+            }
+            b.push(ty, Op::Construct(parts))
+        }
+        Type::Matrix(scalar, order) => {
+            let col_ty = Type::Vector(scalar, order);
+            let mut cols = Vec::with_capacity(usize::from(order));
+            for k in 0..u32::from(order) {
+                let extracted = b.push(col_ty, Op::Extract(value, k));
+                cols.push(quantize_rec(
+                    b,
+                    extracted,
+                    col_ty,
+                    encodings,
+                    cursor,
+                    structs,
+                    quantize_f16_fn,
+                ));
+            }
+            b.push(ty, Op::Construct(cols))
+        }
+        Type::Struct(index) => {
+            let fields: Vec<Type> = structs[index as usize]
+                .fields
+                .iter()
+                .map(|f| f.ty)
+                .collect();
+            let mut parts = Vec::with_capacity(fields.len());
+            for (k, field_ty) in fields.into_iter().enumerate() {
+                let extracted = b.push(field_ty, Op::Extract(value, k as u32));
+                parts.push(quantize_rec(
+                    b,
+                    extracted,
+                    field_ty,
+                    encodings,
+                    cursor,
+                    structs,
+                    quantize_f16_fn,
+                ));
+            }
+            b.push(ty, Op::Construct(parts))
+        }
+    }
 }
 
 /// Rewrites a function body with fresh pre-order ids, applying `ops` to
@@ -912,6 +1439,9 @@ struct Renumber<'a> {
     own: Option<ValueId>,
     /// The structs such a path is read against.
     structs: Option<&'a [StructDef]>,
+    /// Original value ids in the consumer's entry that evaluate `Op::Coord`,
+    /// so `at(grid_or_volume, coord())` folds identically to `sample(...)`.
+    coords: BTreeSet<u32>,
 }
 
 impl<'a> Renumber<'a> {
@@ -931,6 +1461,7 @@ impl<'a> Renumber<'a> {
             calls: vec![BTreeMap::new()],
             own: None,
             structs: None,
+            coords: BTreeSet::new(),
         }
     }
 
@@ -1043,19 +1574,26 @@ impl<'a> Renumber<'a> {
     fn block(&mut self, instructions: &[Instruction]) -> Vec<Instruction> {
         let mut out = Vec::with_capacity(instructions.len());
         for instruction in instructions {
+            if matches!(instruction.op, Op::Coord) {
+                self.coords.insert(instruction.id.0);
+            }
             if let Op::Sample(i) = &instruction.op
                 && let Some((replacement, _)) = self.replace.get(i)
             {
                 self.ids.insert(instruction.id.0, replacement.0);
                 continue;
             }
-            // A part of that sample becomes extracts and subscripts of the
-            // producer's value.
-            if let Op::Part {
-                input: i,
-                at: None,
-                path,
-            } = &instruction.op
+            if let Op::At(i, addr) = &instruction.op
+                && self.coords.contains(&addr.0)
+                && let Some((replacement, _)) = self.replace.get(i)
+            {
+                self.ids.insert(instruction.id.0, replacement.0);
+                continue;
+            }
+            // A part of that sample (or self-coord `at`) becomes extracts and
+            // subscripts of the producer's value.
+            if let Op::Part { input: i, at, path } = &instruction.op
+                && at.is_none_or(|addr| self.coords.contains(&addr.0))
                 && let Some(&(replacement, element)) = self.replace.get(i)
                 && self.structs.is_some()
             {
