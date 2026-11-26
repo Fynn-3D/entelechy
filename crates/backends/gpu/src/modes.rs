@@ -21,6 +21,7 @@ impl WgpuBackend {
             .lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let encoding = self.waiter_control.begin_encoding();
         let domain = execution_domain(module, invocation, scope)?;
         // Two buffers take turns, so the output is held twice.
         let schema = &module.manifest.outputs[0].ty.schema;
@@ -40,6 +41,8 @@ impl WgpuBackend {
             mut encoder,
             batched,
             bind_group: _,
+            dynamic_offsets,
+            dynamic_offset_len,
             further_slices: _,
             context_buffer: _,
             context_slice,
@@ -90,11 +93,11 @@ impl WgpuBackend {
             let mut entries = vec![
                 wgpu::BindGroupEntry {
                     binding: wgsl::CONTEXT_BINDING,
-                    resource: context_slice.binding(),
+                    resource: context_slice.dynamic_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: wgsl::PARAMS_BINDING,
-                    resource: params_slice.binding(),
+                    resource: params_slice.dynamic_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: wgsl::OUTPUT_BINDING,
@@ -129,6 +132,7 @@ impl WgpuBackend {
             label: Some("entelechy repeat"),
             timestamp_writes: None,
         };
+        let repeat_offsets = &dynamic_offsets[..dynamic_offset_len];
         if wgsl::output_shares_words_for(module, 0, self.shader_f16) {
             // A time that stores by atomic starts from a cleared buffer, so
             // each time is its own pass after its clear.
@@ -137,7 +141,7 @@ impl WgpuBackend {
                 encoder.clear_buffer(written, 0, None);
                 let mut pass = encoder.begin_compute_pass(&describe);
                 pass.set_pipeline(&pipeline.main.0);
-                pass.set_bind_group(0, group, &[]);
+                pass.set_bind_group(0, group, repeat_offsets);
                 pass.dispatch_workgroups(groups_x, groups_y, groups_z);
             }
         } else {
@@ -146,7 +150,7 @@ impl WgpuBackend {
             let mut pass = encoder.begin_compute_pass(&describe);
             pass.set_pipeline(&pipeline.main.0);
             for time in 0..times {
-                pass.set_bind_group(0, &turns[time % 2].0, &[]);
+                pass.set_bind_group(0, &turns[time % 2].0, repeat_offsets);
                 pass.dispatch_workgroups(groups_x, groups_y, groups_z);
             }
         }
@@ -165,6 +169,7 @@ impl WgpuBackend {
             let ops = elems.saturating_mul(effective_page_unit_ops(module, &invocation.params));
             let mut keep = temp_buffers;
             keep.push(other);
+            drop(encoding);
             self.batch
                 .finish_node(encoder, ops, keep, Vec::new(), page_budget)?;
         } else {
@@ -174,6 +179,7 @@ impl WgpuBackend {
             for buffer in temp_buffers {
                 self.spare.keep(buffer, None);
             }
+            drop(encoding);
             if self._waiter.is_none() {
                 let _ = self.device.poll(wgpu::PollType::Poll);
             }
@@ -208,7 +214,7 @@ impl WgpuBackend {
         element_count: usize,
         output_words: usize,
         timing: Option<&Timing>,
-        failure: Option<&wgpu::Buffer>,
+        failure: Option<&StagedFailure>,
         keep_buffers: &mut Vec<wgpu::Buffer>,
     ) -> wgpu::Buffer {
         let block_size = wgsl::PREFIX_BLOCK as usize;
@@ -302,7 +308,7 @@ impl WgpuBackend {
                         },
                         wgpu::BindGroupEntry {
                             binding: wgsl::FAILURE_BINDING,
-                            resource: failure.as_entire_binding(),
+                            resource: failure.binding(),
                         },
                     ];
                     &full_entries
@@ -400,7 +406,7 @@ impl WgpuBackend {
         element_count: usize,
         output_words: usize,
         timing: Option<&Timing>,
-        failure: Option<&wgpu::Buffer>,
+        failure: Option<&StagedFailure>,
         keep_buffers: &mut Vec<wgpu::Buffer>,
     ) -> wgpu::Buffer {
         let (reduce_pipeline, reduce_layout) = reduce;
@@ -461,7 +467,7 @@ impl WgpuBackend {
             if let Some(failure) = failure {
                 fold_entries.push(wgpu::BindGroupEntry {
                     binding: wgsl::FAILURE_BINDING,
-                    resource: failure.as_entire_binding(),
+                    resource: failure.binding(),
                 });
             }
             let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -635,7 +641,7 @@ impl WgpuBackend {
         encoder: &mut wgpu::CommandEncoder,
         scatter: &Scatter,
         (target, highs): (Option<wgpu::Buffer>, Option<wgpu::Buffer>),
-        failure: Option<&wgpu::Buffer>,
+        failure: Option<&StagedFailure>,
         base_buffer: &wgpu::Buffer,
         context_slice: &crate::batch::UniformSlice,
         pairs: wgpu::Buffer,
@@ -794,7 +800,7 @@ impl WgpuBackend {
                                 .filter(|_| *whole)
                                 .map(|failure| wgpu::BindGroupEntry {
                                     binding: wgsl::FAILURE_BINDING,
-                                    resource: failure.as_entire_binding(),
+                                    resource: failure.binding(),
                                 }),
                         )
                         .collect::<Vec<_>>(),
@@ -884,7 +890,7 @@ impl WgpuBackend {
                             },
                             wgpu::BindGroupEntry {
                                 binding: wgsl::FAILURE_BINDING,
-                                resource: failure.as_entire_binding(),
+                                resource: failure.binding(),
                             },
                         ],
                     );

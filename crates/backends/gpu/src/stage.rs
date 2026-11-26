@@ -81,6 +81,8 @@ pub(crate) struct Staged {
     pub(crate) encoder: wgpu::CommandEncoder,
     pub(crate) batched: bool,
     pub(crate) bind_group: wgpu::BindGroup,
+    pub(crate) dynamic_offsets: [u32; 3],
+    pub(crate) dynamic_offset_len: usize,
     pub(crate) further_slices: Vec<(u32, u32, u32, u32, u32)>,
     pub(crate) context_buffer: wgpu::Buffer,
     pub(crate) context_slice: crate::batch::UniformSlice,
@@ -101,16 +103,17 @@ pub(crate) struct Staged {
     pub(crate) output_words: usize,
     pub(crate) element_count: usize,
     /// The word the passes record their first failure in, when the module can
-    /// fail, and its readback buffer.
-    pub(crate) failure: Option<(wgpu::Buffer, wgpu::Buffer)>,
+    /// fail: either standalone or a slot inside the frame batch's failure slab.
+    pub(crate) failure: Option<StagedFailure>,
     /// A scatter's target, ready before the entry when the entry emits.
     pub(crate) target: Option<wgpu::Buffer>,
     /// The high words beside it, where it sums whole
     /// ([`wgsl::sums_whole`]).
     pub(crate) highs: Option<wgpu::Buffer>,
-    /// Optional 16-byte staging buffer checking whether an unclamped GPU-driven
-    /// indirect scatter domain resolved to a non-positive row count.
-    pub(crate) indirect_bad_check: Option<wgpu::Buffer>,
+    /// Optional staging or batched failure-slab slot checking whether an
+    /// unclamped GPU-driven indirect scatter domain resolved to a non-positive
+    /// row count.
+    pub(crate) indirect_bad_check: Option<crate::indirect::StagedIndirectBad>,
 }
 
 /// The domain the entry maps over: a reduction's and a scatter's first
@@ -668,7 +671,10 @@ impl WgpuBackend {
             spec_slice: crate::batch::UniformSlice,
             ctx_bytes: u64,
         }
-        let (context_slice, params_slice, pad_slices, indirect_prep) = {
+        let needs_failure = pipeline.fails || wgsl::sums_whole(module);
+        let needs_indirect_bad = indirect.is_some_and(|(_, ic)| ic.min_val == 0);
+        let failure_limit = entelechy_rules::Run::new(scope.work()).limit();
+        let (context_slice, params_slice, pad_slices, indirect_prep, failure, indirect_bad_check) = {
             let mut scratch = self
                 .staging
                 .lock()
@@ -737,6 +743,13 @@ impl WgpuBackend {
                 }
                 params.resize(params.len().div_ceil(16) * 16, 0);
             }
+            let mut fail_limits = Vec::with_capacity(2);
+            if needs_failure {
+                fail_limits.push(failure_limit);
+            }
+            if needs_indirect_bad {
+                fail_limits.push(0);
+            }
             if let Some((_, ic)) = indirect {
                 let ctx_bytes = (context.len() as u64).max(16).div_ceil(16) * 16;
                 let ctx_tmpl = self.spare.take(
@@ -767,7 +780,7 @@ impl WgpuBackend {
                 temp_buffers.push(ctx_uniform.clone());
                 temp_buffers.push(indirect_args.clone());
                 let spec_raw = crate::indirect::spec_bytes(ic, (context.len() / 4) as u32);
-                let (par_slice, spec_slice, mirror_slices) = if batched {
+                let (par_slice, spec_slice, mirror_slices, failure, indirect_bad) = if batched {
                     let mut all_slices: Vec<&[u8]> = Vec::with_capacity(2 + mirror_plans.len() * 2);
                     all_slices.push(params.as_slice());
                     all_slices.push(&spec_raw);
@@ -779,11 +792,23 @@ impl WgpuBackend {
                             all_slices.push(mip.params.as_slice());
                         }
                     }
-                    let mut allocated = self.batch.alloc_uniforms(&all_slices)?;
+                    let (mut allocated, mut f_slots, shared) = self
+                        .batch
+                        .alloc_uniforms_and_failure(&all_slices, &fail_limits)?;
                     let mut iter = allocated.drain(..);
                     let par = iter.next().expect("params slice");
                     let spec = iter.next().expect("indirect spec slice");
-                    (par, spec, iter.collect())
+                    let mut f_iter = f_slots.drain(..);
+                    let failure = needs_failure.then(|| StagedFailure::Batched {
+                        binding: f_iter.next().expect("failure slot"),
+                        shared: Arc::clone(shared.as_ref().expect("shared failure readback")),
+                    });
+                    let indirect_bad =
+                        needs_indirect_bad.then(|| crate::indirect::StagedIndirectBad::Batched {
+                            binding: f_iter.next().expect("indirect bad slot"),
+                            shared: Arc::clone(shared.as_ref().expect("shared failure readback")),
+                        });
+                    (par, spec, iter.collect(), failure, indirect_bad)
                 } else {
                     let (_, p) = self.uniform_buffers(context, params);
                     let spec_buf = self.take_uniform(&spec_raw);
@@ -801,10 +826,23 @@ impl WgpuBackend {
                             mirror_slices.push(crate::batch::UniformSlice::entire(buf));
                         }
                     }
+                    let failure = needs_failure.then(|| {
+                        let (word, back) = self.failure_pair();
+                        StagedFailure::Standalone(word, back)
+                    });
+                    let indirect_bad = needs_indirect_bad.then(|| {
+                        crate::indirect::StagedIndirectBad::Standalone(self.spare.take(
+                            &self.device,
+                            16,
+                            wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                        ))
+                    });
                     (
                         crate::batch::UniformSlice::entire(p),
                         crate::batch::UniformSlice::entire(spec_buf),
                         mirror_slices,
+                        failure,
+                        indirect_bad,
                     )
                 };
                 (
@@ -819,6 +857,8 @@ impl WgpuBackend {
                         spec_slice,
                         ctx_bytes: context.len() as u64,
                     }),
+                    failure,
+                    indirect_bad,
                 )
             } else if batched {
                 let mut all_slices: Vec<&[u8]> = Vec::with_capacity(2 + mirror_plans.len() * 2);
@@ -832,12 +872,18 @@ impl WgpuBackend {
                         all_slices.push(mip.params.as_slice());
                     }
                 }
-                let mut allocated = self.batch.alloc_uniforms(&all_slices)?;
+                let (mut allocated, mut f_slots, shared) = self
+                    .batch
+                    .alloc_uniforms_and_failure(&all_slices, &fail_limits)?;
                 let mut iter = allocated.drain(..);
                 let ctx_slice = iter.next().expect("context slice");
                 let par_slice = iter.next().expect("params slice");
                 let mirror_slices: Vec<crate::batch::UniformSlice> = iter.collect();
-                (ctx_slice, par_slice, mirror_slices, None)
+                let failure = needs_failure.then(|| StagedFailure::Batched {
+                    binding: f_slots.remove(0),
+                    shared: shared.expect("shared failure readback"),
+                });
+                (ctx_slice, par_slice, mirror_slices, None, failure, None)
             } else {
                 let (c, p) = self.uniform_buffers(context, params);
                 let mut mirror_slices = Vec::new();
@@ -853,10 +899,16 @@ impl WgpuBackend {
                         mirror_slices.push(crate::batch::UniformSlice::entire(buf));
                     }
                 }
+                let failure = needs_failure.then(|| {
+                    let (word, back) = self.failure_pair();
+                    StagedFailure::Standalone(word, back)
+                });
                 (
                     crate::batch::UniformSlice::entire(c),
                     crate::batch::UniformSlice::entire(p),
                     mirror_slices,
+                    None,
+                    failure,
                     None,
                 )
             }
@@ -948,43 +1000,6 @@ impl WgpuBackend {
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
         );
-        let mut entries = vec![
-            wgpu::BindGroupEntry {
-                binding: wgsl::CONTEXT_BINDING,
-                resource: context_slice.binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: wgsl::PARAMS_BINDING,
-                resource: params_slice.binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: wgsl::OUTPUT_BINDING,
-                resource: output_buffer.as_entire_binding(),
-            },
-        ];
-        for (binding, buffer) in &bound_inputs {
-            entries.push(wgpu::BindGroupEntry {
-                binding: *binding,
-                resource: buffer.as_entire_binding(),
-            });
-        }
-        for (binding, view) in &bound_textures {
-            entries.push(wgpu::BindGroupEntry {
-                binding: *binding,
-                resource: wgpu::BindingResource::TextureView(view),
-            });
-        }
-        self.push_sampler_entries(pipeline.samplers, &mut entries);
-        // The failure word and its readback, from the pile, cleared below
-        // before the pass. A whole sum records its first total that does not
-        // fit there too.
-        let failure = (pipeline.fails || wgsl::sums_whole(module)).then(|| self.failure_pair());
-        if let (Some((failure, _)), true) = (&failure, pipeline.fails) {
-            entries.push(wgpu::BindGroupEntry {
-                binding: wgsl::FAILURE_BINDING,
-                resource: failure.as_entire_binding(),
-            });
-        }
         // A map's further outputs, each a buffer of its own words.
         let further_outputs: Vec<wgpu::Buffer> = module
             .manifest
@@ -1002,12 +1017,6 @@ impl WgpuBackend {
                 )
             })
             .collect();
-        for (k, buffer) in further_outputs.iter().enumerate() {
-            entries.push(wgpu::BindGroupEntry {
-                binding: wgsl::output_binding(module, k + 1),
-                resource: buffer.as_entire_binding(),
-            });
-        }
         // A scatter that emits combines into its target as the entry
         // runs, so the target is made, and bound, here.
         let target = match module.manifest.mode {
@@ -1017,27 +1026,138 @@ impl WgpuBackend {
             }
             _ => None,
         };
-        if let Some((_, _, buffer)) = &target {
-            entries.push(wgpu::BindGroupEntry {
-                binding: wgsl::EMIT_BINDING,
-                resource: buffer.as_entire_binding(),
-            });
-        }
         let highs = target
             .as_ref()
             .filter(|_| wgsl::highs_beside(module))
             .map(|(_, count, _)| self.target_buffer(*count, output_words));
-        if let Some(highs) = &highs {
+        let create_main_bind_group = |label: &str,
+                                      layout: &wgpu::BindGroupLayout,
+                                      override_failure: Option<&wgpu::Buffer>|
+         -> wgpu::BindGroup {
+            let mut entries = Vec::with_capacity(
+                3 + bound_inputs.len() + bound_textures.len() + 4 + further_outputs.len() + 3,
+            );
             entries.push(wgpu::BindGroupEntry {
-                binding: wgsl::EMIT_HIGHS_BINDING,
-                resource: highs.as_entire_binding(),
+                binding: wgsl::CONTEXT_BINDING,
+                resource: context_slice.dynamic_binding(),
             });
+            entries.push(wgpu::BindGroupEntry {
+                binding: wgsl::PARAMS_BINDING,
+                resource: params_slice.dynamic_binding(),
+            });
+            entries.push(wgpu::BindGroupEntry {
+                binding: wgsl::OUTPUT_BINDING,
+                resource: output_buffer.as_entire_binding(),
+            });
+            for (binding, buffer) in &bound_inputs {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: *binding,
+                    resource: buffer.as_entire_binding(),
+                });
+            }
+            for (binding, view) in &bound_textures {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: *binding,
+                    resource: wgpu::BindingResource::TextureView(view),
+                });
+            }
+            self.push_sampler_entries(pipeline.samplers, &mut entries);
+            if pipeline.fails {
+                let resource = if let Some(counted) = override_failure {
+                    wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: counted,
+                        offset: 0,
+                        size: std::num::NonZeroU64::new(wgsl::FAILURE_BYTES),
+                    })
+                } else {
+                    failure
+                        .as_ref()
+                        .expect("failing pipeline holds failure storage")
+                        .dynamic_binding()
+                        .0
+                };
+                entries.push(wgpu::BindGroupEntry {
+                    binding: wgsl::FAILURE_BINDING,
+                    resource,
+                });
+            }
+            for (k, buffer) in further_outputs.iter().enumerate() {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: wgsl::output_binding(module, k + 1),
+                    resource: buffer.as_entire_binding(),
+                });
+            }
+            if let Some((_, _, buffer)) = &target {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: wgsl::EMIT_BINDING,
+                    resource: buffer.as_entire_binding(),
+                });
+            }
+            if let Some(highs) = &highs {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: wgsl::EMIT_HIGHS_BINDING,
+                    resource: highs.as_entire_binding(),
+                });
+            }
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout,
+                entries: &entries,
+            })
+        };
+        let mut key_buffers = Vec::with_capacity(
+            3 + bound_inputs.len() + further_outputs.len() + usize::from(pipeline.fails) + 2,
+        );
+        key_buffers.push(context_slice.buffer.clone());
+        key_buffers.push(params_slice.buffer.clone());
+        key_buffers.push(output_buffer.clone());
+        for (_, buffer) in &bound_inputs {
+            key_buffers.push(buffer.clone());
         }
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("entelechy kernel"),
-            layout: &pipeline.main.1,
-            entries: &entries,
+        if pipeline.fails
+            && let Some(failure) = &failure
+        {
+            key_buffers.push(failure.buffer().clone());
+        }
+        for buffer in &further_outputs {
+            key_buffers.push(buffer.clone());
+        }
+        if let Some((_, _, buffer)) = &target {
+            key_buffers.push(buffer.clone());
+        }
+        if let Some(highs) = &highs {
+            key_buffers.push(highs.clone());
+        }
+        let key = BindGroupKey {
+            pipeline_id: pipeline.id,
+            ctx_size: context_slice.size,
+            params_size: params_slice.size,
+            buffers: key_buffers,
+            views: bound_textures.iter().map(|(_, v)| v.clone()).collect(),
+        };
+        let bind_group = self.bind_groups.get_or_create(key, || {
+            create_main_bind_group("entelechy kernel", &pipeline.main.1, None)
         });
+        let (dynamic_offsets, dynamic_offset_len) = if pipeline.fails {
+            let fail_off = failure
+                .as_ref()
+                .expect("failing pipeline holds failure storage")
+                .dynamic_binding()
+                .1;
+            (
+                [
+                    context_slice.offset as u32,
+                    params_slice.offset as u32,
+                    fail_off,
+                ],
+                3,
+            )
+        } else {
+            (
+                [context_slice.offset as u32, params_slice.offset as u32, 0],
+                2,
+            )
+        };
         let mut encoder = if batched {
             self.batch.take_or_open()
         } else {
@@ -1066,7 +1186,6 @@ impl WgpuBackend {
                 *image.mirror.lock().unwrap_or_else(|p| p.into_inner()) = Some(mirror);
             }
         }
-        let mut indirect_bad_check = None;
         if let (Some((prep, ic)), Some(ip)) = (indirect, &indirect_prep) {
             let count_buf = input_buffers[ic.slot]
                 .as_ref()
@@ -1084,14 +1203,20 @@ impl WgpuBackend {
                 ip.ctx_bytes,
                 timing,
             );
-            if ic.min_val == 0 {
-                let bad_back = self.spare.take(
-                    &self.device,
-                    16,
-                    wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                );
-                encoder.copy_buffer_to_buffer(&ip.indirect_args, 12, &bad_back, 0, 4);
-                indirect_bad_check = Some(bad_back);
+            match &indirect_bad_check {
+                Some(crate::indirect::StagedIndirectBad::Batched { binding, .. }) => {
+                    encoder.copy_buffer_to_buffer(
+                        &ip.indirect_args,
+                        12,
+                        &binding.buffer,
+                        binding.offset,
+                        4,
+                    );
+                }
+                Some(crate::indirect::StagedIndirectBad::Standalone(bad_back)) => {
+                    encoder.copy_buffer_to_buffer(&ip.indirect_args, 12, bad_back, 0, 4);
+                }
+                None => {}
             }
         }
         if let (Some((base, count, buffer)), Some(scatter)) = (&target, &pipeline.scatter) {
@@ -1109,12 +1234,12 @@ impl WgpuBackend {
             );
         }
         // No failure yet, no work taken, and the most the run may take;
-        // written before this submission's passes run.
-        if let Some((failure, _)) = &failure {
-            let limit = entelechy_rules::Run::new(scope.work()).limit();
+        // standalone runs write directly, while batched runs packed their
+        // initializers into the shared frame failure slab uploaded at flush.
+        if let Some(StagedFailure::Standalone(word, _)) = &failure {
             let mut record = [0u8; 32];
-            record[8..12].copy_from_slice(&limit.to_le_bytes());
-            self.queue.write_buffer(failure, 0, &record);
+            record[8..12].copy_from_slice(&failure_limit.to_le_bytes());
+            self.queue.write_buffer(word, 0, &record);
         }
         // A narrow output whose elements share words is stored by atomic
         // or, which needs every word it lands in to start at zero.
@@ -1138,7 +1263,7 @@ impl WgpuBackend {
                 },
             });
             pass.set_pipeline(&pipeline.main.0);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, &bind_group, &dynamic_offsets[..dynamic_offset_len]);
             // A scan walks its rows in one invocation.
             if let Some(ip) = &indirect_prep {
                 pass.dispatch_workgroups_indirect(&ip.indirect_args, 0);
@@ -1175,39 +1300,25 @@ impl WgpuBackend {
                 buffer,
                 count * output_words,
             );
-            let counted = failure.as_ref().map(|_| {
+            let counted = pipeline.fails.then(|| {
                 let counted = self.spare.take(
                     &self.device,
                     wgsl::FAILURE_BYTES,
                     wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 );
-                let limit = entelechy_rules::Run::new(scope.work()).limit();
                 let mut record = [0u8; 32];
-                record[8..12].copy_from_slice(&limit.to_le_bytes());
+                record[8..12].copy_from_slice(&failure_limit.to_le_bytes());
                 self.queue.write_buffer(&counted, 0, &record);
                 counted
             });
-            let entries: Vec<wgpu::BindGroupEntry> = entries
-                .iter()
-                .map(|entry| match (&counted, entry.binding) {
-                    (Some(counted), wgsl::FAILURE_BINDING) => wgpu::BindGroupEntry {
-                        binding: wgsl::FAILURE_BINDING,
-                        resource: counted.as_entire_binding(),
-                    },
-                    _ => entry.clone(),
-                })
-                .collect();
-            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("entelechy kernel lows"),
-                layout: &entry.1,
-                entries: &entries,
-            });
+            let group = create_main_bind_group("entelechy kernel lows", &entry.1, counted.as_ref());
+            let lows_offsets = [context_slice.offset as u32, params_slice.offset as u32, 0];
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("entelechy kernel lows"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&entry.0);
-            pass.set_bind_group(0, &group, &[]);
+            pass.set_bind_group(0, &group, &lows_offsets[..dynamic_offset_len]);
             if let Some(ip) = &indirect_prep {
                 pass.dispatch_workgroups_indirect(&ip.indirect_args, 0);
             } else {
@@ -1221,6 +1332,8 @@ impl WgpuBackend {
             encoder,
             batched,
             bind_group,
+            dynamic_offsets,
+            dynamic_offset_len,
             further_slices,
             context_buffer,
             context_slice,

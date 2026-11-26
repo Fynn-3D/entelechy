@@ -8119,3 +8119,277 @@ fn hw_trace_instances_dynamic_multi_pass_zero_stall() {
         }
     }
 }
+
+#[test]
+fn batched_frame_failure_slab_preserves_overlap_and_reports_exact_node() {
+    let Some(gpu) = gpu() else { return };
+    let checked = compile(
+        "kernel test.slab_checked@1 {
+            requires { field.read; field.write; }
+            input src: Grid<Int>;
+            param fail_x: Int = -1;
+            param fail_y: Int = -1;
+            param kind: Int = 0;
+            param delta: Int = 1;
+            output out: Grid<Int>;
+            compute {
+                let p = coord();
+                let v = sample(src);
+                if int(p.x) == fail_x && int(p.y) == fail_y {
+                    if kind == 0 {
+                        let d = delta - delta;
+                        return v + (10 / d);
+                    }
+                    let big = 2147483647;
+                    return big + (delta - delta + 1);
+                }
+                return v + delta;
+            }
+        }",
+    )
+    .unwrap();
+    let prep = gpu.prepare(&checked).unwrap();
+    let domain = Domain::Grid(24, 16);
+    let count = domain.count();
+    let mut host = Host::new(16 << 20);
+    let seed_words: Vec<u32> = (0..count).map(|i| (i as i32 * 3) as u32).collect();
+    let seed = host
+        .adopt(
+            entelechy_abi::FieldData::from_values(
+                entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]),
+                domain,
+                &seed_words,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    // Simulate 12 frames of 2-frame overlap (Frame N+1 submitted BEFORE Frame N's
+    // checks and `submitted()` settle), rotating repeatedly through the 3-slot
+    // batch slab ring and hitting `BindGroupCache` in steady state.
+    // On frame 5, node 1 fails with DivisionByZero at (7, 5) and node 4 fails with
+    // Overflow at (19, 11) while nodes 0, 2, 3, 5 remain healthy in the SAME batch!
+    struct InFlight {
+        frame: u32,
+        checks: Vec<Box<dyn entelechy_rules::Check>>,
+        submitted: Box<dyn entelechy_rules::Check>,
+        handles: Vec<entelechy_abi::Handle>,
+        final_out: entelechy_abi::Handle,
+    }
+    let mut in_flight: Option<InFlight> = None;
+
+    let settle = |prev: InFlight, gpu: &GpuBackend, host: &mut Host| {
+        let mut results: Vec<Result<(), entelechy_rules::ExecutionError>> =
+            Vec::with_capacity(prev.checks.len());
+        for chk in prev.checks {
+            results.push(chk.wait());
+        }
+        prev.submitted.wait().unwrap();
+        if prev.frame == 5 {
+            assert!(
+                results[0].is_ok(),
+                "node 0 should succeed: {:?}",
+                results[0]
+            );
+            assert_eq!(
+                results[1],
+                Err(entelechy_rules::ExecutionError::Arithmetic {
+                    x: 7,
+                    y: 5,
+                    error: entelechy_rules::ArithmeticError::DivisionByZero,
+                })
+            );
+            assert!(
+                results[2].is_ok(),
+                "node 2 should succeed: {:?}",
+                results[2]
+            );
+            assert!(
+                results[3].is_ok(),
+                "node 3 should succeed: {:?}",
+                results[3]
+            );
+            assert_eq!(
+                results[4],
+                Err(entelechy_rules::ExecutionError::Arithmetic {
+                    x: 19,
+                    y: 11,
+                    error: entelechy_rules::ArithmeticError::Overflow,
+                })
+            );
+            assert!(
+                results[5].is_ok(),
+                "node 5 should succeed: {:?}",
+                results[5]
+            );
+        } else {
+            for (k, r) in results.iter().enumerate() {
+                assert!(
+                    r.is_ok(),
+                    "frame {} node {k} unexpectedly failed: {r:?}",
+                    prev.frame
+                );
+            }
+            let dev = host.resident(prev.final_out).unwrap().unwrap();
+            let got = gpu.download(dev, count * 4).unwrap();
+            let added = (0..6i32).map(|k| prev.frame as i32 + k + 1).sum::<i32>();
+            for (i, &w) in got.iter().enumerate() {
+                let expected = (i as i32) * 3 + added;
+                assert_eq!(
+                    w as i32, expected,
+                    "frame {} element {i} mismatch",
+                    prev.frame
+                );
+            }
+        }
+        for h in prev.handles {
+            let _ = host.release(h);
+        }
+    };
+
+    for frame in 0..12u32 {
+        gpu.evaluation_begun();
+        let mut checks = Vec::new();
+        let mut handles = Vec::new();
+        let mut cur = seed;
+        for node_idx in 0..6i32 {
+            let (fx, fy, kind) = if frame == 5 && node_idx == 1 {
+                (7, 5, 0)
+            } else if frame == 5 && node_idx == 4 {
+                (19, 11, 1)
+            } else {
+                (-1, -1, 0)
+            };
+            let mut scope = Scope::new(&mut host, all());
+            let (out, chk) = gpu
+                .execute_checked(
+                    prep.as_ref(),
+                    &checked,
+                    &Invocation {
+                        inputs: vec![cur],
+                        params: vec![
+                            entelechy_abi::Value::Int(fx),
+                            entelechy_abi::Value::Int(fy),
+                            entelechy_abi::Value::Int(kind),
+                            entelechy_abi::Value::Int(frame as i32 + node_idx + 1),
+                        ],
+                        domain,
+                        context: Context::default(),
+                    },
+                    &mut scope,
+                )
+                .unwrap();
+            if let Some(c) = chk {
+                checks.push(c);
+            }
+            cur = out[0];
+            handles.push(cur);
+        }
+        // Flush and mark THIS frame BEFORE settling the previous frame, matching
+        // `commit_in_flight` 2-frame overlap order.
+        let submitted = gpu.submitted().expect("gpu returns submitted mark");
+        if let Some(prev) = in_flight.replace(InFlight {
+            frame,
+            checks,
+            submitted,
+            handles,
+            final_out: cur,
+        }) {
+            settle(prev, &gpu, &mut host);
+        }
+    }
+    if let Some(last) = in_flight {
+        settle(last, &gpu, &mut host);
+    }
+}
+
+#[test]
+fn batched_indirect_domain_check_shares_failure_slab_and_reports_non_positive() {
+    let Some(gpu) = gpu() else { return };
+    let scatter = compile(
+        "kernel test.batched_indirect_scatter@1 {
+            requires { field.read; field.write; }
+            input base: Rows<Int>;
+            input count_buf: Rows<Int>;
+            output result: Rows<Int>;
+            struct Pair { at: Int; value: Int; }
+            scatter over count_buf into base with sum {
+                let i = element();
+                let n = at(count_buf, 0);
+                emit(Pair { at: i % count(base), value: 1 + (n / n) });
+                return Pair { at: -1, value: 0 };
+            }
+        }",
+    )
+    .unwrap();
+    let prep = gpu.prepare(&scatter).unwrap();
+    assert!(gpu.supports_indirect_scatter(prep.as_ref(), &scatter));
+    let mut host = Host::new(4 << 20);
+    let base_words = vec![10u32; 8];
+    let base = host
+        .adopt(
+            entelechy_abi::FieldData::from_values(
+                entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]),
+                Domain::Rows(8),
+                &base_words,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    for (count_val, expect_err) in [(12i32, false), (0i32, true), (5i32, false)] {
+        gpu.evaluation_begun();
+        let count_h = host
+            .adopt(
+                entelechy_abi::FieldData::from_values(
+                    entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]),
+                    Domain::Rows(1),
+                    &[count_val as u32],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let indirect = entelechy_rules::IndirectCount {
+            slot: 0,
+            index: 0,
+            scale: 1,
+            offset: 0,
+            min_val: 0,
+        };
+        let mut scope = Scope::new(&mut host, all());
+        let (outs, chk) = gpu
+            .execute_indirect_scatter(
+                prep.as_ref(),
+                &scatter,
+                &Invocation {
+                    inputs: vec![count_h, base],
+                    params: vec![],
+                    domain: Domain::Rows(1),
+                    context: Context::default(),
+                },
+                &mut scope,
+                indirect,
+            )
+            .expect("indirect scatter supported")
+            .unwrap();
+        let submitted = gpu.submitted().unwrap();
+        let res = chk.map_or(Ok(()), |c| c.wait());
+        submitted.wait().unwrap();
+        if expect_err {
+            assert!(
+                res.is_err(),
+                "count={count_val} must report non-positive indirect domain error"
+            );
+        } else {
+            res.unwrap();
+            let dev = host.resident(outs[0]).unwrap().unwrap();
+            let got = gpu.download(dev, 8 * 4).unwrap();
+            for (idx, &w) in got.iter().enumerate() {
+                let hits = (0..count_val as usize).filter(|&i| i % 8 == idx).count() as i32;
+                assert_eq!(w as i32, 10 + hits * 2, "count={count_val} idx={idx}");
+            }
+        }
+        let _ = host.release(outs[0]);
+        let _ = host.release(count_h);
+    }
+}

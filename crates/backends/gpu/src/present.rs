@@ -17,6 +17,7 @@ pub(crate) struct WgpuDisplay {
     device: wgpu::Device,
     queue: wgpu::Queue,
     batch: std::sync::Arc<crate::batch::BatchHub>,
+    waiter_control: crate::wait::WaiterControl,
 }
 
 #[derive(Clone)]
@@ -41,6 +42,7 @@ impl WgpuBackend {
             device: device.clone(),
             queue: queue.clone(),
             batch: std::sync::Arc::clone(&self.batch),
+            waiter_control: self.waiter_control.clone(),
         }
     }
 }
@@ -518,6 +520,7 @@ impl WgpuDisplay {
             pass.draw(0..3, 0..1);
         }
         queue.submit(Some(encoder.finish()));
+        self.waiter_control.note_activity();
         // Read by this frame's blit alone.
         crate::wait::discard(uniform);
         crate::wait::discard(overlay_buffer);

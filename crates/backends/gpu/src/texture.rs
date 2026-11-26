@@ -128,15 +128,25 @@ pub(crate) struct TextureMirror {
 
 impl Drop for TextureMirror {
     fn drop(&mut self) {
-        self.pool.keep(self.texture.clone());
+        self.pool
+            .keep(self.texture.clone(), self.view_dim, self.view.clone());
     }
 }
 
-/// Recycled 2D/3D texture mirrors aged across frame evaluations and destroyed
-/// only after the submission referencing them (`bury`).
+struct HeldMirror {
+    texture: wgpu::Texture,
+    view_dim: wgpu::TextureViewDimension,
+    view: wgpu::TextureView,
+    kept: u64,
+}
+
+/// Recycled 2D/3D texture mirrors (along with their cached [`wgpu::TextureView`])
+/// aged across frame evaluations and destroyed only after the submission
+/// referencing them (`bury`). Keeping the view alongside the texture lets
+/// [`crate::pool::BindGroupCache`] hit on dynamic per-frame texture mirrors.
 #[derive(Clone, Default)]
 pub(crate) struct SpareMirrors {
-    held: Arc<Mutex<Vec<(wgpu::Texture, u64)>>>,
+    held: Arc<Mutex<Vec<HeldMirror>>>,
     evaluations: Arc<std::sync::atomic::AtomicU64>,
     gone: Arc<Mutex<Vec<wgpu::Texture>>>,
 }
@@ -180,22 +190,37 @@ impl SpareMirrors {
         height: u32,
         depth: u32,
         dimension: wgpu::TextureDimension,
+        view_dim: wgpu::TextureViewDimension,
         format: wgpu::TextureFormat,
         mip_level_count: u32,
-    ) -> wgpu::Texture {
+    ) -> (wgpu::Texture, wgpu::TextureView) {
         let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(index) = held.iter().rposition(|(tex, _)| {
+        let matches_tex = |tex: &wgpu::Texture| {
             tex.width() == width
                 && tex.height() == height
                 && tex.depth_or_array_layers() == depth
                 && tex.dimension() == dimension
                 && tex.format() == format
                 && tex.mip_level_count() == mip_level_count
-        }) {
-            return held.swap_remove(index).0;
+        };
+        if let Some(index) = held
+            .iter()
+            .rposition(|m| m.view_dim == view_dim && matches_tex(&m.texture))
+        {
+            let m = held.swap_remove(index);
+            return (m.texture, m.view);
+        }
+        if let Some(index) = held.iter().rposition(|m| matches_tex(&m.texture)) {
+            let m = held.swap_remove(index);
+            drop(held);
+            let view = m.texture.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(view_dim),
+                ..Default::default()
+            });
+            return (m.texture, view);
         }
         drop(held);
-        device.create_texture(&wgpu::TextureDescriptor {
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("entelechy texture mirror"),
             size: wgpu::Extent3d {
                 width,
@@ -208,10 +233,20 @@ impl SpareMirrors {
             format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
-        })
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(view_dim),
+            ..Default::default()
+        });
+        (tex, view)
     }
 
-    pub(crate) fn keep(&self, texture: wgpu::Texture) {
+    pub(crate) fn keep(
+        &self,
+        texture: wgpu::Texture,
+        view_dim: wgpu::TextureViewDimension,
+        view: wgpu::TextureView,
+    ) {
         let size = mirror_bytes(&texture);
         if size > SPARE_MIRROR_BYTES {
             self.gone
@@ -222,13 +257,18 @@ impl SpareMirrors {
         }
         let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
         let now = self.evaluations.load(std::sync::atomic::Ordering::Relaxed);
-        held.push((texture, now));
-        let mut total: u64 = held.iter().map(|(t, _)| mirror_bytes(t)).sum();
+        held.push(HeldMirror {
+            texture,
+            view_dim,
+            view,
+            kept: now,
+        });
+        let mut total: u64 = held.iter().map(|m| mirror_bytes(&m.texture)).sum();
         let mut gone = self.gone.lock().unwrap_or_else(|p| p.into_inner());
         while held.len() > SPARE_MIRRORS || total > SPARE_MIRROR_BYTES {
-            let (evicted, _) = held.remove(0);
-            total -= mirror_bytes(&evicted);
-            gone.push(evicted);
+            let evicted = held.remove(0);
+            total -= mirror_bytes(&evicted.texture);
+            gone.push(evicted.texture);
         }
     }
 
@@ -239,10 +279,10 @@ impl SpareMirrors {
             + 1;
         let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
         let mut gone = self.gone.lock().unwrap_or_else(|p| p.into_inner());
-        held.retain(|(tex, kept)| {
-            let fresh = kept + 1 >= now;
+        held.retain(|m| {
+            let fresh = m.kept + 1 >= now;
             if !fresh {
-                gone.push(tex.clone());
+                gone.push(m.texture.clone());
             }
             fresh
         });
@@ -253,7 +293,7 @@ impl SpareMirrors {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .iter()
-            .map(|(t, _)| mirror_bytes(t))
+            .map(|m| mirror_bytes(&m.texture))
             .sum()
     }
 
@@ -1304,19 +1344,16 @@ impl WgpuBackend {
         {
             return Ok((existing.view.clone(), None));
         }
-        let texture = self.mirrors.take(
+        let (texture, view) = self.mirrors.take(
             &self.device,
             width,
             height,
             depth,
             dimension,
+            view_dim,
             format,
             mip_level_count,
         );
-        let view = texture.create_view(&wgpu::TextureViewDescriptor {
-            dimension: Some(view_dim),
-            ..Default::default()
-        });
         let row_bytes = width.checked_mul(texel_bytes).ok_or_else(|| {
             ExecutionError::Device("texture mirror row byte size overflow".to_owned())
         })?;

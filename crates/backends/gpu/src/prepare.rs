@@ -3,9 +3,13 @@
 
 use super::*;
 
+static NEXT_PIPELINE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// What the device runs for a Kernel, its passes `P` built ([`Pass`]),
 /// or validated and waiting for the device's compiler ([`Shader`]).
 pub(crate) struct Pipeline<P = Pass> {
+    /// Monotonic unique identity for keying cached [`wgpu::BindGroup`]s.
+    pub(crate) id: u64,
     /// The map, or a mode's entry.
     pub(crate) main: P,
     /// The fold of a reduce module, run level by level after the map.
@@ -348,6 +352,7 @@ impl<P> Pipeline<P> {
 
     fn made<Q>(self, make: Make<'_, P, Q>) -> Result<Pipeline<Q>, Unbuilt> {
         Ok(Pipeline {
+            id: NEXT_PIPELINE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             main: make(self.main)?,
             reduce: self.reduce.map(&mut *make).transpose()?,
             reduce_fold: self.reduce_fold,
@@ -691,6 +696,20 @@ pub(crate) fn storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLay
     }
 }
 
+/// A storage binding read/written at a dynamic offset, one slot per dispatch.
+pub(crate) fn dynamic_storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: true,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
 pub(crate) fn texture_entry(
     binding: u32,
     view_dimension: wgpu::TextureViewDimension,
@@ -1006,8 +1025,8 @@ impl WgpuBackend {
             self.shader_f16,
         );
         let mut entries = vec![
-            uniform_entry(wgsl::CONTEXT_BINDING),
-            uniform_entry(wgsl::PARAMS_BINDING),
+            dynamic_uniform_entry(wgsl::CONTEXT_BINDING),
+            dynamic_uniform_entry(wgsl::PARAMS_BINDING),
             storage_entry(wgsl::OUTPUT_BINDING, false),
         ];
         for (index, port) in module.manifest.inputs.iter().enumerate() {
@@ -1049,7 +1068,7 @@ impl WgpuBackend {
         }
         let fails = wgsl::can_fail(module);
         if fails {
-            entries.push(storage_entry(wgsl::FAILURE_BINDING, false));
+            entries.push(dynamic_storage_entry(wgsl::FAILURE_BINDING, false));
         }
         let emits = !wgsl::emitted_pairs(module).is_empty();
         if emits {
@@ -1306,6 +1325,7 @@ impl WgpuBackend {
             None
         };
         Ok(Pipeline {
+            id: NEXT_PIPELINE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             main,
             reduce,
             reduce_fold,

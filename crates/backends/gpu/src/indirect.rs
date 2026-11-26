@@ -192,6 +192,34 @@ pub(crate) fn encode_prepare_indirect(
     encoder.copy_buffer_to_buffer(ctx_out, 0, ctx_uniform, 0, ctx_bytes);
 }
 
+/// Staged check storage for an unclamped indirect scatter domain (`min_val == 0`).
+pub(crate) enum StagedIndirectBad {
+    Standalone(wgpu::Buffer),
+    Batched {
+        binding: crate::batch::FailureBinding,
+        shared: std::sync::Arc<crate::batch::BatchFailureReadback>,
+    },
+}
+
+/// Deferred frame-end check backed by one slot inside a batch's shared
+/// [`crate::batch::BatchFailureReadback`], verifying an unclamped indirect
+/// scatter count (`min_val == 0`) produced a positive 1D domain (`>= 1`).
+pub(crate) struct BatchedIndirectDomainCheck {
+    shared: std::sync::Arc<crate::batch::BatchFailureReadback>,
+    offset: u64,
+}
+
+impl Check for BatchedIndirectDomainCheck {
+    fn wait(self: Box<Self>) -> Result<(), ExecutionError> {
+        if self.shared.read_u32(self.offset)? != 0 {
+            return Err(ExecutionError::Device(
+                "indirect domain resolved to a non-positive row count".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Deferred frame-end check verifying an unclamped indirect scatter count (`min_val == 0`)
 /// produced a positive 1D domain (`>= 1`), preserving exact CPU domain-error semantics
 /// without introducing any mid-frame GPU->CPU readback stall.
@@ -201,6 +229,8 @@ pub(crate) struct IndirectDomainCheck {
     device: wgpu::Device,
     queue: wgpu::Queue,
     staging: Option<wgpu::Buffer>,
+    submitted: Option<wgpu::SubmissionIndex>,
+    asked: Option<crate::wait::Asked<Result<(), wgpu::BufferAsyncError>>>,
     batch: std::sync::Arc<crate::batch::BatchHub>,
     spare: crate::pool::Spare,
     heard: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
@@ -210,7 +240,11 @@ pub(crate) struct IndirectDomainCheck {
 impl Drop for IndirectDomainCheck {
     fn drop(&mut self) {
         if let Some(staging) = self.staging.take() {
-            self.spare.keep(staging, None);
+            if self.asked.is_some() {
+                crate::wait::discard(staging);
+            } else {
+                self.spare.keep(staging, None);
+            }
         }
     }
 }
@@ -220,11 +254,34 @@ impl Check for IndirectDomainCheck {
         let Some(staging) = self.staging.take() else {
             return Ok(());
         };
-        let _ = self.batch.flush()?;
+        let submitted = match self.submitted.take() {
+            Some(sub) => Some(sub),
+            None => self.batch.flush_for_wait()?,
+        };
+        let asked = self.asked.take();
         self.spent
-            .time(|| {
-                self.wait
-                    .map_read(&self.device, &self.queue, staging.slice(..16))
+            .time(|| match asked {
+                Some(asked) => match &submitted {
+                    Some(sub) => self
+                        .wait
+                        .answer_after(&self.device, sub, asked)?
+                        .map_err(|e| e.to_string()),
+                    None => self
+                        .wait
+                        .answer(&self.device, asked)?
+                        .map_err(|e| e.to_string()),
+                },
+                None => match &submitted {
+                    Some(sub) => self.wait.map_read_after(
+                        &self.device,
+                        &self.queue,
+                        staging.slice(..16),
+                        sub,
+                    ),
+                    None => self
+                        .wait
+                        .map_read(&self.device, &self.queue, staging.slice(..16)),
+                },
             })
             .map_err(|e| ExecutionError::Device(crate::told(&self.heard, e)))?;
         self.page_queue.clear();
@@ -301,6 +358,7 @@ impl WgpuBackend {
             .lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let encoding = self.waiter_control.begin_encoding();
         let output_domain = scope.size(invocation.inputs[base as usize])?;
         crate::stage::outputs_fit(module, output_domain, scope)?;
         let timing_set = self.timing_set(2);
@@ -320,6 +378,8 @@ impl WgpuBackend {
             mut encoder,
             batched,
             bind_group: _,
+            dynamic_offsets: _,
+            dynamic_offset_len: _,
             further_slices: _,
             context_buffer: _,
             context_slice,
@@ -343,7 +403,7 @@ impl WgpuBackend {
                 &mut encoder,
                 scatter,
                 (target, highs),
-                failure.as_ref().map(|(word, _)| word),
+                failure.as_ref(),
                 input_buffers[base as usize]
                     .as_ref()
                     .expect("scatter base holds a storage buffer"),
@@ -360,7 +420,7 @@ impl WgpuBackend {
         };
         let total_ops = (output_domain.count() as u64).saturating_mul(64);
         let (submitted, scoped) = if batched {
-            if let Some((word, back)) = &failure {
+            if let Some(crate::StagedFailure::Standalone(word, back)) = &failure {
                 encoder.copy_buffer_to_buffer(word, 0, back, 0, wgsl::FAILURE_BYTES);
             }
             let _ = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
@@ -375,12 +435,13 @@ impl WgpuBackend {
                 .wait
                 .parks_with_host()
                 .then(|| self.page_pace_ops_budget());
+            drop(encoding);
             self.batch
                 .finish_node(encoder, total_ops, keep_buffers, Vec::new(), page_budget)?;
             (None, None)
         } else {
             let scopes = Scopes::push(&self.device);
-            if let Some((word, back)) = &failure {
+            if let Some(crate::StagedFailure::Standalone(word, back)) = &failure {
                 encoder.copy_buffer_to_buffer(word, 0, back, 0, wgsl::FAILURE_BYTES);
             }
             let timing = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
@@ -388,6 +449,7 @@ impl WgpuBackend {
             if self.wait.parks_with_host() && !self.measured() {
                 self.page_queue.note(total_ops);
             }
+            drop(encoding);
             self.settle_measured(sub.clone(), timing);
             for (binding, buffer) in &bound_inputs {
                 if wgsl::is_packed_binding(*binding) {
@@ -420,42 +482,73 @@ impl WgpuBackend {
         if let Some(s) = scoped {
             checks.push(s);
         }
-        if let Some(pair) = failure {
-            let asked = if submitted.is_some() {
-                self.wait.ask_map(&self.queue, pair.1.slice(..))
-            } else {
-                None
-            };
-            checks.push(Box::new(crate::FailureCheck {
-                asked,
-                wait: self.wait,
-                spent: self.spent.clone(),
-                device: self.device.clone(),
-                queue: self.queue.clone(),
-                pair: Some(pair),
-                submitted,
-                batch: std::sync::Arc::clone(&self.batch),
-                pile: std::sync::Arc::clone(&self.failures),
-                heard: std::sync::Arc::clone(&self.heard),
-                page_queue: self.page_queue.clone(),
-                width: 1,
-                totals_width: output_domain.width(),
-                budget: module.manifest.budget,
-                run: entelechy_rules::Run::new(scope.work()),
-            }));
+        if let Some(staged_failure) = failure {
+            match staged_failure {
+                crate::StagedFailure::Batched { binding, shared } => {
+                    checks.push(Box::new(crate::BatchedFailureCheck {
+                        shared,
+                        offset: binding.offset,
+                        width: 1,
+                        totals_width: output_domain.width(),
+                        budget: module.manifest.budget,
+                        run: entelechy_rules::Run::new(scope.work()),
+                    }));
+                }
+                crate::StagedFailure::Standalone(word, back) => {
+                    let asked = if submitted.is_some() {
+                        self.wait.ask_map(&self.queue, back.slice(..))
+                    } else {
+                        None
+                    };
+                    checks.push(Box::new(crate::FailureCheck {
+                        asked,
+                        wait: self.wait,
+                        spent: self.spent.clone(),
+                        device: self.device.clone(),
+                        queue: self.queue.clone(),
+                        pair: Some((word, back)),
+                        submitted: submitted.clone(),
+                        batch: std::sync::Arc::clone(&self.batch),
+                        pile: std::sync::Arc::clone(&self.failures),
+                        heard: std::sync::Arc::clone(&self.heard),
+                        page_queue: self.page_queue.clone(),
+                        width: 1,
+                        totals_width: output_domain.width(),
+                        budget: module.manifest.budget,
+                        run: entelechy_rules::Run::new(scope.work()),
+                    }));
+                }
+            }
         }
-        if let Some(bad_staging) = indirect_bad_check {
-            checks.push(Box::new(IndirectDomainCheck {
-                wait: self.wait,
-                spent: self.spent.clone(),
-                device: self.device.clone(),
-                queue: self.queue.clone(),
-                staging: Some(bad_staging),
-                batch: std::sync::Arc::clone(&self.batch),
-                spare: self.spare.clone(),
-                heard: std::sync::Arc::clone(&self.heard),
-                page_queue: self.page_queue.clone(),
-            }));
+        if let Some(bad) = indirect_bad_check {
+            match bad {
+                StagedIndirectBad::Batched { binding, shared } => {
+                    checks.push(Box::new(BatchedIndirectDomainCheck {
+                        shared,
+                        offset: binding.offset,
+                    }));
+                }
+                StagedIndirectBad::Standalone(bad_staging) => {
+                    let asked = if submitted.is_some() {
+                        self.wait.ask_map(&self.queue, bad_staging.slice(..16))
+                    } else {
+                        None
+                    };
+                    checks.push(Box::new(IndirectDomainCheck {
+                        wait: self.wait,
+                        spent: self.spent.clone(),
+                        device: self.device.clone(),
+                        queue: self.queue.clone(),
+                        staging: Some(bad_staging),
+                        submitted,
+                        asked,
+                        batch: std::sync::Arc::clone(&self.batch),
+                        spare: self.spare.clone(),
+                        heard: std::sync::Arc::clone(&self.heard),
+                        page_queue: self.page_queue.clone(),
+                    }));
+                }
+            }
         }
         let check = match checks.len() {
             0 => None,

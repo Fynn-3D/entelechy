@@ -279,9 +279,20 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   Field bypass Host readback completely via `dispatch_workgroups_indirect`
   ([indirect](crates/backends/gpu/src/indirect.rs)).
 - All five GPU modes (`map`, `group`, `reduce`, `prefix`, `scatter`) batch
-  into a single command encoder with pooled `COPY_DST | MAP_READ` staging
-  buffers ([modes](crates/backends/gpu/src/modes.rs),
-  [later](crates/backends/gpu/src/later.rs)), and [`Runtime::sized_off`](crates/core/kernel/src/lib.rs)
+  into a single command encoder with 3-slot ringed uniform, small-upload, and
+  failure-readback slabs ([batch](crates/backends/gpu/src/batch.rs),
+  [failure](crates/backends/gpu/src/failure.rs),
+  [modes](crates/backends/gpu/src/modes.rs),
+  [later](crates/backends/gpu/src/later.rs)): per-node failure records and
+  unclamped indirect-domain checks pack into one storage-aligned slab copied
+  once per batch and mapped immediately at submit time for that exact
+  submission index (preserving 2-frame overlap and letting `Submitted::wait`
+  skip redundant polls), `Pipeline.main` binds context, params, and failure
+  storage with dynamic offsets backed by an evaluation-aged `BindGroupCache`
+  and view-preserving `SpareMirrors` ([pool](crates/backends/gpu/src/pool.rs),
+  [texture](crates/backends/gpu/src/texture.rs)), and the background `Waiter`
+  defers polling while passes encode and backs off when idle
+  ([wait](crates/backends/gpu/src/wait.rs)). [`Runtime::sized_off`](crates/core/kernel/src/lib.rs)
   guards un-prefetched GPU-resident inputs from pulling small runs back to
   CPU JIT mid-batch.
 - Window size and scale are part of a node's cache key.

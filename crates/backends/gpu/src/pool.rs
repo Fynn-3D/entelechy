@@ -380,6 +380,75 @@ impl Drop for DeviceImage {
     }
 }
 
+/// Maximum bind groups kept alive in [`BindGroupCache`].
+const MAX_CACHED_BIND_GROUPS: usize = 512;
+/// Evaluations a cached bind group survives without being used: `7` covers
+/// `lcm(2, 3) = 6` when 2-frame overlap rotates across the 3-slot batch ring,
+/// while evicting unused resize/hot-swap entries promptly.
+const BIND_GROUP_MAX_AGE: u64 = 7;
+
+/// Resource identity key for a `Pipeline.main` bind group whose uniform and
+/// failure offsets are passed dynamically at `set_bind_group`.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(crate) struct BindGroupKey {
+    pub(crate) pipeline_id: u64,
+    pub(crate) ctx_size: u64,
+    pub(crate) params_size: u64,
+    pub(crate) buffers: Vec<wgpu::Buffer>,
+    pub(crate) views: Vec<wgpu::TextureView>,
+}
+
+/// Bounded, evaluation-aged cache of `wgpu::BindGroup` objects keyed by
+/// pipeline and bound resources, eliminating steady-state per-node bind group
+/// descriptor allocation and driver validation.
+#[derive(Default)]
+pub(crate) struct BindGroupCache {
+    entries: Mutex<std::collections::HashMap<BindGroupKey, (wgpu::BindGroup, u64)>>,
+    evaluations: AtomicU64,
+}
+
+impl BindGroupCache {
+    /// Returns a cached bind group for `key`, or creates and inserts one via
+    /// `build` on a miss.
+    pub(crate) fn get_or_create(
+        &self,
+        key: BindGroupKey,
+        build: impl FnOnce() -> wgpu::BindGroup,
+    ) -> wgpu::BindGroup {
+        let now = self.evaluations.load(Ordering::Relaxed);
+        {
+            let mut map = self.entries.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some((group, last_eval)) = map.get_mut(&key) {
+                *last_eval = now;
+                return group.clone();
+            }
+        }
+        let group = build();
+        let mut map = self.entries.lock().unwrap_or_else(|p| p.into_inner());
+        if map.len() >= MAX_CACHED_BIND_GROUPS {
+            map.retain(|_, (_, last_eval)| *last_eval + 2 >= now);
+            if map.len() >= MAX_CACHED_BIND_GROUPS
+                && let Some(oldest_key) = map
+                    .iter()
+                    .min_by_key(|(_, (_, last_eval))| *last_eval)
+                    .map(|(k, _)| k.clone())
+            {
+                map.remove(&oldest_key);
+            }
+        }
+        map.insert(key, (group.clone(), now));
+        group
+    }
+
+    /// Ages cached bind groups at the start of an evaluation, releasing any
+    /// entries untouched for more than [`BIND_GROUP_MAX_AGE`] frames.
+    pub(crate) fn evaluation_begun(&self) {
+        let now = self.evaluations.fetch_add(1, Ordering::Relaxed) + 1;
+        let mut map = self.entries.lock().unwrap_or_else(|p| p.into_inner());
+        map.retain(|_, (_, last_eval)| *last_eval + BIND_GROUP_MAX_AGE >= now);
+    }
+}
+
 impl WgpuBackend {
     /// The pile of released Fields' buffers, for the parts of the backend that
     /// make their own outputs.

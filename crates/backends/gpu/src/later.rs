@@ -60,6 +60,10 @@ pub(crate) struct Submitted {
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
     pub(crate) after: wgpu::SubmissionIndex,
+    /// Shared failure readback from the batch flushed right at `after`, when
+    /// `after` is that exact batch submission. Once resolved by frame-end
+    /// failure checks, `after` is already proven complete on native devices.
+    pub(crate) flushed_failures: Option<Arc<crate::batch::BatchFailureReadback>>,
     /// The end of the work, asked for as it was marked where the device
     /// answers only for everything before ([`Wait::ask_done`]).
     pub(crate) asked: Option<crate::wait::Asked<()>>,
@@ -71,13 +75,21 @@ pub(crate) struct Submitted {
 impl Check for Submitted {
     fn wait(mut self: Box<Self>) -> Result<(), ExecutionError> {
         let asked = self.asked.take();
-        let waited = self
-            .spent
-            .time(|| match asked {
-                Some(asked) => self.wait.answer(&self.device, asked),
-                None => self.wait.done_after(&self.device, &self.queue, &self.after),
-            })
-            .map_err(ExecutionError::Device);
+        let already_settled = !self.wait.parks_with_host()
+            && self
+                .flushed_failures
+                .as_ref()
+                .is_some_and(|readback| readback.is_resolved());
+        let waited = if already_settled {
+            Ok(())
+        } else {
+            self.spent
+                .time(|| match asked {
+                    Some(asked) => self.wait.answer(&self.device, asked),
+                    None => self.wait.done_after(&self.device, &self.queue, &self.after),
+                })
+                .map_err(ExecutionError::Device)
+        };
         if self.wait.parks_with_host() {
             let (queued_ops, elapsed_ns) = self.page_queue.take_timing();
             crate::record_page_rate(&self.ns_per_mop, queued_ops, elapsed_ns);

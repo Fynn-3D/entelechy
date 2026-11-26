@@ -3,6 +3,123 @@
 
 use super::*;
 
+/// Failure storage staged for a node: either a standalone `(word, back)` pair
+/// (unbatched / measured / sliced runs) or a storage-aligned slot inside the
+/// active frame batch's shared failure slab.
+pub(crate) enum StagedFailure {
+    Standalone(wgpu::Buffer, wgpu::Buffer),
+    Batched {
+        binding: crate::batch::FailureBinding,
+        shared: Arc<crate::batch::BatchFailureReadback>,
+    },
+}
+
+impl StagedFailure {
+    /// Fixed-offset storage binding for non-dynamic helper passes (`prefix`,
+    /// `reduce`, `scatter` fold/totals).
+    pub(crate) fn binding(&self) -> wgpu::BindingResource<'_> {
+        match self {
+            Self::Standalone(word, _) => word.as_entire_binding(),
+            Self::Batched { binding, .. } => binding.binding(),
+        }
+    }
+
+    /// Base-zero storage binding and dynamic byte offset for `Pipeline.main`.
+    pub(crate) fn dynamic_binding(&self) -> (wgpu::BindingResource<'_>, u32) {
+        match self {
+            Self::Standalone(word, _) => (
+                wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: word,
+                    offset: 0,
+                    size: std::num::NonZeroU64::new(wgsl::FAILURE_BYTES),
+                }),
+                0,
+            ),
+            Self::Batched { binding, .. } => (binding.dynamic_binding(), binding.offset as u32),
+        }
+    }
+
+    /// The underlying storage buffer for bind-group cache keying.
+    pub(crate) fn buffer(&self) -> &wgpu::Buffer {
+        match self {
+            Self::Standalone(word, _) => word,
+            Self::Batched { binding, .. } => &binding.buffer,
+        }
+    }
+}
+
+/// Evaluates the four failure words `(word, blocks, left, total)` into the
+/// reference CPU error order: element failure, then whole-sum overflow, then
+/// run budget exhaustion.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn judge_failure_words(
+    word: u32,
+    blocks: u32,
+    left: u32,
+    total: u32,
+    width: u32,
+    totals_width: u32,
+    budget: u32,
+    run: entelechy_rules::Run,
+) -> Result<(), ExecutionError> {
+    if word == 0 && total != 0 {
+        let element = u32::MAX - total;
+        let width = totals_width.max(1);
+        return Err(ExecutionError::Arithmetic {
+            x: element % width,
+            y: element / width,
+            error: ArithmeticError::Overflow,
+        });
+    }
+    if word == 0 {
+        return entelechy_rules::Run::judge(run.work(), u64::from(blocks), u64::from(left));
+    }
+    let word = u32::MAX - word;
+    let element = word / 4;
+    let width = width.max(1);
+    let (x, y) = (element % width, element / width);
+    Err(match word % 4 {
+        wgsl::FAILED_BUDGET => ExecutionError::Exhausted { x, y, budget },
+        wgsl::FAILED_DIVISION => ExecutionError::Arithmetic {
+            x,
+            y,
+            error: ArithmeticError::DivisionByZero,
+        },
+        _ => ExecutionError::Arithmetic {
+            x,
+            y,
+            error: ArithmeticError::Overflow,
+        },
+    })
+}
+
+/// Deferred failure check backed by one slot inside a batch's shared
+/// [`crate::batch::BatchFailureReadback`].
+pub(crate) struct BatchedFailureCheck {
+    pub(crate) shared: Arc<crate::batch::BatchFailureReadback>,
+    pub(crate) offset: u64,
+    pub(crate) width: u32,
+    pub(crate) totals_width: u32,
+    pub(crate) budget: u32,
+    pub(crate) run: entelechy_rules::Run,
+}
+
+impl Check for BatchedFailureCheck {
+    fn wait(self: Box<Self>) -> Result<(), ExecutionError> {
+        let (word, blocks, left, total) = self.shared.read_slot(self.offset)?;
+        judge_failure_words(
+            word,
+            blocks,
+            left,
+            total,
+            self.width,
+            self.totals_width,
+            self.budget,
+            self.run,
+        )
+    }
+}
+
 /// A device run's failure word: the first failing element, in row-major
 /// order, and why. Read once the device is waited for.
 pub(crate) struct FailureCheck {
@@ -78,43 +195,16 @@ impl Check for FailureCheck {
         // Named in order: an element's own failure; then the first element
         // whose whole sum does not fit, as the reference totals them; then,
         // past the run's total with no element failing, the run itself.
-        if word == 0 && total != 0 {
-            let element = u32::MAX - total;
-            let width = self.totals_width.max(1);
-            return Err(ExecutionError::Arithmetic {
-                x: element % width,
-                y: element / width,
-                error: ArithmeticError::Overflow,
-            });
-        }
-        if word == 0 {
-            return entelechy_rules::Run::judge(
-                self.run.work(),
-                u64::from(blocks),
-                u64::from(left),
-            );
-        }
-        let word = u32::MAX - word;
-        let element = word / 4;
-        let width = self.width.max(1);
-        let (x, y) = (element % width, element / width);
-        Err(match word % 4 {
-            wgsl::FAILED_BUDGET => ExecutionError::Exhausted {
-                x,
-                y,
-                budget: self.budget,
-            },
-            wgsl::FAILED_DIVISION => ExecutionError::Arithmetic {
-                x,
-                y,
-                error: ArithmeticError::DivisionByZero,
-            },
-            _ => ExecutionError::Arithmetic {
-                x,
-                y,
-                error: ArithmeticError::Overflow,
-            },
-        })
+        judge_failure_words(
+            word,
+            blocks,
+            left,
+            total,
+            self.width,
+            self.totals_width,
+            self.budget,
+            self.run,
+        )
     }
 }
 

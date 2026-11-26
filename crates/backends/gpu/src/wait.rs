@@ -35,6 +35,46 @@ impl Spent {
     }
 }
 
+/// Coordinates the background [`Waiter`] thread with the backend's encoding
+/// and submission lifecycle so polling never fights `wgpu`'s device lock while
+/// passes are being encoded and backs off cleanly when the device is idle.
+#[derive(Clone, Default)]
+pub(crate) struct WaiterControl {
+    encoding: Arc<std::sync::atomic::AtomicU32>,
+    activity: Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// RAII guard marking that a thread is actively encoding or submitting work on
+/// the device, pausing opportunistic background polls until dropped.
+pub(crate) struct EncodingGuard {
+    encoding: Arc<std::sync::atomic::AtomicU32>,
+}
+
+impl Drop for EncodingGuard {
+    fn drop(&mut self) {
+        self.encoding
+            .fetch_sub(1, std::sync::atomic::Ordering::Release);
+    }
+}
+
+impl WaiterControl {
+    /// Marks the start of a command-encoding or submission critical section.
+    pub(crate) fn begin_encoding(&self) -> EncodingGuard {
+        self.encoding
+            .fetch_add(1, std::sync::atomic::Ordering::Acquire);
+        EncodingGuard {
+            encoding: Arc::clone(&self.encoding),
+        }
+    }
+
+    /// Notes that work or an async map was submitted so the waiter stays at
+    /// active polling cadence until the queue goes idle.
+    pub(crate) fn note_activity(&self) {
+        self.activity
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// A thread looking at the device for as long as the backend lives: what
 /// the device finishes is heard as it finishes (a map, a frame's clocked
 /// end), and a device that drops its clock while nothing keeps up with its
@@ -50,35 +90,69 @@ pub(crate) struct Waiter {
     thread: std::thread::JoinHandle<()>,
 }
 
-/// How long the waiter sleeps between looks at the device.
-const LOOK: std::time::Duration = std::time::Duration::from_micros(100);
+/// How long the waiter sleeps between polls while submissions are active.
+#[cfg(not(target_arch = "wasm32"))]
+const ACTIVE_LOOK: std::time::Duration = std::time::Duration::from_micros(250);
+/// How long the waiter sleeps once the queue has been idle past [`IDLE_AFTER`].
+#[cfg(not(target_arch = "wasm32"))]
+const IDLE_LOOK: std::time::Duration = std::time::Duration::from_millis(2);
+/// Idle window after the last recorded submission before backing off.
+#[cfg(not(target_arch = "wasm32"))]
+const IDLE_AFTER: std::time::Duration = std::time::Duration::from_millis(50);
 
 impl Waiter {
     /// Starts looking at `device`'s work; nothing where there is no thread
     /// to look on.
+    #[allow(dead_code)]
     pub(crate) fn start(device: &wgpu::Device) -> Option<Self> {
-        if cfg!(target_arch = "wasm32") {
-            return None;
+        Self::start_with(device, WaiterControl::default())
+    }
+
+    /// Starts looking at `device`'s work coordinated with `control`.
+    pub(crate) fn start_with(device: &wgpu::Device, control: WaiterControl) -> Option<Self> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (device, control);
+            None
         }
-        let on = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let waiting = Arc::clone(&on);
-        let device = device.clone();
-        let thread = std::thread::Builder::new()
-            .name("entelechy device waiter".into())
-            .spawn(move || {
-                while waiting.load(std::sync::atomic::Ordering::Relaxed) {
-                    let _ = device.poll(wgpu::PollType::Poll);
-                    std::thread::sleep(LOOK);
-                }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let on = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let waiting = Arc::clone(&on);
+            let device = device.clone();
+            let thread = std::thread::Builder::new()
+                .name("entelechy device waiter".into())
+                .spawn(move || {
+                    let mut last_activity =
+                        control.activity.load(std::sync::atomic::Ordering::Relaxed);
+                    let mut last_active_at = std::time::Instant::now();
+                    while waiting.load(std::sync::atomic::Ordering::Relaxed) {
+                        let now_activity =
+                            control.activity.load(std::sync::atomic::Ordering::Relaxed);
+                        if now_activity != last_activity {
+                            last_activity = now_activity;
+                            last_active_at = std::time::Instant::now();
+                        }
+                        if control.encoding.load(std::sync::atomic::Ordering::Acquire) == 0 {
+                            let _ = device.poll(wgpu::PollType::Poll);
+                        }
+                        let sleep = if last_active_at.elapsed() < IDLE_AFTER {
+                            ACTIVE_LOOK
+                        } else {
+                            IDLE_LOOK
+                        };
+                        std::thread::sleep(sleep);
+                    }
+                })
+                .ok()?;
+            #[cfg(not(test))]
+            drop(thread);
+            Some(Self {
+                on,
+                #[cfg(test)]
+                thread,
             })
-            .ok()?;
-        #[cfg(not(test))]
-        drop(thread);
-        Some(Self {
-            on,
-            #[cfg(test)]
-            thread,
-        })
+        }
     }
 }
 

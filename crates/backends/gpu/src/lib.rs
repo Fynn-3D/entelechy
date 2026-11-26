@@ -79,6 +79,8 @@ pub(crate) struct WgpuBackend {
     spent: Spent,
     /// Looks at the device for as long as this lives ([`Waiter`]).
     _waiter: Option<Waiter>,
+    /// Coordinates [`Waiter`] polling with active command encoding and submissions.
+    waiter_control: wait::WaiterControl,
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
     device: wgpu::Device,
@@ -194,9 +196,12 @@ pub(crate) struct WgpuBackend {
     /// Optional per-slice element ceiling override for testing sliced map
     /// dispatches on native devices (`0` uses the default policy).
     test_slice_limit: usize,
-    /// Same-frame command encoder & uniform/upload arena shared with
-    /// [`present::WgpuDisplay`] and deferred [`FailureCheck`]s.
+    /// Same-frame command encoder & uniform/upload/failure arena shared with
+    /// [`present::WgpuDisplay`] and deferred failure checks.
     batch: Arc<batch::BatchHub>,
+    /// Bounded, evaluation-aged cache of `Pipeline.main` bind groups keyed by
+    /// pipeline identity and bound resources (offsets are passed dynamically).
+    bind_groups: BindGroupCache,
 }
 
 /// Runs and target slice duration on a page's device before draining, keeping
@@ -422,6 +427,7 @@ impl WgpuBackend {
     /// What was let go before it is destroyed after it ([`Spare::bury`]).
     pub(crate) fn submit(&self, commands: wgpu::CommandBuffer) -> wgpu::SubmissionIndex {
         let submission = self.frames.submit(&self.queue, commands);
+        self.waiter_control.note_activity();
         self.spare.bury();
         self.targets.bury();
         self.mirrors.bury();
@@ -605,7 +611,8 @@ impl WgpuBackend {
         let mirrors = texture::SpareMirrors::default();
         let pending_checks: Arc<Mutex<Vec<Box<dyn Check>>>> = Arc::default();
         let page_queue = PageQueue::default();
-        let batch = Arc::new(batch::BatchHub::new(
+        let waiter_control = wait::WaiterControl::default();
+        let batch = batch::BatchHub::new(
             device.clone(),
             queue.clone(),
             wait,
@@ -615,7 +622,9 @@ impl WgpuBackend {
             mirrors.clone(),
             page_queue.clone(),
             Arc::clone(&pending_checks),
-        ));
+            Arc::clone(&heard),
+            waiter_control.clone(),
+        );
         let make_sampler = |label: &str, xy_mode: wgpu::AddressMode, anisotropy_clamp: u16| {
             device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some(label),
@@ -641,7 +650,8 @@ impl WgpuBackend {
         Ok(Self {
             wait,
             spent,
-            _waiter: Waiter::start(&device),
+            _waiter: Waiter::start_with(&device, waiter_control.clone()),
+            waiter_control,
             instance,
             adapter,
             device,
@@ -691,6 +701,7 @@ impl WgpuBackend {
             ns_per_mop: Arc::new(std::sync::atomic::AtomicU64::new(PAGE_INITIAL_NS_PER_MOP)),
             test_slice_limit: 0,
             batch,
+            bind_groups: BindGroupCache::default(),
         })
     }
 
@@ -925,6 +936,7 @@ impl Backend for WgpuBackend {
         self.spare.evaluation_begun();
         self.mirrors.evaluation_begun();
         self.trace_cache.evaluation_begun();
+        self.bind_groups.evaluation_begun();
     }
 
     fn memory(&self) -> Vec<(&'static str, u64)> {
@@ -966,13 +978,17 @@ impl Backend for WgpuBackend {
     }
 
     fn submitted(&self) -> Option<Box<dyn Check>> {
-        let flushed = match self.batch.flush() {
-            Ok(sub) => sub,
+        let (flushed, flushed_failures) = match self.batch.flush_with_failures() {
+            Ok(pair) => pair,
             Err(error) => return Some(Box::new(ImmediateError(error))),
         };
         // Reuse the just-flushed batch submission; else an empty submission
         // after the rest: done when they are.
-        let after = flushed.unwrap_or_else(|| self.queue.submit(std::iter::empty()));
+        let after = flushed.unwrap_or_else(|| {
+            let sub = self.queue.submit(std::iter::empty());
+            self.waiter_control.note_activity();
+            sub
+        });
         let pending = std::mem::take(
             &mut *self
                 .pending_checks
@@ -985,6 +1001,7 @@ impl Backend for WgpuBackend {
             device: self.device.clone(),
             queue: self.queue.clone(),
             after,
+            flushed_failures,
             asked: self.wait.ask_done(&self.queue),
             page_queue: self.page_queue.clone(),
             ns_per_mop: Arc::clone(&self.ns_per_mop),
@@ -1185,6 +1202,7 @@ impl Backend for WgpuBackend {
             .lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let encoding = self.waiter_control.begin_encoding();
         let mode = module.manifest.mode;
         let domain = execution_domain(module, invocation, scope)?;
         // What comes out: one element for a reduction, the target's extent
@@ -1231,6 +1249,8 @@ impl Backend for WgpuBackend {
             mut encoder,
             batched,
             bind_group,
+            dynamic_offsets,
+            dynamic_offset_len,
             further_slices,
             context_buffer,
             context_slice,
@@ -1264,7 +1284,7 @@ impl Backend for WgpuBackend {
                 element_count,
                 output_words,
                 timing_set.as_ref(),
-                failure.as_ref().map(|(word, _)| word),
+                failure.as_ref(),
                 &mut temp_buffers,
             ),
             (Mode::Prefix { .. }, _, _) => {
@@ -1279,7 +1299,7 @@ impl Backend for WgpuBackend {
                     element_count,
                     output_words,
                     timing_set.as_ref(),
-                    failure.as_ref().map(|(word, _)| word),
+                    failure.as_ref(),
                     &mut temp_buffers,
                 )
             }
@@ -1287,7 +1307,7 @@ impl Backend for WgpuBackend {
                 &mut encoder,
                 scatter,
                 (target, highs),
-                failure.as_ref().map(|(word, _)| word),
+                failure.as_ref(),
                 input_buffers[base as usize]
                     .as_ref()
                     .expect("scatter base holds a storage buffer"),
@@ -1302,7 +1322,7 @@ impl Backend for WgpuBackend {
             _ => output_buffer,
         };
         let (submitted, scoped) = if batched {
-            if let Some((word, back)) = &failure {
+            if let Some(StagedFailure::Standalone(word, back)) = &failure {
                 encoder.copy_buffer_to_buffer(word, 0, back, 0, wgsl::FAILURE_BYTES);
             }
             let _ = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
@@ -1317,6 +1337,7 @@ impl Backend for WgpuBackend {
                 .wait
                 .parks_with_host()
                 .then(|| self.page_pace_ops_budget());
+            drop(encoding);
             self.batch
                 .finish_node(encoder, total_ops, keep_buffers, Vec::new(), page_budget)?;
             (None, None)
@@ -1325,7 +1346,7 @@ impl Backend for WgpuBackend {
             let submission = if further_slices.is_empty() {
                 // The failure word, copied for reading once the device is waited for,
                 // at the caller's commit.
-                if let Some((word, back)) = &failure {
+                if let Some(StagedFailure::Standalone(word, back)) = &failure {
                     encoder.copy_buffer_to_buffer(word, 0, back, 0, wgsl::FAILURE_BYTES);
                 }
                 let timing = self.resolve_timing(&mut encoder, timing_set.as_ref(), 2);
@@ -1333,6 +1354,7 @@ impl Backend for WgpuBackend {
                 if self.wait.parks_with_host() && !self.measured() {
                     self.page_queue.note(total_ops);
                 }
+                drop(encoding);
                 self.settle_measured(sub.clone(), timing);
                 sub
             } else {
@@ -1352,6 +1374,7 @@ impl Backend for WgpuBackend {
                 let one_bytes = 1.0f32.to_le_bytes();
                 let last_idx = further_slices.len() - 1;
                 let mut last_sub = None;
+                let slice_offsets = &dynamic_offsets[..dynamic_offset_len];
                 for (idx, &(gx, gy, gz, slice_fold, slice_at)) in further_slices.iter().enumerate()
                 {
                     let mut slot5 = [0u8; 16];
@@ -1372,11 +1395,11 @@ impl Backend for WgpuBackend {
                                 timestamp_writes: None,
                             });
                         pass.set_pipeline(&pipeline.main.0);
-                        pass.set_bind_group(0, &bind_group, &[]);
+                        pass.set_bind_group(0, &bind_group, slice_offsets);
                         pass.dispatch_workgroups(gx, gy, gz);
                     }
                     if idx == last_idx
-                        && let Some((word, back)) = &failure
+                        && let Some(StagedFailure::Standalone(word, back)) = &failure
                     {
                         slice_encoder.copy_buffer_to_buffer(word, 0, back, 0, wgsl::FAILURE_BYTES);
                     }
@@ -1400,6 +1423,7 @@ impl Backend for WgpuBackend {
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .0
                     .clear();
+                drop(encoding);
                 last_sub.expect("further_slices is non-empty")
             };
             // The packed inputs' copies are read by this run alone and go back to
@@ -1433,29 +1457,39 @@ impl Backend for WgpuBackend {
             memory_outputs,
             Some(self.spare.clone()),
         )?;
-        let check = failure.map(|pair| {
-            let asked = if submitted.is_some() {
-                self.wait.ask_map(&self.queue, pair.1.slice(..))
-            } else {
-                None
-            };
-            Box::new(FailureCheck {
-                asked,
-                wait: self.wait,
-                spent: self.spent.clone(),
-                device: self.device.clone(),
-                queue: self.queue.clone(),
-                pair: Some(pair),
-                submitted,
-                batch: Arc::clone(&self.batch),
-                pile: Arc::clone(&self.failures),
-                heard: Arc::clone(&self.heard),
-                page_queue: self.page_queue.clone(),
+        let check = failure.map(|staged_failure| match staged_failure {
+            StagedFailure::Batched { binding, shared } => Box::new(BatchedFailureCheck {
+                shared,
+                offset: binding.offset,
                 width: domain.width(),
                 totals_width: output_domain.width(),
                 budget: module.manifest.budget,
                 run: entelechy_rules::Run::new(scope.work()),
-            }) as Box<dyn Check>
+            }) as Box<dyn Check>,
+            StagedFailure::Standalone(word, back) => {
+                let asked = if submitted.is_some() {
+                    self.wait.ask_map(&self.queue, back.slice(..))
+                } else {
+                    None
+                };
+                Box::new(FailureCheck {
+                    asked,
+                    wait: self.wait,
+                    spent: self.spent.clone(),
+                    device: self.device.clone(),
+                    queue: self.queue.clone(),
+                    pair: Some((word, back)),
+                    submitted,
+                    batch: Arc::clone(&self.batch),
+                    pile: Arc::clone(&self.failures),
+                    heard: Arc::clone(&self.heard),
+                    page_queue: self.page_queue.clone(),
+                    width: domain.width(),
+                    totals_width: output_domain.width(),
+                    budget: module.manifest.budget,
+                    run: entelechy_rules::Run::new(scope.work()),
+                }) as Box<dyn Check>
+            }
         });
         let check = match (scoped, check) {
             (Some(scoped), Some(check)) => {
@@ -1576,6 +1610,7 @@ impl Backend for WgpuBackend {
             .lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _encoding = self.waiter_control.begin_encoding();
         let src_buffer = self.buffer_of(image).map_err(|error| error.to_string())?;
         self.batch.flush().map_err(|error| error.to_string())?;
         let staging = self.spare.take(
