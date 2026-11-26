@@ -8945,3 +8945,824 @@ fn cutout_alpha_minmax_pyramid_culls_transparent_and_enables_opaque_early_z_with
         );
     }
 }
+
+#[test]
+fn zero_asset_once_gpu_direct_mipmap_and_16x_aniso_match_cpu() {
+    // Verifies 1-pass direct `textureStore` GPU mipmap generation (zero staging
+    // buffer, zero per-level copy) across all core-WebGPU storage-writable
+    // formats and dimensions (`D2` unorm8/f16/rgba32f/r32f, `D2Array` unorm8,
+    // `D3` f16), generated purely on the GPU with zero Host assets and sampled
+    // via `at_linear(..., lod)` and 16x anisotropic `at_repeat(..., ddx, ddy)`.
+    let Some(gpu) = gpu() else { return };
+    let cpu = CpuBackend;
+
+    let cases_2d = [
+        (
+            "unorm8_2d",
+            "Grid<Vec4 as unorm8>",
+            "vec4(fract(u * 4.0), fract(v * 6.0), 0.25 + 0.5 * u, 1.0)",
+            "at_linear(tex, uv * size(tex), lod)",
+            "at_repeat(tex, uv * size(tex), vec2(2.5, 0.0), vec2(0.0, 0.25))",
+            0.03f32,
+        ),
+        (
+            "f16_2d",
+            "Grid<Vec4 as f16>",
+            "vec4(u * 1.5, v * 0.75, 0.5 + 0.5 * sin(u * 12.0), 1.0)",
+            "at_linear(tex, uv * size(tex), lod)",
+            "at_repeat(tex, uv * size(tex), vec2(2.0, 0.0), vec2(0.0, 0.25))",
+            0.03f32,
+        ),
+        (
+            "rgba32f_2d",
+            "Image",
+            "vec4(u * 0.9, v * 0.8, (u + v) * 0.4, 1.0)",
+            "at_linear(tex, uv * size(tex), lod)",
+            "at_repeat(tex, uv * size(tex), vec2(1.5, 0.0), vec2(0.0, 0.5))",
+            0.03f32,
+        ),
+        (
+            "r32f_2d",
+            "Grid<Float>",
+            "0.2 + 0.6 * u + 0.2 * v",
+            "vec4(at_linear(tex, uv * size(tex), lod), 0.0, 0.0, 1.0)",
+            "vec4(at_repeat(tex, uv * size(tex), vec2(1.5, 0.0), vec2(0.0, 0.5)), 0.0, 0.0, 1.0)",
+            0.03f32,
+        ),
+    ];
+
+    for (tag, port_ty, gen_expr, lod_expr, grad_expr, tol) in cases_2d {
+        let gen_mod = compile(&format!(
+            "kernel test.gen_{tag}@1 {{
+                requires {{ field.write; }}
+                output result: {port_ty};
+                compute {{
+                    let q = coord();
+                    let d = domain();
+                    let u = (q.x + 0.5) / d.x;
+                    let v = (q.y + 0.5) / d.y;
+                    return {gen_expr};
+                }}
+            }}"
+        ))
+        .unwrap();
+        let sample_mod = compile(&format!(
+            "kernel test.smp_{tag}@1 {{
+                requires {{ field.read; field.write; }}
+                input tex: {port_ty};
+                param lod: Float = 2.0;
+                output result: Image;
+                compute {{
+                    let q = coord();
+                    let d = domain();
+                    let uv = (q + 0.5) / d;
+                    let a = {lod_expr};
+                    let b = {grad_expr};
+                    return vec4(a.x, a.y, b.x, b.y);
+                }}
+            }}"
+        ))
+        .unwrap();
+        let gen_prep = gpu.prepare(&gen_mod).unwrap();
+        let smp_prep = gpu.prepare(&sample_mod).unwrap();
+        let mut host = Host::new(1 << 24);
+        let tex_dom = Domain::Grid(64, 64);
+        let out_dom = Domain::Grid(16, 16);
+
+        let gpu_tex = Backend::execute(
+            &gpu,
+            gen_prep.as_ref(),
+            &gen_mod,
+            &Invocation {
+                inputs: vec![],
+                params: vec![],
+                domain: tex_dom,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap()[0];
+        let gpu_out = Backend::execute(
+            &gpu,
+            smp_prep.as_ref(),
+            &sample_mod,
+            &Invocation {
+                inputs: vec![gpu_tex],
+                params: vec![Value::Float(2.0)],
+                domain: out_dom,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap()[0];
+        let gpu_px = materialized(&gpu, &mut host, gpu_out);
+
+        let cpu_tex = CpuBackend
+            .execute(
+                &gen_mod,
+                &Invocation {
+                    inputs: vec![],
+                    params: vec![],
+                    domain: tex_dom,
+                    context: Context::default(),
+                },
+                &mut Scope::new(&mut host, all()),
+            )
+            .unwrap()[0];
+        let cpu_out = cpu
+            .execute(
+                &sample_mod,
+                &Invocation {
+                    inputs: vec![cpu_tex],
+                    params: vec![Value::Float(2.0)],
+                    domain: out_dom,
+                    context: Context::default(),
+                },
+                &mut Scope::new(&mut host, all()),
+            )
+            .unwrap()[0];
+        let cpu_px = host.image(cpu_out).unwrap().pixels().to_vec();
+
+        // Trilinear LOD channels (x, y) match CPU closely; anisotropic channels (z, w)
+        // are finite and close to the texture's mean/filtered value.
+        for (i, (g, c)) in gpu_px.iter().zip(&cpu_px).enumerate() {
+            assert!(
+                g.iter().all(|v| v.is_finite()),
+                "{tag} pixel {i} non-finite: {g:?}"
+            );
+            assert!(
+                (g[0] - c[0]).abs() <= tol && (g[1] - c[1]).abs() <= tol,
+                "{tag} pixel {i} mip lod mismatch: gpu={g:?} cpu={c:?}"
+            );
+        }
+    }
+
+    // 2D-Array (`Volume<Vec4 as unorm8>`) + 3D Volume (`Volume<Vec4 as f16>`) direct mipgen.
+    let vol_cases = [
+        (
+            "unorm8_d2array",
+            "Volume<Vec4 as unorm8>",
+            "at_linear(vol, vec3(uv.x * s.x, uv.y * s.y, 1.0), 1.5)",
+        ),
+        (
+            "f16_d3",
+            "Volume<Vec4 as f16>",
+            "at_linear(vol, vec3(uv.x * s.x, uv.y * s.y, 0.5 * s.z), 1.5)",
+        ),
+    ];
+    for (tag, port_ty, smp_expr) in vol_cases {
+        let gen_mod = compile(&format!(
+            "kernel test.gen_{tag}@1 {{
+                requires {{ field.write; }}
+                output result: {port_ty};
+                compute {{
+                    let q = coord();
+                    let d = domain();
+                    return vec4((q.x + 0.5) / d.x, (q.y + 0.5) / d.y, (q.z + 0.5) / d.z, 1.0);
+                }}
+            }}"
+        ))
+        .unwrap();
+        let smp_mod = compile(&format!(
+            "kernel test.smp_{tag}@1 {{
+                requires {{ field.read; field.write; }}
+                input vol: {port_ty};
+                output result: Image;
+                compute {{
+                    let uv = (coord() + 0.5) / domain();
+                    let s = size(vol);
+                    return {smp_expr};
+                }}
+            }}"
+        ))
+        .unwrap();
+        let gen_prep = gpu.prepare(&gen_mod).unwrap();
+        let smp_prep = gpu.prepare(&smp_mod).unwrap();
+        let mut host = Host::new(1 << 24);
+        let vol_dom = Domain::Volume(16, 16, 4);
+        let out_dom = Domain::Grid(8, 8);
+        let g_vol = Backend::execute(
+            &gpu,
+            gen_prep.as_ref(),
+            &gen_mod,
+            &Invocation {
+                inputs: vec![],
+                params: vec![],
+                domain: vol_dom,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap()[0];
+        let g_out = Backend::execute(
+            &gpu,
+            smp_prep.as_ref(),
+            &smp_mod,
+            &Invocation {
+                inputs: vec![g_vol],
+                params: vec![],
+                domain: out_dom,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap()[0];
+        let g_px = materialized(&gpu, &mut host, g_out);
+        let c_vol = CpuBackend
+            .execute(
+                &gen_mod,
+                &Invocation {
+                    inputs: vec![],
+                    params: vec![],
+                    domain: vol_dom,
+                    context: Context::default(),
+                },
+                &mut Scope::new(&mut host, all()),
+            )
+            .unwrap()[0];
+        let c_out = CpuBackend
+            .execute(
+                &smp_mod,
+                &Invocation {
+                    inputs: vec![c_vol],
+                    params: vec![],
+                    domain: out_dom,
+                    context: Context::default(),
+                },
+                &mut Scope::new(&mut host, all()),
+            )
+            .unwrap()[0];
+        let c_px = host.image(c_out).unwrap().pixels().to_vec();
+        for (i, (g, c)) in g_px.iter().zip(&c_px).enumerate() {
+            for ch in 0..4 {
+                assert!(
+                    (g[ch] - c[ch]).abs() <= 0.04,
+                    "{tag} pixel {i} ch {ch} mismatch: gpu={g:?} cpu={c:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn browser_page_parks_with_host_batches_can_fail_and_indirect_scatter() {
+    use std::sync::{Condvar, Mutex, OnceLock};
+
+    static PARK_SIGNAL: OnceLock<(Mutex<bool>, Condvar)> = OnceLock::new();
+    fn signal() -> &'static (Mutex<bool>, Condvar) {
+        PARK_SIGNAL.get_or_init(|| (Mutex::new(false), Condvar::new()))
+    }
+    fn park() {
+        let (lock, cv) = signal();
+        let mut ready = lock.lock().unwrap_or_else(|p| p.into_inner());
+        while !*ready {
+            ready = cv.wait(ready).unwrap_or_else(|p| p.into_inner());
+        }
+        *ready = false;
+    }
+    fn wake() {
+        let (lock, cv) = signal();
+        *lock.lock().unwrap_or_else(|p| p.into_inner()) = true;
+        cv.notify_all();
+    }
+
+    let wait = entelechy_gpu::Wait::parks(park, wake);
+    assert!(wait.parks_with_host());
+    let Ok(gpu) = GpuBackend::with_wait(wait) else {
+        return;
+    };
+
+    // 1. Multi-node batched frame with `can_fail` integer arithmetic under
+    //    `parks_with_host()`: first frame succeeds, second triggers division
+    //    by zero at exact coordinate `(3, 2)` and reports it identically to CPU.
+    let step1 = compile(
+        "kernel test.web_fail1@1 {
+            requires { field.write; }
+            param denom: Int = 2;
+            output result: Grid<Int>;
+            compute {
+                let x = int(coord().x);
+                let y = int(coord().y);
+                let d = if x == 3 && y == 2 { denom } else { 2 };
+                return (x * 7 + y * 13 + 10) / d;
+            }
+        }",
+    )
+    .unwrap();
+    let step2 = compile(
+        "kernel test.web_fail2@1 {
+            requires { field.read; field.write; }
+            input src: Grid<Int>;
+            output result: Grid<Int>;
+            compute {
+                return sample(src) * 3 + 1;
+            }
+        }",
+    )
+    .unwrap();
+    let p1 = gpu.prepare(&step1).unwrap();
+    let p2 = gpu.prepare(&step2).unwrap();
+    let dom = Domain::Grid(16, 8);
+    let mut host = Host::new(1 << 22);
+
+    // Succeeding batched frame under browser parking mode.
+    gpu.evaluation_begun();
+    let (h1s, chk1) = gpu
+        .execute_checked(
+            p1.as_ref(),
+            &step1,
+            &Invocation {
+                inputs: vec![],
+                params: vec![Value::Int(2)],
+                domain: dom,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap();
+    let (h2s, chk2) = gpu
+        .execute_checked(
+            p2.as_ref(),
+            &step2,
+            &Invocation {
+                inputs: vec![h1s[0]],
+                params: vec![],
+                domain: dom,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap();
+    let mark = gpu.submitted().unwrap();
+    if let Some(c) = chk1 {
+        c.wait().unwrap();
+    }
+    if let Some(c) = chk2 {
+        c.wait().unwrap();
+    }
+    mark.wait().unwrap();
+    let gpu_words = {
+        let dev = host.resident(h2s[0]).unwrap().expect("resident");
+        Backend::download(&gpu, dev, dom.count() * 4).unwrap()
+    };
+    let c1 = CpuBackend
+        .execute(
+            &step1,
+            &Invocation {
+                inputs: vec![],
+                params: vec![Value::Int(2)],
+                domain: dom,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap()[0];
+    let c2 = CpuBackend
+        .execute(
+            &step2,
+            &Invocation {
+                inputs: vec![c1],
+                params: vec![],
+                domain: dom,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap()[0];
+    assert_eq!(gpu_words, host.data(c2).unwrap().storage());
+
+    // Failing batched frame under browser parking mode: exact `(3, 2)` division by zero.
+    gpu.evaluation_begun();
+    let (h_bad, chk_bad1) = gpu
+        .execute_checked(
+            p1.as_ref(),
+            &step1,
+            &Invocation {
+                inputs: vec![],
+                params: vec![Value::Int(0)],
+                domain: dom,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap();
+    let (_, chk_bad2) = gpu
+        .execute_checked(
+            p2.as_ref(),
+            &step2,
+            &Invocation {
+                inputs: vec![h_bad[0]],
+                params: vec![],
+                domain: dom,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap();
+    let mark = gpu.submitted().unwrap();
+    let err = chk_bad1
+        .expect("can_fail node must return deferred check")
+        .wait()
+        .expect_err("batched division by zero must report under parks_with_host");
+    if let Some(c) = chk_bad2 {
+        c.wait().unwrap();
+    }
+    mark.wait().unwrap();
+    let cpu_err = CpuBackend
+        .execute(
+            &step1,
+            &Invocation {
+                inputs: vec![],
+                params: vec![Value::Int(0)],
+                domain: dom,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap_err()
+        .to_string();
+    assert_eq!(err.to_string(), cpu_err);
+
+    // 2. Batched `execute_indirect_scatter` under `parks_with_host()` (both valid
+    //    `count = 12` and failing non-positive `count = 0` via shared failure slab).
+    let scat_mod = compile(
+        "kernel test.web_scat@1 {
+            requires { field.read; field.write; }
+            input count_buf: Rows<Int>;
+            input base: Rows<Int>;
+            output result: Rows<Int>;
+            struct Pair { at: Int; value: Int; }
+            scatter over count_buf into base with sum {
+                let i = element();
+                let n = at(count_buf, 0);
+                emit(Pair { at: i % count(base), value: 1 + (n / n) });
+                return Pair { at: -1, value: 0 };
+            }
+        }",
+    )
+    .unwrap();
+    let ps = gpu.prepare(&scat_mod).unwrap();
+    assert!(gpu.supports_indirect_scatter(ps.as_ref(), &scat_mod));
+    let base_h = host
+        .adopt(
+            entelechy_abi::FieldData::from_values(
+                entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]),
+                Domain::Rows(4),
+                &[0u32; 4],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    for (count_val, expect_err) in [(12i32, false), (0i32, true)] {
+        gpu.evaluation_begun();
+        let n_h = host
+            .adopt(
+                entelechy_abi::FieldData::from_values(
+                    entelechy_abi::Schema::new(vec![entelechy_abi::Scalar::Int]),
+                    Domain::Rows(1),
+                    &[count_val as u32],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let (scat_outs, scat_chk) = gpu
+            .execute_indirect_scatter(
+                ps.as_ref(),
+                &scat_mod,
+                &Invocation {
+                    inputs: vec![n_h, base_h],
+                    params: vec![],
+                    domain: Domain::Rows(1),
+                    context: Context::default(),
+                },
+                &mut Scope::new(&mut host, all()),
+                entelechy_rules::IndirectCount {
+                    slot: 0,
+                    index: 0,
+                    scale: 1,
+                    offset: 0,
+                    min_val: 0,
+                },
+            )
+            .unwrap()
+            .unwrap();
+        let mark = gpu.submitted().unwrap();
+        let res = match scat_chk {
+            Some(chk) => chk.wait(),
+            None => Ok(()),
+        };
+        mark.wait().unwrap();
+        if expect_err {
+            assert!(
+                res.is_err(),
+                "non-positive indirect scatter count must report error under parks_with_host"
+            );
+        } else {
+            res.unwrap();
+            let scat_words = {
+                let dev = host.resident(scat_outs[0]).unwrap().expect("resident");
+                Backend::download(&gpu, dev, 16).unwrap()
+            };
+            let cpu_scat = CpuBackend
+                .execute(
+                    &scat_mod,
+                    &Invocation {
+                        inputs: vec![n_h, base_h],
+                        params: vec![],
+                        domain: Domain::Rows(count_val as u32),
+                        context: Context::default(),
+                    },
+                    &mut Scope::new(&mut host, all()),
+                )
+                .unwrap()[0];
+            assert_eq!(scat_words, host.data(cpu_scat).unwrap().storage());
+        }
+    }
+}
+
+#[test]
+fn tiled_stencil_fusion_matches_cpu_and_unfused_across_radii_narrow_f16_and_odd_sizes() {
+    use entelechy_ir::{fuse_outputs, fuse_stencil};
+
+    let Some(gpu) = gpu() else { return };
+
+    // 1. R=1 5-tap CAS-like stencil (`16x16` workgroup shared tile).
+    let prod_r1 = compile(
+        "kernel test.gpu_st_p1@1 {
+            requires { field.write; }
+            output result: Image;
+            compute {
+                let q = coord();
+                let d = domain();
+                let u = (q.x + 0.5) / d.x;
+                let v = (q.y + 0.5) / d.y;
+                return vec4(u * 0.7 + v * 0.2, v * 0.9, float(element() % 11) * 0.08, 1.0);
+            }
+        }",
+    )
+    .unwrap();
+    let cons_r1 = compile(
+        "kernel test.gpu_st_c1@1 {
+            requires { field.read; field.write; }
+            input src: Image;
+            param sharp: Float = 0.44;
+            output result: Image;
+            compute {
+                let q = coord();
+                let e = size(src) - 1.0;
+                let c = at(src, clamp(q, vec2(0.0, 0.0), e));
+                let n = at(src, clamp(q + vec2(0.0, -1.0), vec2(0.0, 0.0), e)).xyz;
+                let s = at(src, clamp(q + vec2(0.0, 1.0), vec2(0.0, 0.0), e)).xyz;
+                let w = at(src, clamp(q + vec2(-1.0, 0.0), vec2(0.0, 0.0), e)).xyz;
+                let ea = at(src, clamp(q + vec2(1.0, 0.0), vec2(0.0, 0.0), e)).xyz;
+                let avg = (n + s + w + ea) * 0.25;
+                let out = clamp(c.xyz + (c.xyz - avg) * sharp, vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+                return vec4(out.x, out.y, out.z, c.w);
+            }
+        }",
+    )
+    .unwrap();
+    let fused_r1 = fuse_stencil(&cons_r1, &[(0, 0)], &prod_r1, "p1", 1).unwrap();
+    let wgsl_r1 = entelechy_gpu::wgsl::emit(&fused_r1);
+    assert!(
+        wgsl_r1.contains("var<workgroup> tile_"),
+        "expected workgroup tile in R=1 WGSL"
+    );
+    assert!(
+        wgsl_r1.contains("workgroupBarrier()"),
+        "expected uniform barrier in R=1 WGSL"
+    );
+    assert!(
+        wgsl_r1.contains("@workgroup_size(16, 16, 1)"),
+        "expected 16x16 workgroup for R=1 Vec4 tile"
+    );
+
+    // 2. R=2 multi-output narrow `Grid<Vec4 as f16>` + chained downstream pointwise.
+    let prod_r2 = compile(
+        "kernel test.gpu_st_p2@1 {
+            requires { field.write; }
+            output gi: Grid<Vec4 as f16>;
+            output meta: Grid<Vec4 as f16>;
+            compute {
+                let q = coord();
+                let d = domain();
+                let u = (q.x + 1.0) / (d.x + 1.0);
+                let v = (q.y + 1.0) / (d.y + 1.0);
+                return {
+                    gi: vec4(u * 1.25, v * 0.85, (u + v) * 0.35, 1.0),
+                    meta: vec4(0.3 + u * 0.5, 0.4 + v * 0.3, float((int(q.x) + int(q.y)) % 2), 1.0)
+                };
+            }
+        }",
+    )
+    .unwrap();
+    let cons_r2 = compile(
+        "kernel test.gpu_st_c2@1 {
+            requires { field.read; field.write; }
+            input gi_in: Grid<Vec4 as f16>;
+            input meta_in: Grid<Vec4 as f16>;
+            param step: Int = 2;
+            output gi: Grid<Vec4 as f16>;
+            output meta: Grid<Vec4 as f16>;
+            compute {
+                let q = coord();
+                let hi = size(gi_in) - vec2(1.0, 1.0);
+                let s_f = float(step);
+                let acc = loop 9 with sum = [vec4(0.0, 0.0, 0.0, 0.0), vec4(0.0, 0.0, 0.0, 0.0)] {
+                    let dx = index() % 3 - 1;
+                    let dy = index() / 3 - 1;
+                    let sq = clamp(q + vec2(float(dx) * s_f, float(dy) * s_f), vec2(0.0, 0.0), hi);
+                    let g = at(gi_in, sq);
+                    let m = at(meta_in, sq);
+                    [sum[0] + g * (1.0 / 9.0), sum[1] + m * (1.0 / 9.0)]
+                };
+                return { gi: acc[0], meta: acc[1] };
+            }
+        }",
+    )
+    .unwrap();
+    let down_pw = compile(
+        "kernel test.gpu_st_pw@1 {
+            requires { field.read; field.write; }
+            input gi: Grid<Vec4 as f16>;
+            input meta: Grid<Vec4 as f16>;
+            output result: Image;
+            compute {
+                let g = at(gi, coord());
+                let m = at(meta, coord());
+                return vec4(g.x + m.x * 0.5, g.y + m.y * 0.5, g.z, m.w);
+            }
+        }",
+    )
+    .unwrap();
+    let fused_r2 = fuse_stencil(&cons_r2, &[(0, 0), (1, 1)], &prod_r2, "p2", 2).unwrap();
+    let chained_r2 = fuse_outputs(&down_pw, &[(0, 0), (1, 1)], &fused_r2, "c2").unwrap();
+    let wgsl_r2 = entelechy_gpu::wgsl::emit(&chained_r2);
+    assert!(wgsl_r2.contains("var<workgroup> tile_"));
+    assert!(wgsl_r2.contains("workgroupBarrier()"));
+    assert!(wgsl_r2.contains("@workgroup_size(16, 16, 1)"));
+
+    // 3. Wide struct (`64 bytes`) with R=2 exceeds 14 KiB at 16x16 (`400 * 64 = 25600`)
+    //    but fits at 8x8 (`144 * 64 = 9216 <= 14336`) -> selects `@workgroup_size(8, 8, 1)`.
+    let wide_p = compile(
+        "kernel test.gpu_st_wide_p@1 {
+            requires { field.write; }
+            struct Wide { a: Vec4; b: Vec4; c: Vec4; d: Vec4; }
+            output result: Grid<Wide>;
+            compute {
+                let q = coord();
+                return Wide {
+                    a: vec4(q.x * 0.05, q.y * 0.05, 0.25, 1.0),
+                    b: vec4(0.1, 0.2, 0.3, 0.4),
+                    c: vec4(0.5, 0.6, 0.7, 0.8),
+                    d: vec4(q.x * 0.01, q.y * 0.01, 0.9, 1.0),
+                };
+            }
+        }",
+    )
+    .unwrap();
+    let wide_c = compile(
+        "kernel test.gpu_st_wide_c@1 {
+            requires { field.read; field.write; }
+            struct Wide { a: Vec4; b: Vec4; c: Vec4; d: Vec4; }
+            input src: Grid<Wide>;
+            output result: Image;
+            compute {
+                let q = coord();
+                let hi = size(src) - 1.0;
+                let l = at(src, clamp(q + vec2(-2.0, 0.0), vec2(0.0, 0.0), hi));
+                let r = at(src, clamp(q + vec2(2.0, 0.0), vec2(0.0, 0.0), hi));
+                let u = at(src, clamp(q + vec2(0.0, -2.0), vec2(0.0, 0.0), hi));
+                let d = at(src, clamp(q + vec2(0.0, 2.0), vec2(0.0, 0.0), hi));
+                return (l.a + r.b + u.c + d.d) * 0.25;
+            }
+        }",
+    )
+    .unwrap();
+    let fused_wide = fuse_stencil(&wide_c, &[(0, 0)], &wide_p, "wp", 2).unwrap();
+    let wgsl_wide = entelechy_gpu::wgsl::emit(&fused_wide);
+    assert!(
+        wgsl_wide.contains("@workgroup_size(8, 8, 1)"),
+        "wide 64-byte R=2 tile must fall back cleanly to 8x8 workgroups"
+    );
+
+    let prep_r1 = gpu.prepare(&fused_r1).unwrap();
+    let prep_r2 = gpu.prepare(&chained_r2).unwrap();
+    let prep_wide = gpu.prepare(&fused_wide).unwrap();
+
+    for (w, h) in [(37u32, 23u32), (17, 19), (1, 1)] {
+        let dom = Domain::Grid(w, h);
+        let mut host = Host::new(1 << 24);
+
+        // R=1 GPU tiled vs CPU reference
+        let g1 = Backend::execute(
+            &gpu,
+            prep_r1.as_ref(),
+            &fused_r1,
+            &Invocation {
+                inputs: vec![],
+                params: vec![Value::Float(0.44)],
+                domain: dom,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap()[0];
+        let g1_px = materialized(&gpu, &mut host, g1);
+        let c1 = CpuBackend
+            .execute(
+                &fused_r1,
+                &Invocation {
+                    inputs: vec![],
+                    params: vec![Value::Float(0.44)],
+                    domain: dom,
+                    context: Context::default(),
+                },
+                &mut Scope::new(&mut host, all()),
+            )
+            .unwrap()[0];
+        let c1_px = host.image(c1).unwrap().pixels().to_vec();
+        for (i, (g, c)) in g1_px.iter().zip(&c1_px).enumerate() {
+            for ch in 0..4 {
+                assert!(
+                    (g[ch] - c[ch]).abs() <= 1e-5,
+                    "R=1 tiled mismatch at {w}x{h} px {i} ch {ch}: gpu={g:?} cpu={c:?}"
+                );
+            }
+        }
+
+        // R=2 chained f16 GPU tiled vs CPU reference
+        let g2 = Backend::execute(
+            &gpu,
+            prep_r2.as_ref(),
+            &chained_r2,
+            &Invocation {
+                inputs: vec![],
+                params: vec![Value::Int(2)],
+                domain: dom,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap()[0];
+        let g2_px = materialized(&gpu, &mut host, g2);
+        let c2 = CpuBackend
+            .execute(
+                &chained_r2,
+                &Invocation {
+                    inputs: vec![],
+                    params: vec![Value::Int(2)],
+                    domain: dom,
+                    context: Context::default(),
+                },
+                &mut Scope::new(&mut host, all()),
+            )
+            .unwrap()[0];
+        let c2_px = host.image(c2).unwrap().pixels().to_vec();
+        for (i, (g, c)) in g2_px.iter().zip(&c2_px).enumerate() {
+            for ch in 0..4 {
+                assert!(
+                    (g[ch] - c[ch]).abs() <= 1e-5,
+                    "R=2 f16 tiled mismatch at {w}x{h} px {i} ch {ch}: gpu={g:?} cpu={c:?}"
+                );
+            }
+        }
+
+        // 8x8 wide struct R=2 GPU tiled vs CPU reference
+        let gw = Backend::execute(
+            &gpu,
+            prep_wide.as_ref(),
+            &fused_wide,
+            &Invocation {
+                inputs: vec![],
+                params: vec![],
+                domain: dom,
+                context: Context::default(),
+            },
+            &mut Scope::new(&mut host, all()),
+        )
+        .unwrap()[0];
+        let gw_px = materialized(&gpu, &mut host, gw);
+        let cw = CpuBackend
+            .execute(
+                &fused_wide,
+                &Invocation {
+                    inputs: vec![],
+                    params: vec![],
+                    domain: dom,
+                    context: Context::default(),
+                },
+                &mut Scope::new(&mut host, all()),
+            )
+            .unwrap()[0];
+        let cw_px = host.image(cw).unwrap().pixels().to_vec();
+        for (i, (g, c)) in gw_px.iter().zip(&cw_px).enumerate() {
+            for ch in 0..4 {
+                assert!(
+                    (g[ch] - c[ch]).abs() <= 1e-5,
+                    "R=2 8x8 wide tiled mismatch at {w}x{h} px {i} ch {ch}: gpu={g:?} cpu={c:?}"
+                );
+            }
+        }
+    }
+}

@@ -841,13 +841,13 @@ impl WgpuBackend {
                 );
             }
         }
-        // A group's exchanges are arrays in its workgroup's memory unless the
-        // group runs register-only inside a single hardware subgroup.
+        // Workgroup shared memory: a `group N`'s exchange arrays (unless
+        // register-only via `subgroupShuffle`), or a tiled stencil map's caches.
         let memory = wgsl::group_memory_for(module, self.subgroups);
         let most = u64::from(self.device.limits().max_compute_workgroup_storage_size);
         if memory > most {
             return Some(format!(
-                "it is a group whose lanes exchange {memory} bytes at once, and the device's workgroups hold {most}"
+                "its workgroup needs {memory} bytes of shared memory, and the device's workgroups hold {most}"
             ));
         }
         if !module.holds(entelechy_abi::Type::Long) {

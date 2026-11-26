@@ -471,11 +471,11 @@ impl WgpuBackend {
             && module.manifest.memories.is_empty()
             && !pipeline.emits;
         let mut slices = if can_slice {
-            wgsl::map_slices(domain, slice_limit)
+            wgsl::map_slices_for(module, domain, slice_limit)
         } else {
             let (gx, gy, gz, fold) = match module.manifest.mode {
                 Mode::Group { size } => wgsl::group_dispatch(domain, size),
-                _ => wgsl::dispatch(domain),
+                _ => wgsl::dispatch_for(module, domain),
             };
             vec![(gx, gy, gz, fold, 0)]
         };
@@ -937,7 +937,7 @@ impl WgpuBackend {
             } else {
                 None
             };
-            let mip_scratch = if !plan.mip_plans.is_empty() {
+            let mip_scratch = if plan.mip_scratch_bytes > 0 {
                 let scratch_buf = self.spare.take(
                     &self.device,
                     plan.mip_scratch_bytes.max(16),
@@ -959,6 +959,7 @@ impl WgpuBackend {
                     padded_row_bytes: mip.padded_row_bytes,
                     groups_x: mip.groups_x,
                     groups_y: mip.groups_y,
+                    groups_z: mip.groups_z,
                     params_slice,
                 });
             }

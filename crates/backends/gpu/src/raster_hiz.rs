@@ -18,16 +18,41 @@ pub(crate) const HIZ_TRI_THRESHOLD: u32 = 16_384;
 
 /// Core WebGPU storage-writable single-channel depth format for the pyramid.
 pub(crate) const HIZ_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+/// Core WebGPU storage-writable single-channel format for the cutout alpha mask.
+pub(crate) const ALPHA_MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 /// Core WebGPU storage-writable 8-bit format for the mask MIN/MAX alpha pyramid
 /// (`R = floor(min_alpha)`, `G = ceil(max_alpha)`).
 pub(crate) const ALPHA_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// Maximum base resolution of the cached cutout mask MIN/MAX alpha pyramid.
 const ALPHA_MAX_BASE: u32 = 128;
 
-/// Cached conservative MIN/MAX alpha pyramid attached to an immutable cutout
-/// mask [`crate::DeviceImage`], built once on first cutout draw and reused
-/// across frames at zero cost.
+/// Source of alpha texels when extracting the `R32Float` cutout mask on first use.
+pub(crate) enum AlphaSourceOwned {
+    Buffer(wgpu::Buffer),
+    Texture(wgpu::TextureView),
+}
+
+/// Borrowed view of [`AlphaSourceOwned`] passed into [`encode_alpha_pyramid`].
+pub(crate) enum AlphaSource<'a> {
+    Buffer(&'a wgpu::Buffer),
+    Texture(&'a wgpu::TextureView),
+}
+
+impl AlphaSourceOwned {
+    pub(crate) fn as_ref(&self) -> AlphaSource<'_> {
+        match self {
+            Self::Buffer(buf) => AlphaSource::Buffer(buf),
+            Self::Texture(view) => AlphaSource::Texture(view),
+        }
+    }
+}
+
+/// Cached 1-channel `R32Float` cutout alpha mask + conservative MIN/MAX alpha
+/// pyramid attached to an immutable cutout mask [`crate::DeviceImage`], built
+/// once on first cutout draw and reused across frames at zero cost.
 pub(crate) struct AlphaMinMaxPyramid {
+    pub(crate) mask_texture: wgpu::Texture,
+    pub(crate) mask_view: wgpu::TextureView,
     pub(crate) texture: wgpu::Texture,
     pub(crate) view: wgpu::TextureView,
     pub(crate) dims: (u32, u32),
@@ -37,9 +62,54 @@ pub(crate) struct AlphaMinMaxPyramid {
 
 impl Drop for AlphaMinMaxPyramid {
     fn drop(&mut self) {
+        self.pool.retire(self.mask_texture.clone());
         self.pool.retire(self.texture.clone());
     }
 }
+
+const ALPHA_EXTRACT_BUF_WGSL: &str = "
+struct AlphaLevel {
+    src_w: u32,
+    src_h: u32,
+    dst_w: u32,
+    dst_h: u32,
+};
+
+@group(0) @binding(0) var<uniform> lvl: AlphaLevel;
+@group(0) @binding(1) var<storage, read> src_buf: array<u32>;
+@group(0) @binding(2) var dst_mask: texture_storage_2d<r32float, write>;
+
+@compute @workgroup_size(8, 8, 1)
+fn alpha_extract_buf(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= lvl.src_w || id.y >= lvl.src_h {
+        return;
+    }
+    let a = bitcast<f32>(src_buf[(id.y * lvl.src_w + id.x) * 4u + 3u]);
+    textureStore(dst_mask, vec2<i32>(i32(id.x), i32(id.y)), vec4<f32>(a, 0.0, 0.0, 0.0));
+}
+";
+
+const ALPHA_EXTRACT_TEX_WGSL: &str = "
+struct AlphaLevel {
+    src_w: u32,
+    src_h: u32,
+    dst_w: u32,
+    dst_h: u32,
+};
+
+@group(0) @binding(0) var<uniform> lvl: AlphaLevel;
+@group(0) @binding(1) var src_tex: texture_2d<f32>;
+@group(0) @binding(2) var dst_mask: texture_storage_2d<r32float, write>;
+
+@compute @workgroup_size(8, 8, 1)
+fn alpha_extract_tex(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= lvl.src_w || id.y >= lvl.src_h {
+        return;
+    }
+    let a = textureLoad(src_tex, vec2<i32>(i32(id.x), i32(id.y)), 0).a;
+    textureStore(dst_mask, vec2<i32>(i32(id.x), i32(id.y)), vec4<f32>(a, 0.0, 0.0, 0.0));
+}
+";
 
 const ALPHA_MIP0_WGSL: &str = "
 struct AlphaLevel {
@@ -72,7 +142,7 @@ fn alpha_mip0(@builtin(global_invocation_id) id: vec3<u32>) {
     var max_a = 0.0;
     for (var sy = lo_y; sy <= hi_y; sy++) {
         for (var sx = lo_x; sx <= hi_x; sx++) {
-            let a = textureLoad(mask_tex, vec2<i32>(i32(sx), i32(sy)), 0).a;
+            let a = textureLoad(mask_tex, vec2<i32>(i32(sx), i32(sy)), 0).r;
             let nan = (bitcast<u32>(a) & 0x7FFFFFFFu) > 0x7F800000u;
             if nan {
                 min_a = 0.0;
@@ -210,6 +280,10 @@ pub(crate) struct HizPipelines {
     mip0: wgpu::ComputePipeline,
     down_layout: wgpu::BindGroupLayout,
     down: wgpu::ComputePipeline,
+    extract_buf_layout: wgpu::BindGroupLayout,
+    extract_buf: wgpu::ComputePipeline,
+    extract_tex_layout: wgpu::BindGroupLayout,
+    extract_tex: wgpu::ComputePipeline,
     alpha_layout: wgpu::BindGroupLayout,
     alpha_mip0: wgpu::ComputePipeline,
     alpha_down: wgpu::ComputePipeline,
@@ -339,6 +413,76 @@ pub(crate) fn build_hiz_pipelines(device: &wgpu::Device) -> HizPipelines {
     });
     let empty_view = empty_tex.create_view(&Default::default());
 
+    let extract_buf_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("entelechy rasterize alpha extract buf"),
+        entries: &[
+            uniform,
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: c,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            storage_tex(2),
+        ],
+    });
+    let extract_buf_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("entelechy rasterize alpha extract buf"),
+        bind_group_layouts: &[Some(&extract_buf_layout)],
+        immediate_size: 0,
+    });
+    let extract_buf_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("entelechy rasterize alpha extract buf"),
+        source: wgpu::ShaderSource::Wgsl(ALPHA_EXTRACT_BUF_WGSL.into()),
+    });
+    let extract_buf = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("entelechy rasterize alpha extract buf"),
+        layout: Some(&extract_buf_pl),
+        module: &extract_buf_mod,
+        entry_point: Some("alpha_extract_buf"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+
+    let extract_tex_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("entelechy rasterize alpha extract tex"),
+        entries: &[
+            uniform,
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: c,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            storage_tex(2),
+        ],
+    });
+    let extract_tex_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("entelechy rasterize alpha extract tex"),
+        bind_group_layouts: &[Some(&extract_tex_layout)],
+        immediate_size: 0,
+    });
+    let extract_tex_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("entelechy rasterize alpha extract tex"),
+        source: wgpu::ShaderSource::Wgsl(ALPHA_EXTRACT_TEX_WGSL.into()),
+    });
+    let extract_tex = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("entelechy rasterize alpha extract tex"),
+        layout: Some(&extract_tex_pl),
+        module: &extract_tex_mod,
+        entry_point: Some("alpha_extract_tex"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+
     let alpha_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("entelechy rasterize alpha minmax"),
         entries: &[
@@ -415,6 +559,10 @@ pub(crate) fn build_hiz_pipelines(device: &wgpu::Device) -> HizPipelines {
         mip0,
         down_layout,
         down,
+        extract_buf_layout,
+        extract_buf,
+        extract_tex_layout,
+        extract_tex,
         alpha_layout,
         alpha_mip0,
         alpha_down,
@@ -456,12 +604,38 @@ pub(crate) fn alpha_level_payloads(mask_w: u32, mask_h: u32) -> Vec<[u8; 16]> {
     out
 }
 
-/// Creates a new cached [`AlphaMinMaxPyramid`] texture + full view for a cutout mask.
+/// Creates a new cached `R32Float` alpha-only mask + [`AlphaMinMaxPyramid`]
+/// texture pair for a cutout mask.
 pub(crate) fn create_alpha_pyramid(
     gpu: &WgpuBackend,
     mask_w: u32,
     mask_h: u32,
 ) -> AlphaMinMaxPyramid {
+    let mask_texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("entelechy cutout alpha mask"),
+        size: wgpu::Extent3d {
+            width: mask_w,
+            height: mask_h,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: ALPHA_MASK_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+        view_formats: &[],
+    });
+    let mask_view = mask_texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("entelechy cutout alpha mask full"),
+        format: Some(ALPHA_MASK_FORMAT),
+        dimension: Some(wgpu::TextureViewDimension::D2),
+        aspect: wgpu::TextureAspect::All,
+        base_mip_level: 0,
+        mip_level_count: Some(1),
+        base_array_layer: 0,
+        array_layer_count: Some(1),
+        usage: None,
+    });
     let (w0, h0, mip_count) = alpha_dims(mask_w, mask_h);
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("entelechy mask alpha minmax"),
@@ -489,6 +663,8 @@ pub(crate) fn create_alpha_pyramid(
         usage: None,
     });
     AlphaMinMaxPyramid {
+        mask_texture,
+        mask_view,
         texture,
         view,
         dims: (mask_w, mask_h),
@@ -497,17 +673,63 @@ pub(crate) fn create_alpha_pyramid(
     }
 }
 
-/// Encodes all mip levels of the conservative cutout mask MIN/MAX alpha pyramid.
+/// Extracts the 1-channel `R32Float` cutout alpha mask and encodes all mip
+/// levels of the conservative MIN/MAX alpha pyramid in a single compute pass.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn encode_alpha_pyramid(
     device: &wgpu::Device,
     pipelines: &HizPipelines,
     encoder: &mut wgpu::CommandEncoder,
-    mask_view: &wgpu::TextureView,
+    source: AlphaSource<'_>,
     pyramid: &AlphaMinMaxPyramid,
     level_uniforms: &[crate::batch::UniformSlice],
 ) {
-    let (w0, h0, mip_count) = alpha_dims(pyramid.dims.0, pyramid.dims.1);
+    let (mw, mh) = pyramid.dims;
+    let (w0, h0, mip_count) = alpha_dims(mw, mh);
+    let (extract_pipe, extract_bg) = match source {
+        AlphaSource::Buffer(buf) => (
+            &pipelines.extract_buf,
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("entelechy rasterize alpha extract buf"),
+                layout: &pipelines.extract_buf_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: level_uniforms[0].binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&pyramid.mask_view),
+                    },
+                ],
+            }),
+        ),
+        AlphaSource::Texture(src_view) => (
+            &pipelines.extract_tex,
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("entelechy rasterize alpha extract tex"),
+                layout: &pipelines.extract_tex_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: level_uniforms[0].binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(src_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&pyramid.mask_view),
+                    },
+                ],
+            }),
+        ),
+    };
     let mip_views: Vec<wgpu::TextureView> = (0..mip_count)
         .map(|lvl| {
             pyramid.texture.create_view(&wgpu::TextureViewDescriptor {
@@ -533,7 +755,7 @@ pub(crate) fn encode_alpha_pyramid(
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: wgpu::BindingResource::TextureView(mask_view),
+                resource: wgpu::BindingResource::TextureView(&pyramid.mask_view),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
@@ -566,6 +788,9 @@ pub(crate) fn encode_alpha_pyramid(
         label: Some("entelechy rasterize alpha minmax"),
         timestamp_writes: None,
     });
+    pass.set_pipeline(extract_pipe);
+    pass.set_bind_group(0, &extract_bg, &[]);
+    pass.dispatch_workgroups(mw.div_ceil(8), mh.div_ceil(8), 1);
     pass.set_pipeline(&pipelines.alpha_mip0);
     pass.set_bind_group(0, &mip0_bg, &[]);
     pass.dispatch_workgroups(w0.div_ceil(8), h0.div_ceil(8), 1);

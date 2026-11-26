@@ -64,6 +64,17 @@ pub(crate) fn format_for(
     Some((format, view_dim, texel_bytes))
 }
 
+fn direct_storage_wgsl(format: wgpu::TextureFormat) -> Option<&'static str> {
+    match format {
+        wgpu::TextureFormat::Rgba8Unorm => Some("rgba8unorm"),
+        wgpu::TextureFormat::Rgba8Snorm => Some("rgba8snorm"),
+        wgpu::TextureFormat::Rgba16Float => Some("rgba16float"),
+        wgpu::TextureFormat::Rgba32Float => Some("rgba32float"),
+        wgpu::TextureFormat::R32Float => Some("r32float"),
+        _ => None,
+    }
+}
+
 fn format_meta(format: wgpu::TextureFormat) -> (u32, u32, u32) {
     // Returns (channels, encoding_code, texel_bytes).
     // encoding_code: 0 = f32, 1 = f16, 2 = unorm8, 3 = snorm8.
@@ -193,7 +204,15 @@ impl SpareMirrors {
         view_dim: wgpu::TextureViewDimension,
         format: wgpu::TextureFormat,
         mip_level_count: u32,
+        storage: bool,
     ) -> (wgpu::Texture, wgpu::TextureView) {
+        let usage = if storage {
+            wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::STORAGE_BINDING
+        } else {
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST
+        };
         let mut held = self.held.lock().unwrap_or_else(|p| p.into_inner());
         let matches_tex = |tex: &wgpu::Texture| {
             tex.width() == width
@@ -202,6 +221,7 @@ impl SpareMirrors {
                 && tex.dimension() == dimension
                 && tex.format() == format
                 && tex.mip_level_count() == mip_level_count
+                && tex.usage() == usage
         };
         if let Some(index) = held
             .iter()
@@ -231,7 +251,7 @@ impl SpareMirrors {
             sample_count: 1,
             dimension,
             format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage,
             view_formats: &[],
         });
         let view = tex.create_view(&wgpu::TextureViewDescriptor {
@@ -375,6 +395,7 @@ pub(crate) struct PendingMipLevel {
     pub(crate) padded_row_bytes: u32,
     pub(crate) groups_x: u32,
     pub(crate) groups_y: u32,
+    pub(crate) groups_z: u32,
     pub(crate) params_slice: UniformSlice,
 }
 
@@ -387,6 +408,7 @@ pub(crate) struct MipLevelPlan {
     pub(crate) padded_row_bytes: u32,
     pub(crate) groups_x: u32,
     pub(crate) groups_y: u32,
+    pub(crate) groups_z: u32,
     pub(crate) params: [u8; 48],
 }
 
@@ -423,6 +445,12 @@ pub(crate) struct MirrorPlan {
 /// GPU compute pipelines that generate 2x2 (2D/2D-array) and 2x2x2 (3D)
 /// box-filtered mipmap chains across all 12 hardware texture mirror formats
 /// (`R`/`Rg`/`Rgba` x `Unorm8`/`Snorm8`/`F16`/`F32`).
+///
+/// Core-WebGPU storage-writable formats (`Rgba8Unorm`, `Rgba8Snorm`,
+/// `Rgba16Float`, `Rgba32Float`, `R32Float`) write every mip level directly
+/// via `textureStore` in one compute pass with zero staging buffer or
+/// buffer-to-texture copies (`direct`); remaining narrow formats use the
+/// staging-buffer path.
 pub(crate) struct MipGenPipelines {
     pipe_2d: wgpu::ComputePipeline,
     layout_2d: wgpu::BindGroupLayout,
@@ -430,6 +458,175 @@ pub(crate) struct MipGenPipelines {
     layout_array: wgpu::BindGroupLayout,
     pipe_3d: wgpu::ComputePipeline,
     layout_3d: wgpu::BindGroupLayout,
+    direct: Mutex<
+        std::collections::HashMap<
+            (wgpu::TextureViewDimension, wgpu::TextureFormat),
+            (wgpu::ComputePipeline, wgpu::BindGroupLayout),
+        >,
+    >,
+}
+
+fn direct_mip_wgsl(view_dim: wgpu::TextureViewDimension, format: wgpu::TextureFormat) -> String {
+    let fmt = direct_storage_wgsl(format).expect("direct storage format checked");
+    let sanitize = match format {
+        wgpu::TextureFormat::Rgba8Unorm => {
+            "let nan = (bitcast<vec4<u32>>(v) & vec4<u32>(0x7FFFFFFFu)) > vec4<u32>(0x7F800000u);\n    let out = select(clamp(v, vec4<f32>(0.0), vec4<f32>(1.0)), vec4<f32>(0.0), nan);"
+        }
+        wgpu::TextureFormat::Rgba8Snorm => {
+            "let nan = (bitcast<vec4<u32>>(v) & vec4<u32>(0x7FFFFFFFu)) > vec4<u32>(0x7F800000u);\n    let out = select(clamp(v, vec4<f32>(-1.0), vec4<f32>(1.0)), vec4<f32>(0.0), nan);"
+        }
+        _ => "let out = v;",
+    };
+    match view_dim {
+        wgpu::TextureViewDimension::D2 => format!(
+            "struct Params {{
+    src_w: u32, src_h: u32, src_d: u32, dst_w: u32,
+    dst_h: u32, dst_d: u32, _p0: u32, _p1: u32,
+    _p2: u32, _p3: u32, _p4: u32, _p5: u32,
+}}
+@group(0) @binding(0) var<uniform> p: Params;
+@group(0) @binding(1) var src: texture_2d<f32>;
+@group(0) @binding(2) var dst: texture_storage_2d<{fmt}, write>;
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    if (gid.x >= p.dst_w || gid.y >= p.dst_h) {{ return; }}
+    let sx0 = i32(min(gid.x * 2u, p.src_w - 1u));
+    let sx1 = i32(min(gid.x * 2u + 1u, p.src_w - 1u));
+    let sy0 = i32(min(gid.y * 2u, p.src_h - 1u));
+    let sy1 = i32(min(gid.y * 2u + 1u, p.src_h - 1u));
+    let v = (textureLoad(src, vec2<i32>(sx0, sy0), 0)
+        + textureLoad(src, vec2<i32>(sx1, sy0), 0)
+        + textureLoad(src, vec2<i32>(sx0, sy1), 0)
+        + textureLoad(src, vec2<i32>(sx1, sy1), 0)) * 0.25;
+    {sanitize}
+    textureStore(dst, vec2<i32>(i32(gid.x), i32(gid.y)), out);
+}}"
+        ),
+        wgpu::TextureViewDimension::D2Array => format!(
+            "struct Params {{
+    src_w: u32, src_h: u32, src_d: u32, dst_w: u32,
+    dst_h: u32, dst_d: u32, _p0: u32, _p1: u32,
+    _p2: u32, _p3: u32, _p4: u32, _p5: u32,
+}}
+@group(0) @binding(0) var<uniform> p: Params;
+@group(0) @binding(1) var src: texture_2d_array<f32>;
+@group(0) @binding(2) var dst: texture_storage_2d_array<{fmt}, write>;
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    if (gid.x >= p.dst_w || gid.y >= p.dst_h || gid.z >= p.dst_d) {{ return; }}
+    let sx0 = i32(min(gid.x * 2u, p.src_w - 1u));
+    let sx1 = i32(min(gid.x * 2u + 1u, p.src_w - 1u));
+    let sy0 = i32(min(gid.y * 2u, p.src_h - 1u));
+    let sy1 = i32(min(gid.y * 2u + 1u, p.src_h - 1u));
+    let lz = i32(gid.z);
+    let v = (textureLoad(src, vec2<i32>(sx0, sy0), lz, 0)
+        + textureLoad(src, vec2<i32>(sx1, sy0), lz, 0)
+        + textureLoad(src, vec2<i32>(sx0, sy1), lz, 0)
+        + textureLoad(src, vec2<i32>(sx1, sy1), lz, 0)) * 0.25;
+    {sanitize}
+    textureStore(dst, vec2<i32>(i32(gid.x), i32(gid.y)), lz, out);
+}}"
+        ),
+        wgpu::TextureViewDimension::D3 => format!(
+            "struct Params {{
+    src_w: u32, src_h: u32, src_d: u32, dst_w: u32,
+    dst_h: u32, dst_d: u32, _p0: u32, _p1: u32,
+    _p2: u32, _p3: u32, _p4: u32, _p5: u32,
+}}
+@group(0) @binding(0) var<uniform> p: Params;
+@group(0) @binding(1) var src: texture_3d<f32>;
+@group(0) @binding(2) var dst: texture_storage_3d<{fmt}, write>;
+@compute @workgroup_size(4, 4, 4)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    if (gid.x >= p.dst_w || gid.y >= p.dst_h || gid.z >= p.dst_d) {{ return; }}
+    let sx0 = i32(min(gid.x * 2u, p.src_w - 1u));
+    let sx1 = i32(min(gid.x * 2u + 1u, p.src_w - 1u));
+    let sy0 = i32(min(gid.y * 2u, p.src_h - 1u));
+    let sy1 = i32(min(gid.y * 2u + 1u, p.src_h - 1u));
+    let sz0 = i32(min(gid.z * 2u, p.src_d - 1u));
+    let sz1 = i32(min(gid.z * 2u + 1u, p.src_d - 1u));
+    let a = textureLoad(src, vec3<i32>(sx0, sy0, sz0), 0)
+        + textureLoad(src, vec3<i32>(sx1, sy0, sz0), 0)
+        + textureLoad(src, vec3<i32>(sx0, sy1, sz0), 0)
+        + textureLoad(src, vec3<i32>(sx1, sy1, sz0), 0);
+    let b = textureLoad(src, vec3<i32>(sx0, sy0, sz1), 0)
+        + textureLoad(src, vec3<i32>(sx1, sy0, sz1), 0)
+        + textureLoad(src, vec3<i32>(sx0, sy1, sz1), 0)
+        + textureLoad(src, vec3<i32>(sx1, sy1, sz1), 0);
+    let v = (a + b) * 0.125;
+    {sanitize}
+    textureStore(dst, vec3<i32>(i32(gid.x), i32(gid.y), i32(gid.z)), out);
+}}"
+        ),
+        _ => unreachable!(),
+    }
+}
+
+impl MipGenPipelines {
+    fn direct_pipeline(
+        &self,
+        device: &wgpu::Device,
+        wait: crate::Wait,
+        view_dim: wgpu::TextureViewDimension,
+        format: wgpu::TextureFormat,
+    ) -> Result<(wgpu::ComputePipeline, wgpu::BindGroupLayout), ExecutionError> {
+        let key = (view_dim, format);
+        if let Some(cached) = self
+            .direct
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&key)
+            .cloned()
+        {
+            return Ok(cached);
+        }
+        let scopes = Scopes::push(device);
+        let entries = [
+            uniform_entry(0),
+            texture_entry(1, view_dim, false),
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format,
+                    view_dimension: view_dim,
+                },
+                count: None,
+            },
+        ];
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("entelechy mip gen direct"),
+            entries: &entries,
+        });
+        let source = direct_mip_wgsl(view_dim, format);
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("entelechy mip gen direct"),
+            source: wgpu::ShaderSource::Wgsl(source.as_str().into()),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("entelechy mip gen direct"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("entelechy mip gen direct"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        scopes
+            .pop(wait, &source)
+            .map_err(|e| ExecutionError::Device(e.said()))?;
+        let pair = (pipeline, layout);
+        self.direct
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(key, pair.clone());
+        Ok(pair)
+    }
 }
 
 const MIP_GEN_WORKGROUP: u32 = 64;
@@ -815,6 +1012,7 @@ impl WgpuBackend {
                 layout_array,
                 pipe_3d,
                 layout_3d,
+                direct: Mutex::new(std::collections::HashMap::new()),
             })
         });
         built
@@ -1344,6 +1542,7 @@ impl WgpuBackend {
         {
             return Ok((existing.view.clone(), None));
         }
+        let direct_mips = mip_level_count > 1 && direct_storage_wgsl(format).is_some();
         let (texture, view) = self.mirrors.take(
             &self.device,
             width,
@@ -1353,6 +1552,7 @@ impl WgpuBackend {
             view_dim,
             format,
             mip_level_count,
+            direct_mips,
         );
         let row_bytes = width.checked_mul(texel_bytes).ok_or_else(|| {
             ExecutionError::Device("texture mirror row byte size overflow".to_owned())
@@ -1392,10 +1592,24 @@ impl WgpuBackend {
                 let dst_row_bytes = dst_w * elem_bytes;
                 let dst_padded_row_bytes = dst_row_bytes.div_ceil(ROW_ALIGN) * ROW_ALIGN;
                 let padded_row_words = dst_padded_row_bytes / 4;
-                let row_words = dst_row_bytes.div_ceil(4);
-                let total_words = row_words.saturating_mul(dst_h).saturating_mul(dst_d);
-                let groups = total_words.div_ceil(MIP_GEN_WORKGROUP).max(1);
-                let (gx, gy) = wgsl::folded(groups);
+                let (gx, gy, gz) = if direct_mips {
+                    match view_dim {
+                        wgpu::TextureViewDimension::D2 => (dst_w.div_ceil(8), dst_h.div_ceil(8), 1),
+                        wgpu::TextureViewDimension::D2Array => {
+                            (dst_w.div_ceil(8), dst_h.div_ceil(8), dst_d)
+                        }
+                        wgpu::TextureViewDimension::D3 => {
+                            (dst_w.div_ceil(4), dst_h.div_ceil(4), dst_d.div_ceil(4))
+                        }
+                        _ => unreachable!(),
+                    }
+                } else {
+                    let row_words = dst_row_bytes.div_ceil(4);
+                    let total_words = row_words.saturating_mul(dst_h).saturating_mul(dst_d);
+                    let groups = total_words.div_ceil(MIP_GEN_WORKGROUP).max(1);
+                    let (gx, gy) = wgsl::folded(groups);
+                    (gx, gy, 1)
+                };
                 let mut params = [0u8; 48];
                 params[0..4].copy_from_slice(&src_w.to_le_bytes());
                 params[4..8].copy_from_slice(&src_h.to_le_bytes());
@@ -1407,12 +1621,14 @@ impl WgpuBackend {
                 params[28..32].copy_from_slice(&channels.to_le_bytes());
                 params[32..36].copy_from_slice(&encoding_code.to_le_bytes());
                 params[36..40].copy_from_slice(&gx.to_le_bytes());
-                let level_bytes =
-                    (u64::from(dst_padded_row_bytes) * u64::from(dst_h) * u64::from(dst_d))
-                        .max(16)
-                        .div_ceil(16)
-                        * 16;
-                mip_scratch_bytes = mip_scratch_bytes.max(level_bytes);
+                if !direct_mips {
+                    let level_bytes =
+                        (u64::from(dst_padded_row_bytes) * u64::from(dst_h) * u64::from(dst_d))
+                            .max(16)
+                            .div_ceil(16)
+                            * 16;
+                    mip_scratch_bytes = mip_scratch_bytes.max(level_bytes);
+                }
                 mip_plans.push(MipLevelPlan {
                     mip,
                     dst_w,
@@ -1421,6 +1637,7 @@ impl WgpuBackend {
                     padded_row_bytes: dst_padded_row_bytes,
                     groups_x: gx,
                     groups_y: gy,
+                    groups_z: gz,
                     params,
                 });
                 src_w = dst_w;
@@ -1540,72 +1757,125 @@ impl WgpuBackend {
                 extent,
             );
         }
-        if let Some(scratch) = &copy.mip_scratch
-            && !copy.mip_levels.is_empty()
-        {
+        if !copy.mip_levels.is_empty() {
             let pipes = self.mip_gen_pipelines()?;
-            let (pipeline, layout) = match copy.view_dim {
-                wgpu::TextureViewDimension::D2 => (&pipes.pipe_2d, &pipes.layout_2d),
-                wgpu::TextureViewDimension::D2Array => (&pipes.pipe_array, &pipes.layout_array),
-                wgpu::TextureViewDimension::D3 => (&pipes.pipe_3d, &pipes.layout_3d),
-                _ => unreachable!(),
-            };
-            for level in &copy.mip_levels {
-                let src_view = copy.dst.create_view(&wgpu::TextureViewDescriptor {
-                    label: Some("entelechy mip gen src"),
-                    dimension: Some(copy.view_dim),
-                    base_mip_level: level.mip - 1,
-                    mip_level_count: Some(1),
-                    ..Default::default()
-                });
-                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("entelechy mip gen"),
-                    layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: level.params_slice.binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&src_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: scratch.as_entire_binding(),
-                        },
-                    ],
-                });
-                {
-                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("entelechy mip gen"),
-                        timestamp_writes: None,
+            if copy.mip_scratch.is_none() {
+                // Direct 1-pass `textureStore` mipmap chain (zero staging buffer,
+                // zero per-level `copy_buffer_to_texture` copies).
+                let (pipeline, layout) = pipes.direct_pipeline(
+                    &self.device,
+                    self.wait,
+                    copy.view_dim,
+                    copy.dst.format(),
+                )?;
+                let mut bind_groups = Vec::with_capacity(copy.mip_levels.len());
+                for level in &copy.mip_levels {
+                    let src_view = copy.dst.create_view(&wgpu::TextureViewDescriptor {
+                        label: Some("entelechy mip gen src"),
+                        dimension: Some(copy.view_dim),
+                        base_mip_level: level.mip - 1,
+                        mip_level_count: Some(1),
+                        ..Default::default()
                     });
-                    pass.set_pipeline(pipeline);
-                    pass.set_bind_group(0, &bind_group, &[]);
-                    pass.dispatch_workgroups(level.groups_x, level.groups_y, 1);
+                    let dst_view = copy.dst.create_view(&wgpu::TextureViewDescriptor {
+                        label: Some("entelechy mip gen dst"),
+                        dimension: Some(copy.view_dim),
+                        base_mip_level: level.mip,
+                        mip_level_count: Some(1),
+                        ..Default::default()
+                    });
+                    bind_groups.push(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("entelechy mip gen direct"),
+                        layout: &layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: level.params_slice.binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(&src_view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: wgpu::BindingResource::TextureView(&dst_view),
+                            },
+                        ],
+                    }));
                 }
-                encoder.copy_buffer_to_texture(
-                    wgpu::TexelCopyBufferInfo {
-                        buffer: scratch,
-                        layout: wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(level.padded_row_bytes),
-                            rows_per_image: (level.dst_d > 1).then_some(level.dst_h),
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("entelechy mip gen direct"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&pipeline);
+                for (level, bg) in copy.mip_levels.iter().zip(&bind_groups) {
+                    pass.set_bind_group(0, bg, &[]);
+                    pass.dispatch_workgroups(level.groups_x, level.groups_y, level.groups_z);
+                }
+            } else if let Some(scratch) = &copy.mip_scratch {
+                let (pipeline, layout) = match copy.view_dim {
+                    wgpu::TextureViewDimension::D2 => (&pipes.pipe_2d, &pipes.layout_2d),
+                    wgpu::TextureViewDimension::D2Array => (&pipes.pipe_array, &pipes.layout_array),
+                    wgpu::TextureViewDimension::D3 => (&pipes.pipe_3d, &pipes.layout_3d),
+                    _ => unreachable!(),
+                };
+                for level in &copy.mip_levels {
+                    let src_view = copy.dst.create_view(&wgpu::TextureViewDescriptor {
+                        label: Some("entelechy mip gen src"),
+                        dimension: Some(copy.view_dim),
+                        base_mip_level: level.mip - 1,
+                        mip_level_count: Some(1),
+                        ..Default::default()
+                    });
+                    let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("entelechy mip gen"),
+                        layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: level.params_slice.binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(&src_view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: scratch.as_entire_binding(),
+                            },
+                        ],
+                    });
+                    {
+                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("entelechy mip gen"),
+                            timestamp_writes: None,
+                        });
+                        pass.set_pipeline(pipeline);
+                        pass.set_bind_group(0, &bind_group, &[]);
+                        pass.dispatch_workgroups(level.groups_x, level.groups_y, 1);
+                    }
+                    encoder.copy_buffer_to_texture(
+                        wgpu::TexelCopyBufferInfo {
+                            buffer: scratch,
+                            layout: wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(level.padded_row_bytes),
+                                rows_per_image: (level.dst_d > 1).then_some(level.dst_h),
+                            },
                         },
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &copy.dst,
-                        mip_level: level.mip,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: level.dst_w,
-                        height: level.dst_h,
-                        depth_or_array_layers: level.dst_d,
-                    },
-                );
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &copy.dst,
+                            mip_level: level.mip,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d {
+                            width: level.dst_w,
+                            height: level.dst_h,
+                            depth_or_array_layers: level.dst_d,
+                        },
+                    );
+                }
             }
         }
         Ok(())

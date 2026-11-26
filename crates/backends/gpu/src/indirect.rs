@@ -308,7 +308,6 @@ impl WgpuBackend {
         matches!(module.manifest.mode, entelechy_ir::Mode::Scatter { .. })
             && !wgsl::emitted_pairs(module).is_empty()
             && wgsl::scatter_plan(module) != wgsl::ScatterPlan::Sorted
-            && !(self.wait.parks_with_host() && wgsl::can_fail(module))
     }
 
     pub(crate) fn execute_indirect_scatter_impl(
@@ -326,7 +325,7 @@ impl WgpuBackend {
             Ok(p) => p,
             Err(e) => return Some(Err(e)),
         };
-        if !pipeline.emits || (self.wait.parks_with_host() && pipeline.fails) {
+        if !pipeline.emits {
             return None;
         }
         let prep = match self

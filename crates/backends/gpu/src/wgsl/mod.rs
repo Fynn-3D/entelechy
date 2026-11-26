@@ -648,12 +648,15 @@ pub fn textured_inputs_for_limits(
     }
     walk(&module.entry.body, false, &mut funcs[fn_count]);
 
-    // Propagate loop context through helper calls.
+    // Propagate loop context through helper calls (skipping `#tile_r*`
+    // functions, which lower to 1-cycle workgroup SRAM lookups inside loops).
     let mut in_loop_fn = vec![false; fn_count];
     let mut stack: Vec<usize> = funcs
         .iter()
         .flat_map(|f| f.loop_calls.iter().copied())
-        .filter(|&c| c < fn_count)
+        .filter(|&c| {
+            c < fn_count && entelechy_ir::tile_fn_radius(&module.functions[c].name).is_none()
+        })
         .collect();
     while let Some(c) = stack.pop() {
         if !in_loop_fn[c] {
@@ -806,13 +809,18 @@ pub fn plain_2d_linear_inputs(module: &Module, textured: &[usize]) -> Vec<usize>
     let mut stack: Vec<usize> = funcs
         .iter()
         .flat_map(|f| f.loop_calls.iter().copied())
-        .filter(|&c| c < fn_count)
+        .filter(|&c| {
+            c < fn_count && entelechy_ir::tile_fn_radius(&module.functions[c].name).is_none()
+        })
         .collect();
     while let Some(c) = stack.pop() {
         if !in_loop_fn[c] {
             in_loop_fn[c] = true;
             for &next in &funcs[c].calls {
-                if next < fn_count && !in_loop_fn[next] {
+                if next < fn_count
+                    && !in_loop_fn[next]
+                    && entelechy_ir::tile_fn_radius(&module.functions[next].name).is_none()
+                {
                     stack.push(next);
                 }
             }
@@ -1139,6 +1147,52 @@ pub fn folded(groups: u32) -> (u32, u32) {
     } else {
         (MAX_GROUPS, groups.div_ceil(MAX_GROUPS))
     }
+}
+
+/// Like [`dispatch`], honoring `module`'s map workgroup size (`16x16` for
+/// tiled stencil maps, `8x8` otherwise).
+pub fn dispatch_for(module: &Module, domain: entelechy_abi::Domain) -> (u32, u32, u32, u32) {
+    let wg = map_workgroup_size(module);
+    if wg == WORKGROUP || domain.shape() != entelechy_abi::Shape::Grid {
+        dispatch(domain)
+    } else {
+        (
+            domain.width().div_ceil(wg),
+            domain.height().div_ceil(wg),
+            domain.depth(),
+            0,
+        )
+    }
+}
+
+/// Like [`map_slices`], honoring `module`'s map workgroup size (`16x16` for
+/// tiled stencil maps, `8x8` otherwise).
+pub fn map_slices_for(
+    module: &Module,
+    domain: entelechy_abi::Domain,
+    max_elements: usize,
+) -> Vec<(u32, u32, u32, u32, u32)> {
+    let wg = map_workgroup_size(module);
+    if wg == WORKGROUP || domain.shape() != entelechy_abi::Shape::Grid {
+        return map_slices(domain, max_elements);
+    }
+    let total = domain.count();
+    if total == 0 || total <= max_elements {
+        let (gx, gy, gz, fold) = dispatch_for(module, domain);
+        return vec![(gx, gy, gz, fold, 0)];
+    }
+    let gx = domain.width().div_ceil(wg);
+    let gy_total = domain.height().div_ceil(wg);
+    let band = (domain.width().max(1) as usize).saturating_mul(wg as usize);
+    let yg_step = (max_elements / band).max(1) as u32;
+    let mut slices = Vec::with_capacity(gy_total.div_ceil(yg_step) as usize);
+    let mut yg = 0u32;
+    while yg < gy_total {
+        let count = (gy_total - yg).min(yg_step);
+        slices.push((gx, count, domain.depth().max(1), 0, yg * wg));
+        yg = yg.saturating_add(yg_step);
+    }
+    slices
 }
 
 /// A map's dispatch over `domain`: workgroups in x, y, z, and the fold

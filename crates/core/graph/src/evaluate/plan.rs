@@ -14,6 +14,107 @@ const MAX_FUSED_INSTRUCTIONS: usize = 16_000;
 /// The most struct words carried across branches a fused group may grow past,
 /// matching the compiler's large-shader comfort bound (`5_000`).
 const MAX_FUSED_CARRIED: u64 = 5_000;
+/// Maximum workgroup shared memory (`14 KiB`, safely below WebGPU's 16 KiB
+/// core baseline) allowed for tiled stencil fusion.
+const MAX_STENCIL_TILE_BYTES: u64 = 14 * 1024;
+
+/// WGSL-aligned `(size, align)` of an IR type for estimating workgroup shared
+/// memory of tiled stencil fusion candidates.
+fn wgsl_type_layout(structs: &[entelechy_ir::StructDef], ty: Type) -> (u64, u64) {
+    let scalar = |kind: entelechy_ir::Scalar| -> u64 {
+        if matches!(
+            kind,
+            entelechy_ir::Scalar::Long | entelechy_ir::Scalar::Double
+        ) {
+            8
+        } else {
+            4
+        }
+    };
+    let vector = |kind, n: u8| {
+        let c = scalar(kind);
+        match n {
+            2 => (2 * c, 2 * c),
+            3 => (3 * c, 4 * c),
+            _ => (4 * c, 4 * c),
+        }
+    };
+    match ty {
+        Type::Scalar(kind) => (scalar(kind), scalar(kind)),
+        Type::Vector(kind, n) => vector(kind, n),
+        Type::Matrix(kind, n) => {
+            let (col, align) = vector(kind, n);
+            (u64::from(n) * col.next_multiple_of(align), align)
+        }
+        Type::Struct(index) => {
+            let mut offset = 0u64;
+            let mut widest = 1u64;
+            for field in &structs[index as usize].fields {
+                let (bytes, align) = wgsl_type_layout(structs, field.ty);
+                offset = offset.next_multiple_of(align) + bytes;
+                widest = widest.max(align);
+            }
+            (offset.next_multiple_of(widest), widest)
+        }
+    }
+}
+
+/// Whether `module` contains any `Op::Loop` or `Op::Each` in its entry or
+/// helper functions. Looped producers (such as multi-tap iterative filters or
+/// raymarchers) multiply loop work across the `(WG + 2R)^2` halo border and
+/// increase register pressure when fused into a stencil consumer, so the
+/// planner keeps them materialized while tiling loop-free producers.
+fn module_has_loop(module: &entelechy_ir::Module) -> bool {
+    fn walk(body: &[entelechy_ir::Instruction]) -> bool {
+        body.iter().any(|instr| {
+            matches!(
+                instr.op,
+                entelechy_ir::Op::Loop { .. } | entelechy_ir::Op::Each { .. }
+            ) || instr.op.blocks().iter().any(|b| walk(&b.body))
+        })
+    }
+    walk(&module.entry.body) || module.functions.iter().any(|f| walk(&f.body))
+}
+
+/// Estimates total workgroup shared memory bytes at workgroup edge `wg` (`8` or
+/// `16`) if `producer_module`'s `unique_outputs` are tiled with halo `radius`
+/// inside `consumer_module`.
+fn stencil_tile_bytes(
+    consumer_module: &entelechy_ir::Module,
+    producer_module: &entelechy_ir::Module,
+    unique_outputs: &[u32],
+    radius: u32,
+    wg: u32,
+) -> u64 {
+    let mut total = 0u64;
+    for func in &consumer_module.functions {
+        if let Some(r) = entelechy_ir::tile_fn_radius(&func.name) {
+            let (bytes, align) = wgsl_type_layout(&consumer_module.structs, func.result_type());
+            let side = u64::from(wg + 2 * r);
+            total = total.saturating_add(bytes.next_multiple_of(align).saturating_mul(side * side));
+        }
+    }
+    let (new_bytes, new_align) = if unique_outputs.len() == 1 {
+        let ty = producer_module.manifest.outputs[unique_outputs[0] as usize].element();
+        wgsl_type_layout(&producer_module.structs, ty)
+    } else {
+        let mut offset = 0u64;
+        let mut widest = 1u64;
+        for &out_idx in unique_outputs {
+            let ty = producer_module.manifest.outputs[out_idx as usize].element();
+            let (bytes, align) = wgsl_type_layout(&producer_module.structs, ty);
+            offset = offset.next_multiple_of(align) + bytes;
+            widest = widest.max(align);
+        }
+        (offset.next_multiple_of(widest), widest)
+    };
+    let side = u64::from(wg + 2 * radius);
+    total.saturating_add(
+        new_bytes
+            .next_multiple_of(new_align)
+            .saturating_mul(side * side),
+    )
+}
 
 impl Evaluator {
     /// The order `graph` runs in, kept while the graph is the one before.
@@ -467,16 +568,109 @@ impl Evaluator {
                     keep_apart(&mut groups[position], &producer_id, why);
                     continue;
                 }
-                // Read at its own element, the producer runs first; read at
-                // rows, the producer is called at each.
+                // Read at its own element, the producer runs first; on a GPU
+                // device, read at a small 2D stencil neighborhood, the producer
+                // becomes a workgroup-cached `#tile_r*` helper; read at rows,
+                // the producer is called at each.
+                #[derive(Clone, Copy, PartialEq, Eq)]
+                enum FusionKind {
+                    Pointwise,
+                    Indexed,
+                    Stencil(u32),
+                }
                 let uses: Vec<entelechy_ir::InputUse> = links
                     .iter()
                     .map(|link| entelechy_ir::input_use(consumer_module, link.1))
                     .collect();
-                let indexed = if uses.iter().all(|use_| !use_.addressed)
+                let kind = if uses.iter().all(|use_| !use_.addressed)
                     && uses.iter().any(|use_| use_.sampled)
                 {
-                    false
+                    FusionKind::Pointwise
+                } else if has_device
+                    && uses.iter().any(|use_| use_.addressed)
+                    && !producer_module
+                        .functions
+                        .iter()
+                        .any(|f| entelechy_ir::tile_fn_radius(&f.name).is_some())
+                    && consumer_module
+                        .manifest
+                        .outputs
+                        .first()
+                        .is_some_and(|p| p.shape() == entelechy_abi::Shape::Grid)
+                    && links.iter().all(|link| {
+                        consumer_module.manifest.inputs[link.1 as usize].shape()
+                            == entelechy_abi::Shape::Grid
+                    })
+                {
+                    let const_params: BTreeMap<u32, Value> = consumer_module
+                        .manifest
+                        .params
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(k, param)| match consumer.node.params.get(&param.name) {
+                            Some(ParamValue::Literal(val)) => Some((k as u32, val.clone())),
+                            None => Some((k as u32, param.default.clone())),
+                            Some(ParamValue::Graph(_)) => None,
+                        })
+                        .collect();
+                    let peer_inputs: Vec<u32> = links.iter().map(|link| link.1).collect();
+                    let mut max_radius = 0u32;
+                    let mut all_stencil = true;
+                    let mut unique_outputs: Vec<u32> = Vec::new();
+                    for (link, use_) in links.iter().zip(&uses) {
+                        if !use_.sampled && !use_.addressed && use_.counted {
+                            continue;
+                        }
+                        match entelechy_ir::stencil_radius_with_peers(
+                            consumer_module,
+                            link.1,
+                            &peer_inputs,
+                            &const_params,
+                        ) {
+                            Some(r) => {
+                                max_radius = max_radius.max(r);
+                                if !unique_outputs.contains(&link.2) {
+                                    unique_outputs.push(link.2);
+                                }
+                            }
+                            None => {
+                                all_stencil = false;
+                                break;
+                            }
+                        }
+                    }
+                    if all_stencil
+                        && (1..=entelechy_ir::MAX_STENCIL_RADIUS).contains(&max_radius)
+                        && !unique_outputs.is_empty()
+                    {
+                        if module_has_loop(producer_module) {
+                            let why = "it holds a loop, so recomputing it over a tile's border costs more than storing it".to_owned();
+                            keep_apart(&mut groups[position], &producer_id, why);
+                            continue;
+                        }
+                        if stencil_tile_bytes(
+                            consumer_module,
+                            producer_module,
+                            &unique_outputs,
+                            max_radius,
+                            8,
+                        ) <= MAX_STENCIL_TILE_BYTES
+                        {
+                            FusionKind::Stencil(max_radius)
+                        } else {
+                            let why = format!(
+                                "its workgroup tile would pass {MAX_STENCIL_TILE_BYTES} bytes of shared memory"
+                            );
+                            keep_apart(&mut groups[position], &producer_id, why);
+                            continue;
+                        }
+                    } else {
+                        let why = format!(
+                            "`{consumer_id}` reads it neither at its own element (`sample`), nor within a small 2D stencil, nor at rows its entry names outside any loop"
+                        );
+                        keep_apart(&mut groups[position], &producer_id, why);
+                        continue;
+                    }
                 } else if uses.iter().any(|use_| use_.addressed)
                     && links.iter().all(|link| {
                         entelechy_ir::row_reads(consumer_module, link.1).is_some()
@@ -529,7 +723,7 @@ impl Evaluator {
                             }
                         }
                     }
-                    true
+                    FusionKind::Indexed
                 } else {
                     let why = format!(
                         "`{consumer_id}` reads it neither at its own element (`sample`) nor at rows its entry names outside any loop"
@@ -537,10 +731,21 @@ impl Evaluator {
                     keep_apart(&mut groups[position], &producer_id, why);
                     continue;
                 };
+                let indexed = kind == FusionKind::Indexed;
                 // The producer's extent comes in by params wherever it is
                 // read at an offset or counted, so it must be known now.
-                let by_params =
-                    indexed || !outside.is_empty() || uses.iter().any(|use_| use_.counted);
+                let by_params = match kind {
+                    FusionKind::Indexed => true,
+                    FusionKind::Stencil(_) => {
+                        !outside.is_empty()
+                            || links.iter().any(|link| {
+                                entelechy_ir::stencil_needs_extent(consumer_module, link.1)
+                            })
+                    }
+                    FusionKind::Pointwise => {
+                        !outside.is_empty() || uses.iter().any(|use_| use_.counted)
+                    }
+                };
                 let known = producer_domain.filter(|domain| domain.count() > 0);
                 if by_params && known.is_none() {
                     let why = "its extent is not known before the frame".to_owned();
@@ -634,9 +839,13 @@ impl Evaluator {
                 let pairs: Vec<(u32, u32)> = links.iter().map(|link| (link.1, link.2)).collect();
                 // Which ports were joined is part of what the fused version
                 // is: the same members joined otherwise fuse anew.
+                let stencil_r = match kind {
+                    FusionKind::Stencil(r) => r,
+                    _ => 0,
+                };
                 let mut fused_links = consumer.links.clone();
                 fused_links.extend(producer.links.iter().cloned());
-                fused_links.push((producer.node.id.clone(), pairs.clone()));
+                fused_links.push((producer.node.id.clone(), pairs.clone(), stencil_r));
                 let members = Members {
                     parts: parts.clone(),
                     counted: counted.clone(),
@@ -653,17 +862,28 @@ impl Evaluator {
                     keep_apart(&mut groups[position], &producer_id, why);
                     continue;
                 }
-                let fuse = if indexed {
-                    entelechy_ir::fuse_indexed
-                } else {
-                    entelechy_ir::fuse_outputs
+                let fused_result = match kind {
+                    FusionKind::Pointwise => entelechy_ir::fuse_outputs(
+                        consumer_module,
+                        &pairs,
+                        producer_module,
+                        &producer.node.id.0,
+                    ),
+                    FusionKind::Indexed => entelechy_ir::fuse_indexed(
+                        consumer_module,
+                        &pairs,
+                        producer_module,
+                        &producer.node.id.0,
+                    ),
+                    FusionKind::Stencil(radius) => entelechy_ir::fuse_stencil(
+                        consumer_module,
+                        &pairs,
+                        producer_module,
+                        &producer.node.id.0,
+                        radius,
+                    ),
                 };
-                let module = match fuse(
-                    consumer_module,
-                    &pairs,
-                    producer_module,
-                    &producer.node.id.0,
-                ) {
+                let module = match fused_result {
                     Ok(module) => {
                         let instructions = entelechy_ir::sizes(&module).total();
                         let carried_after = entelechy_ir::carried(&module).total;

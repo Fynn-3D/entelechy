@@ -712,3 +712,230 @@ fn narrow_format_pointwise_and_indexed_fusion_is_bit_identical_across_all_eight_
         "at(grid, coord()) f16 fusion bit mismatch"
     );
 }
+
+#[test]
+fn stencil_fusion_matches_unfused_across_radii_multi_output_narrow_f16_and_odd_sizes() {
+    use entelechy_ir::{fuse_stencil, stencil_radius, tile_fn_radius};
+    use std::collections::BTreeMap;
+
+    // 1. Radius-1 5-tap cross stencil (`camera.cas@1`-style) + sound interval rejections.
+    let prod_r1 = compile(
+        "kernel test.st_p1@1 {
+            requires { field.write; }
+            output result: Image;
+            compute {
+                let q = coord();
+                let d = domain();
+                let u = (q.x + 0.5) / d.x;
+                let v = (q.y + 0.5) / d.y;
+                return vec4(u * u + 0.1 * v, v * 0.8 + 0.05, float(element() % 7) * 0.1, 1.0);
+            }
+        }",
+    )
+    .unwrap();
+    let cons_r1 = compile(
+        "kernel test.st_c1@1 {
+            requires { field.read; field.write; }
+            input src: Image;
+            param strength: Float = 0.5;
+            output result: Image;
+            compute {
+                let q = coord();
+                let e = size(src) - 1.0;
+                let c = at(src, clamp(q, vec2(0.0, 0.0), e));
+                let n = at(src, clamp(q + vec2(0.0, -1.0), vec2(0.0, 0.0), e)).xyz;
+                let s = at(src, clamp(q + vec2(0.0, 1.0), vec2(0.0, 0.0), e)).xyz;
+                let w = at(src, clamp(q + vec2(-1.0, 0.0), vec2(0.0, 0.0), e)).xyz;
+                let ea = at(src, clamp(q + vec2(1.0, 0.0), vec2(0.0, 0.0), e)).xyz;
+                let avg = (n + s + w + ea) * 0.25;
+                let out = c.xyz + (c.xyz - avg) * strength;
+                return vec4(out.x, out.y, out.z, c.w);
+            }
+        }",
+    )
+    .unwrap();
+    // `strength` is omitted from `const_params` (simulating a runtime-overridable
+    // graph parameter); coordinates do not depend on it so radius is still Some(1).
+    assert_eq!(stencil_radius(&cons_r1, 0, &BTreeMap::new()), Some(1));
+    let fused_r1 = fuse_stencil(&cons_r1, &[(0, 0)], &prod_r1, "prod", 1).unwrap();
+    assert!(
+        fused_r1
+            .functions
+            .iter()
+            .any(|f| tile_fn_radius(&f.name) == Some(1)),
+        "expected #tile_r1_* helper"
+    );
+
+    // 2. Radius-2 9-tap loop with narrow `Grid<Vec4 as f16>` multi-output producer
+    //    (matching `rt_gi_d1 -> rt_gi_d2`).
+    let prod_r2 = compile(
+        "kernel test.st_p2@1 {
+            requires { field.write; }
+            output gi: Grid<Vec4 as f16>;
+            output meta: Grid<Vec4 as f16>;
+            compute {
+                let q = coord();
+                let d = domain();
+                let u = (q.x + 1.0) / (d.x + 1.0);
+                let v = (q.y + 1.0) / (d.y + 1.0);
+                return {
+                    gi: vec4(u * 1.37, v * 0.91, (u + v) * 0.43, 1.0),
+                    meta: vec4(0.25 + u * 0.5, 0.5 + v * 0.25, float((int(q.x) + int(q.y)) % 2), 1.0)
+                };
+            }
+        }",
+    )
+    .unwrap();
+    let cons_r2 = compile(
+        "kernel test.st_c2@1 {
+            requires { field.read; field.write; }
+            input gi_in: Grid<Vec4 as f16>;
+            input meta_in: Grid<Vec4 as f16>;
+            param step: Int = 1;
+            output gi: Grid<Vec4 as f16>;
+            output meta: Grid<Vec4 as f16>;
+            compute {
+                let q = coord();
+                let hi_gi = size(gi_in) - vec2(1.0, 1.0);
+                let hi_m = size(meta_in) - vec2(1.0, 1.0);
+                let s_f = float(step);
+                let acc = loop 9 with sum = [vec4(0.0, 0.0, 0.0, 0.0), vec4(0.0, 0.0, 0.0, 0.0)] {
+                    let dx = index() % 3 - 1;
+                    let dy = index() / 3 - 1;
+                    let off = vec2(float(dx) * s_f, float(dy) * s_f);
+                    let g = at(gi_in, clamp(q + off, vec2(0.0, 0.0), hi_gi));
+                    let m = at(meta_in, clamp(q + off, vec2(0.0, 0.0), hi_m));
+                    [sum[0] + g * (1.0 / 9.0), sum[1] + m * (1.0 / 9.0)]
+                };
+                return { gi: acc[0], meta: acc[1] };
+            }
+        }",
+    )
+    .unwrap();
+    // Without `step` bound in `const_params`, `stencil_radius` must refuse (None).
+    assert_eq!(stencil_radius(&cons_r2, 0, &BTreeMap::new()), None);
+    let mut step2 = BTreeMap::new();
+    step2.insert(0u32, Value::Int(2));
+    assert_eq!(stencil_radius(&cons_r2, 0, &step2), Some(2));
+    assert_eq!(stencil_radius(&cons_r2, 1, &step2), Some(2));
+    // `step = 3` exceeds MAX_STENCIL_RADIUS (2) -> refused.
+    let mut step3 = BTreeMap::new();
+    step3.insert(0u32, Value::Int(3));
+    assert_eq!(stencil_radius(&cons_r2, 0, &step3), None);
+
+    // Unsafe arbitrary clamp bound and `at_linear` must be rejected by `stencil_radius`.
+    let bad_clamp = compile(
+        "kernel test.bad_clamp@1 {
+            requires { field.read; field.write; }
+            input src: Image;
+            output result: Image;
+            compute {
+                let q = coord();
+                return at(src, clamp(q + vec2(1.0, 0.0), vec2(0.0, 0.0), vec2(5.0, 5.0)));
+            }
+        }",
+    )
+    .unwrap();
+    assert_eq!(stencil_radius(&bad_clamp, 0, &BTreeMap::new()), None);
+    let bad_linear = compile(
+        "kernel test.bad_lin@1 {
+            requires { field.read; field.write; }
+            input src: Image;
+            output result: Image;
+            compute {
+                return at_linear(src, coord() + vec2(0.5, 0.5));
+            }
+        }",
+    )
+    .unwrap();
+    assert_eq!(stencil_radius(&bad_linear, 0, &BTreeMap::new()), None);
+
+    let fused_r2 = fuse_stencil(&cons_r2, &[(0, 0), (1, 1)], &prod_r2, "p2", 2).unwrap();
+    assert!(
+        fused_r2
+            .functions
+            .iter()
+            .any(|f| tile_fn_radius(&f.name) == Some(2))
+    );
+
+    // 3. Downstream pointwise fusion preserves `#tile_r2_*`, while downstream
+    //    stencil fusion declines (never nesting two stencil layers).
+    let downstream_pw = compile(
+        "kernel test.down_pw@1 {
+            requires { field.read; field.write; }
+            input gi: Grid<Vec4 as f16>;
+            input meta: Grid<Vec4 as f16>;
+            output result: Image;
+            compute {
+                let g = at(gi, coord());
+                let m = at(meta, coord());
+                return vec4(g.x + m.x, g.y + m.y, g.z, m.w);
+            }
+        }",
+    )
+    .unwrap();
+    let chained_pw = fuse_outputs(&downstream_pw, &[(0, 0), (1, 1)], &fused_r2, "d2").unwrap();
+    assert!(
+        chained_pw
+            .functions
+            .iter()
+            .any(|f| tile_fn_radius(&f.name) == Some(2)),
+        "downstream pointwise fusion must preserve #tile_r2_*"
+    );
+    let err = fuse_stencil(&cons_r1, &[(0, 0)], &chained_pw, "ch", 1).unwrap_err();
+    assert!(err.declines, "nested stencil fusion must decline cleanly");
+
+    // Bit-identical execution on CPU across odd sizes and 1x1!
+    let mut host = Host::new(1 << 22);
+    for (w, h) in [(13u32, 9u32), (17, 11), (1, 1)] {
+        let dom = Domain::Grid(w, h);
+        let run_grid = |module: &entelechy_ir::Validated,
+                        inputs: Vec<entelechy_abi::Handle>,
+                        params: Vec<Value>,
+                        host: &mut Host|
+         -> Vec<entelechy_abi::Handle> {
+            let mut scope = Scope::new(host, granted());
+            CpuBackend
+                .execute(
+                    module,
+                    &Invocation {
+                        inputs,
+                        params,
+                        domain: dom,
+                        context: Context::default(),
+                    },
+                    &mut scope,
+                )
+                .unwrap()
+        };
+
+        // R=1 single-output
+        let p1_h = run_grid(&prod_r1, vec![], vec![], &mut host)[0];
+        let sep_r1_h = run_grid(&cons_r1, vec![p1_h], vec![Value::Float(0.44)], &mut host)[0];
+        let tog_r1_h = run_grid(&fused_r1, vec![], vec![Value::Float(0.44)], &mut host)[0];
+        assert_eq!(
+            host.data(sep_r1_h).unwrap().storage(),
+            host.data(tog_r1_h).unwrap().storage(),
+            "R=1 stencil fusion bit mismatch at {w}x{h}"
+        );
+
+        // R=2 multi-output f16 + chained downstream pointwise
+        let p2_hs = run_grid(&prod_r2, vec![], vec![], &mut host);
+        let sep_r2_hs = run_grid(&cons_r2, p2_hs.clone(), vec![Value::Int(2)], &mut host);
+        let tog_r2_hs = run_grid(&fused_r2, vec![], vec![Value::Int(2)], &mut host);
+        for k in 0..2 {
+            assert_eq!(
+                host.data(sep_r2_hs[k]).unwrap().storage(),
+                host.data(tog_r2_hs[k]).unwrap().storage(),
+                "R=2 multi-output f16 stencil bit mismatch on out {k} at {w}x{h}"
+            );
+        }
+        let sep_ch_h = run_grid(&downstream_pw, sep_r2_hs, vec![], &mut host)[0];
+        let tog_ch_h = run_grid(&chained_pw, vec![], vec![Value::Int(2)], &mut host)[0];
+        assert_eq!(
+            host.data(sep_ch_h).unwrap().storage(),
+            host.data(tog_ch_h).unwrap().storage(),
+            "chained R=2 stencil -> pointwise bit mismatch at {w}x{h}"
+        );
+    }
+}

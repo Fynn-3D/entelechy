@@ -188,6 +188,10 @@ pub fn emit_full_with_caps(
             wgsl_type(element)
         );
     }
+    let tile_wg = tile_workgroup_size(module);
+    if tile_wg > 0 {
+        let _ = writeln!(out, "var<private> tile_origin: vec2<i32>;");
+    }
     emit_functions(module, half, &mut out);
     for (index, function) in module.functions.iter().enumerate() {
         if shader_f16 && function.name == entelechy_ir::QUANTIZE_F16_FN {
@@ -195,6 +199,38 @@ pub fn emit_full_with_caps(
                 out,
                 "fn {}(a0: f32) -> f32 {{\n    return f32(f16(a0));\n}}\n",
                 function_name(index)
+            );
+            continue;
+        }
+        if tile_wg > 0
+            && let Some(radius) = entelechy_ir::tile_fn_radius(&function.name)
+        {
+            let name = function_name(index);
+            let compute_name = format!("{name}_compute");
+            emit_function(
+                &mut out,
+                module,
+                function,
+                &compute_name,
+                false,
+                packs,
+                textured,
+                longs,
+                false,
+                shader_f16,
+            );
+            let tile_w = tile_wg + 2 * radius;
+            let tile_n = tile_w * tile_w;
+            let ret_ty = wgsl_type(function.result_type());
+            let _ = writeln!(
+                out,
+                "var<workgroup> tile_{index}: array<{ret_ty}, {tile_n}>;
+fn {name}(a0: vec2<f32>, a1: vec2<f32>) -> {ret_ty} {{
+    let lx = clamp(i32(a0.x) - tile_origin.x + {radius}i, 0i, {max_idx}i);
+    let ly = clamp(i32(a0.y) - tile_origin.y + {radius}i, 0i, {max_idx}i);
+    return tile_{index}[u32(ly) * {tile_w}u + u32(lx)];
+}}\n",
+                max_idx = tile_w - 1,
             );
             continue;
         }
@@ -331,6 +367,56 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
     }}
 }}",
             mask = entelechy_ir::WORK_BLOCK - 1,
+        );
+        return out;
+    }
+    if tile_wg > 0 {
+        let mut fill_loops = String::new();
+        let stride = tile_wg * tile_wg;
+        for (index, radius) in tiled_functions(module) {
+            let tile_w = tile_wg + 2 * radius;
+            let tile_n = tile_w * tile_w;
+            let compute_name = format!("{}_compute", function_name(index));
+            let _ = writeln!(
+                fill_loops,
+                "    for (var s_{index}: u32 = lid; s_{index} < {tile_n}u; s_{index} = s_{index} + {stride}u) {{
+        let lx = i32(s_{index} % {tile_w}u) - {radius}i;
+        let ly = i32(s_{index} / {tile_w}u) - {radius}i;
+        let cx = clamp(tile_origin.x + lx, 0i, wi);
+        let cy = clamp(tile_origin.y + ly, 0i, hi);
+        current = u32(cy) * w + u32(cx);
+        tile_{index}[s_{index}] = {compute_name}(vec2<f32>(f32(cx), f32(cy)), dom_f);
+    }}"
+            );
+        }
+        let _ = writeln!(
+            out,
+            "
+@compute @workgroup_size({tile_wg}, {tile_wg}, 1)
+fn main(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_index) lid: u32,
+    @builtin(workgroup_id) wgid: vec3<u32>,
+) {{
+    let w = bitcast<u32>(ctx[0].x);
+    let h = bitcast<u32>(ctx[0].y);
+    let slice = bitcast<u32>(ctx[5].w);
+    let wi = max(i32(w) - 1i, 0i);
+    let hi = max(i32(h) - 1i, 0i);
+    let dom_f = vec2<f32>(f32(w), f32(h));
+    tile_origin = vec2<i32>(i32(wgid.x * {tile_wg}u), i32(wgid.y * {tile_wg}u + slice));
+{fill_loops}    workgroupBarrier();
+    let x = gid.x;
+    let y = gid.y + slice;
+    if (x >= w || y >= h) {{
+        return;
+    }}
+    let element = y * w + x;
+    current = element;
+    begin_work();
+    let coord = vec3<f32>(f32(x), f32(y), 0.0);
+    {store}
+}}"
         );
         return out;
     }
@@ -566,10 +652,93 @@ pub fn group_memory(module: &Module) -> u64 {
     arrays + flags
 }
 
+/// Maximum workgroup shared memory (`14 KiB`, safely below WebGPU's 16 KiB
+/// core baseline) used for tiled stencil fusion.
+pub const TILE_SHARED_LIMIT: u64 = 14 * 1024;
+
+/// Returns `(function_index, radius)` for every `#tile_r{radius}_{slot}`
+/// function in `module` eligible for workgroup tile caching.
+fn tiled_functions(module: &Module) -> Vec<(usize, u32)> {
+    if module.manifest.mode != Mode::Map
+        || module.accounted()
+        || !module.manifest.memories.is_empty()
+        || module
+            .manifest
+            .outputs
+            .first()
+            .is_none_or(|p| p.shape() != Shape::Grid)
+    {
+        return Vec::new();
+    }
+    module
+        .functions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, func)| {
+            let radius = entelechy_ir::tile_fn_radius(&func.name)?;
+            if func.args == [Type::Vec2, Type::Vec2] && func.results.len() == 1 {
+                Some((index, radius))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Workgroup shared-memory bytes required for all `#tile_r*` arrays at
+/// square workgroup edge `wg`.
+pub fn tile_memory_for_wg(module: &Module, wg: u32) -> u64 {
+    let mut total = 0u64;
+    for (index, radius) in tiled_functions(module) {
+        let ret_ty = module.functions[index].result_type();
+        let (bytes, align) = layout(module, ret_ty);
+        let side = u64::from(wg + 2 * radius);
+        total = total.saturating_add(bytes.next_multiple_of(align).saturating_mul(side * side));
+    }
+    total
+}
+
+/// Square workgroup edge (`16` or `8`) used when `module` emits cooperative
+/// `var<workgroup>` tile caching for `#tile_r*` functions, or `0` when none
+/// apply (or when tiles exceed [`TILE_SHARED_LIMIT`]).
+pub fn tile_workgroup_size(module: &Module) -> u32 {
+    if tiled_functions(module).is_empty() {
+        return 0;
+    }
+    if tile_memory_for_wg(module, 16) <= TILE_SHARED_LIMIT {
+        16
+    } else if tile_memory_for_wg(module, 8) <= TILE_SHARED_LIMIT {
+        8
+    } else {
+        0
+    }
+}
+
+/// Square workgroup edge used by `module`'s map pass (`16` for large tiled
+/// stencils, [`WORKGROUP`] (`8`) otherwise).
+pub fn map_workgroup_size(module: &Module) -> u32 {
+    let tile_wg = tile_workgroup_size(module);
+    if tile_wg > 0 { tile_wg } else { WORKGROUP }
+}
+
+/// Workgroup shared-memory bytes used by `module`'s tiled stencil caches, or
+/// zero when none are emitted.
+pub fn tile_memory(module: &Module) -> u64 {
+    let wg = tile_workgroup_size(module);
+    if wg > 0 {
+        tile_memory_for_wg(module, wg)
+    } else {
+        0
+    }
+}
+
 /// The bytes a group's workgroup holds at once on a device with `subgroups`:
-/// zero when the group runs register-only via `subgroupShuffle`, otherwise
-/// [`group_memory`].
+/// zero when a `group N` runs register-only via `subgroupShuffle`, [`tile_memory`]
+/// for a tiled stencil map, otherwise [`group_memory`].
 pub fn group_memory_for(module: &Module, subgroups: SubgroupCaps) -> u64 {
+    if module.manifest.mode == Mode::Map {
+        return tile_memory(module);
+    }
     if uses_subgroup_group(module, subgroups) {
         0
     } else {

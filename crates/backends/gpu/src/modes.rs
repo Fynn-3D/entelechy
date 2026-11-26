@@ -77,7 +77,7 @@ impl WgpuBackend {
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
         );
-        let (groups_x, groups_y, groups_z, _) = wgsl::dispatch(domain);
+        let (groups_x, groups_y, groups_z, _) = wgsl::dispatch_for(module, domain);
         // Two buffers take turns: what a time wrote the next reads, and what it
         // read is free for the time after. The Field the run was given is only
         // read, by the pass already recorded. So there are two bindings, one

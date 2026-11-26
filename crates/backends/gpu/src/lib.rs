@@ -1233,8 +1233,7 @@ impl Backend for WgpuBackend {
                     | Mode::Reduce
                     | Mode::Prefix { .. }
                     | Mode::Scatter { .. }
-            )
-            && !(self.wait.parks_with_host() && pipeline.fails);
+            );
         let staged = self.stage(
             pipeline,
             module,

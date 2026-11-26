@@ -75,11 +75,10 @@ pub(crate) struct Submitted {
 impl Check for Submitted {
     fn wait(mut self: Box<Self>) -> Result<(), ExecutionError> {
         let asked = self.asked.take();
-        let already_settled = !self.wait.parks_with_host()
-            && self
-                .flushed_failures
-                .as_ref()
-                .is_some_and(|readback| readback.is_resolved());
+        let already_settled = self
+            .flushed_failures
+            .as_ref()
+            .is_some_and(|readback| readback.is_resolved());
         let waited = if already_settled {
             Ok(())
         } else {

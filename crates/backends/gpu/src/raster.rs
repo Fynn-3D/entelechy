@@ -61,30 +61,38 @@ struct Setup {
 @group(0) @binding(0) var<uniform> setup: Setup;
 @group(0) @binding(1) var<storage, read> vertices: array<u32>;
 
-// A vertex's clip position.
-fn clip_of(v: u32) -> vec4<f32> {
+// A vertex's clip position words and decoded clip vector.
+fn clip_words_of(v: u32) -> vec4<u32> {
     let base = v * 9u;
-    return vec4<f32>(
-        bitcast<f32>(vertices[base]),
-        bitcast<f32>(vertices[base + 1u]),
-        bitcast<f32>(vertices[base + 2u]),
-        bitcast<f32>(vertices[base + 3u]));
+    return vec4<u32>(
+        vertices[base],
+        vertices[base + 1u],
+        vertices[base + 2u],
+        vertices[base + 3u]);
+}
+
+fn clip_of(v: u32) -> vec4<f32> {
+    return bitcast<vec4<f32>>(clip_words_of(v));
 }
 
 fn uv_of(v: u32) -> vec2<f32> {
     return vec2<f32>(bitcast<f32>(vertices[v * 9u + 7u]), bitcast<f32>(vertices[v * 9u + 8u]));
 }
 
-// A corner in pixels, as the rule places it: `x`, `y` from the top left,
+// Projects already-loaded clip coordinates to pixels: `x`, `y` from top left,
 // `z` after the divide, and `1 / w`.
-fn screen(v: u32) -> vec4<f32> {
-    let c = clip_of(v);
+fn project_clip(c: vec4<f32>) -> vec4<f32> {
     let inv_w = 1.0 / c.w;
     return vec4<f32>(
         (c.x * inv_w * 0.5 + 0.5) * setup.size.x,
         (0.5 - c.y * inv_w * 0.5) * setup.size.y,
         c.z * inv_w,
         inv_w);
+}
+
+// A corner in pixels, as the rule places it.
+fn screen(v: u32) -> vec4<f32> {
+    return project_clip(clip_of(v));
 }
 
 fn edge(a: vec2<f32>, b: vec2<f32>, p: vec2<f32>) -> f32 {
@@ -103,27 +111,29 @@ fn corner(t: u32, k: u32) -> u32 {
 }
 ";
 
-/// Hardware-filtered 2D tiled texture mask sampling (when `FLOAT32_FILTERABLE`
-/// is supported): single hardware TMU bilinear tap sharing the immutable
-/// `DeviceImage` texture mirror with shading passes.
+/// Hardware-filtered 2D tiled `R32Float` alpha-only mask sampling (when
+/// `FLOAT32_FILTERABLE` is supported): 4x lighter than `Rgba32Float` in the
+/// texture cache, built once per immutable cutout mask alongside its MIN/MAX
+/// alpha pyramid.
 const MASK_FILTERED_WGSL: &str = "
 @group(0) @binding({mask}) var mask_tex: texture_2d<f32>;
 @group(0) @binding({sampler}) var mask_sampler: sampler;
 
 fn mask_alpha(uv: vec2<f32>) -> f32 {
-    return textureSampleLevel(mask_tex, mask_sampler, uv, 0.0).a;
+    return textureSampleLevel(mask_tex, mask_sampler, uv, 0.0).r;
 }
 ";
 
-/// 2D tiled texture mask sampling fallback without `FLOAT32_FILTERABLE`:
-/// manual 4-tap bilinear over the 2D tiled hardware texture cache.
+/// 2D tiled `R32Float` alpha-only mask sampling fallback without
+/// `FLOAT32_FILTERABLE`: manual 4-tap bilinear over the 2D tiled hardware
+/// texture cache.
 const MASK_LOAD_WGSL: &str = "
 @group(0) @binding({mask}) var mask_tex: texture_2d<f32>;
 
 fn texel(x: i32, y: i32, w: i32, h: i32) -> f32 {
     let cx = clamp(x, 0, max(w - 1, 0));
     let cy = clamp(y, 0, max(h - 1, 0));
-    return textureLoad(mask_tex, vec2<i32>(cx, cy), 0).a;
+    return textureLoad(mask_tex, vec2<i32>(cx, cy), 0).r;
 }
 
 // The mask's alpha where `at_linear` would read it: the four texels
@@ -163,15 +173,14 @@ const KEEP_COMMON_WGSL: &str = "
 
 const BLOCK: u32 = 256u;
 
-// A vertex the rule can use: every clip component finite and w above
-// zero. The test is on the words, where a NaN and an infinity are the
+// A vertex's clip words the rule can use: every clip component finite and w
+// above zero. The test is on the words, where a NaN and an infinity are the
 // ones exponent, so no fast maths can fold it away.
-fn usable(v: u32) -> bool {
-    let base = v * 9u;
+fn clip_words_usable(w: vec4<u32>) -> bool {
     let open = 0x7F800000u;
-    return (vertices[base] & open) != open && (vertices[base + 1u] & open) != open
-        && (vertices[base + 2u] & open) != open && (vertices[base + 3u] & open) != open
-        && bitcast<f32>(vertices[base + 3u]) > 0.0;
+    return (w.x & open) != open && (w.y & open) != open
+        && (w.z & open) != open && (w.w & open) != open
+        && bitcast<f32>(w.w) > 0.0;
 }
 
 fn finite_f32(v: f32) -> bool {
@@ -279,12 +288,15 @@ fn sort(t: u32) -> u32 {
     let ia = corner(t, 0u);
     let ib = corner(t, 1u);
     let ic = corner(t, 2u);
-    if !(usable(ia) && usable(ib) && usable(ic)) {
+    let wa = clip_words_of(ia);
+    let wb = clip_words_of(ib);
+    let wc = clip_words_of(ic);
+    if !(clip_words_usable(wa) && clip_words_usable(wb) && clip_words_usable(wc)) {
         return 0u;
     }
-    let a = screen(ia);
-    let b = screen(ib);
-    let c = screen(ic);
+    let a = project_clip(bitcast<vec4<f32>>(wa));
+    let b = project_clip(bitcast<vec4<f32>>(wb));
+    let c = project_clip(bitcast<vec4<f32>>(wc));
     let signed_area = edge(a.xy, b.xy, c.xy);
     let twice_area = abs(signed_area);
     if !(twice_area > 0.0) {
@@ -846,12 +858,19 @@ fn draw_here(
         uvb_w = uv_of(ib) * b.w;
         uvc_w = uv_of(ic) * c.w;
     }
+    let bc = c.xy - b.xy;
+    let ca = a.xy - c.xy;
+    let ab = b.xy - a.xy;
     for (var y = box.y; y <= box.w; y++) {
+        let py = f32(y) + 0.5;
+        let wy0 = bc.x * (py - b.y);
+        let wy1 = ca.x * (py - c.y);
+        let wy2 = ab.x * (py - a.y);
         for (var x = box.x; x <= box.z; x++) {
-            let p = vec2<f32>(f32(x) + 0.5, f32(y) + 0.5);
-            let w0 = edge(b.xy, c.xy, p);
-            let w1 = edge(c.xy, a.xy, p);
-            let w2 = edge(a.xy, b.xy, p);
+            let px = f32(x) + 0.5;
+            let w0 = wy0 - bc.y * (px - b.x);
+            let w1 = wy1 - ca.y * (px - c.x);
+            let w2 = wy2 - ab.y * (px - a.x);
             if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
                 continue;
             }
@@ -1524,7 +1543,7 @@ fn build(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba32Float,
+        format: raster_hiz::ALPHA_MASK_FORMAT,
         usage: wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
@@ -1668,79 +1687,61 @@ pub(crate) fn rasterize(
     let vertex_buffer = gpu.bind_input(scope, vertices)?;
     let triangle_buffer = gpu.bind_input(scope, triangles)?;
 
-    // The mask is always bound as a 2D tiled hardware texture sharing the
-    // immutable `DeviceImage` texture mirror with shading passes (zero extra
-    // copies after first use); with none it is a 1x1 dummy texture left unread.
+    // The mask is bound as a cached 1-channel `R32Float` 2D tiled hardware
+    // texture (4x lighter than `Rgba32Float` in the texture cache), extracted
+    // once alongside the MIN/MAX alpha pyramid without disturbing the shading
+    // passes' mipmapped color texture mirror.
     let mask_size = match mask {
         Some(mask) => scope.size(mask)?,
         None => entelechy_abi::Domain::Grid(1, 1),
     };
-    let (
-        mask_view,
-        mask_src_buf,
-        mask_mirror_plan,
-        alpha_view,
-        alpha_mip_count,
-        alpha_payloads,
-        pending_alpha_pyramid,
-    ) = if let Some(mask_h) = mask {
-        let buf = gpu.bind_input(scope, mask_h)?;
-        let image = scope
-            .resident(mask_h)?
-            .and_then(|dev| dev.downcast_ref::<DeviceImage>())
-            .ok_or_else(|| {
-                ExecutionError::Device("rasterize mask is not resident on the GPU".to_owned())
-            })?;
-        let mask_port = entelechy_ir::Port {
-            name: "mask".into(),
-            ty: entelechy_ir::PortType {
-                element: entelechy_ir::Type::Vec4,
-                shape: entelechy_abi::Shape::Grid,
-                schema: entelechy_rules::raster::mask_schema(),
-            },
-        };
-        let (view, plan) =
-            gpu.plan_texture_mirror(image, mask_h, &mask_port, mask_size, 0, false, false, None)?;
-        let (mw, mh) = (mask_size.width(), mask_size.height());
-        let cached_alpha = image
-            .alpha_minmax
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .as_ref()
-            .filter(|p| p.dims == (mw, mh))
-            .map(|p| (p.view.clone(), p.mip_count));
-        let (alpha_view, alpha_mips, alpha_payloads, pending_alpha) =
-            if let Some((av, mips)) = cached_alpha {
-                (av, mips, Vec::new(), None)
+    let (mask_view, alpha_view, alpha_mip_count, alpha_payloads, pending_alpha_pyramid) =
+        if let Some(mask_h) = mask {
+            let (mw, mh) = (mask_size.width(), mask_size.height());
+            let cached_alpha = scope
+                .resident(mask_h)?
+                .and_then(|dev| dev.downcast_ref::<DeviceImage>())
+                .and_then(|image| {
+                    image
+                        .alpha_minmax
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .as_ref()
+                        .filter(|p| p.dims == (mw, mh))
+                        .map(|p| (p.mask_view.clone(), p.view.clone(), p.mip_count))
+                });
+            if let Some((mv, av, mips)) = cached_alpha {
+                (mv, av, mips, Vec::new(), None)
             } else if triangle_count > 0 {
+                let source = if let Some(ct_view) = gpu.upload_compressed(scope, mask_h)? {
+                    raster_hiz::AlphaSourceOwned::Texture(ct_view)
+                } else {
+                    raster_hiz::AlphaSourceOwned::Buffer(gpu.bind_input(scope, mask_h)?)
+                };
                 let pyramid = create_alpha_pyramid(gpu, mw, mh);
+                let mv = pyramid.mask_view.clone();
                 let av = pyramid.view.clone();
                 let mips = pyramid.mip_count;
                 let payloads = alpha_level_payloads(mw, mh);
-                (av, mips, payloads, Some((mask_h, pyramid)))
+                (mv, av, mips, payloads, Some((mask_h, source, pyramid)))
             } else {
-                (pipelines.hiz.empty_alpha_view.clone(), 0, Vec::new(), None)
-            };
-        (
-            view,
-            Some(buf),
-            plan,
-            alpha_view,
-            alpha_mips,
-            alpha_payloads,
-            pending_alpha,
-        )
-    } else {
-        (
-            pipelines.empty_mask_view.clone(),
-            None,
-            None,
-            pipelines.hiz.empty_alpha_view.clone(),
-            0,
-            Vec::new(),
-            None,
-        )
-    };
+                (
+                    pipelines.empty_mask_view.clone(),
+                    pipelines.hiz.empty_alpha_view.clone(),
+                    0,
+                    Vec::new(),
+                    None,
+                )
+            }
+        } else {
+            (
+                pipelines.empty_mask_view.clone(),
+                pipelines.hiz.empty_alpha_view.clone(),
+                0,
+                Vec::new(),
+                None,
+            )
+        };
     let block_count = triangle_count.div_ceil(BLOCK);
     let blocks_x = block_count.clamp(1, MOST_GROUPS);
     let blocks_y = block_count.div_ceil(blocks_x).max(1);
@@ -1820,14 +1821,6 @@ pub(crate) fn rasterize(
     for p in &alpha_payloads {
         all_uniform_payloads.push(p.as_slice());
     }
-    let mask_pad_idx = mask_mirror_plan
-        .as_ref()
-        .and_then(|plan| plan.pad_params.as_ref())
-        .map(|pad| {
-            let idx = all_uniform_payloads.len();
-            all_uniform_payloads.push(pad.as_slice());
-            idx
-        });
     let mut unbatched_uniforms = Vec::new();
     let uniform_slices = if batched {
         gpu.batch.alloc_uniforms(&all_uniform_payloads)?
@@ -1850,48 +1843,6 @@ pub(crate) fn rasterize(
     let alpha_level_slices =
         &uniform_slices[alpha_slice_start..alpha_slice_start + alpha_payloads.len()];
     let spare = gpu.spare();
-    let mut extra_scratch: Vec<wgpu::Buffer> = Vec::new();
-    let mut pending_mask_mirror: Option<(
-        Handle,
-        crate::texture::TextureMirror,
-        crate::texture::PendingMirrorCopy,
-    )> = None;
-    if let Some(plan) = mask_mirror_plan {
-        let padded = if let Some(pad_idx) = mask_pad_idx {
-            let byte_size =
-                (u64::from(plan.padded_row_bytes) * u64::from(plan.height) * u64::from(plan.depth))
-                    .max(16)
-                    .div_ceil(16)
-                    * 16;
-            let scratch_buf = spare.take(
-                &gpu.device,
-                byte_size,
-                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            );
-            extra_scratch.push(scratch_buf.clone());
-            Some((
-                scratch_buf,
-                uniform_slices[pad_idx].clone(),
-                plan.padded_row_bytes,
-                plan.fold_x,
-            ))
-        } else {
-            None
-        };
-        let copy = crate::texture::PendingMirrorCopy {
-            src: mask_src_buf.expect("mask source buffer"),
-            dst: plan.mirror.texture.clone(),
-            view_dim: plan.mirror.view_dim,
-            width: plan.width,
-            height: plan.height,
-            depth: plan.depth,
-            row_bytes: plan.row_bytes,
-            padded,
-            mip_scratch: None,
-            mip_levels: Vec::new(),
-        };
-        pending_mask_mirror = Some((plan.handle, plan.mirror, copy));
-    }
 
     // The keeping pass's buffers, from the pile and back to it.
     let scratch = |words: u64, usage: wgpu::BufferUsages| {
@@ -2141,21 +2092,12 @@ pub(crate) fn rasterize(
             })
     };
     let drawing = triangle_count > 0;
-    if let Some((mask_h, mirror, copy)) = pending_mask_mirror {
-        gpu.encode_mirror_copy(&mut encoder, &copy)?;
-        if let Some(image) = scope
-            .resident(mask_h)?
-            .and_then(|dev| dev.downcast_ref::<DeviceImage>())
-        {
-            *image.mirror.lock().unwrap_or_else(|p| p.into_inner()) = Some(mirror);
-        }
-    }
-    if let Some((mask_h, pyramid)) = pending_alpha_pyramid {
+    if let Some((mask_h, alpha_src, pyramid)) = pending_alpha_pyramid {
         encode_alpha_pyramid(
             &gpu.device,
             &pipelines.hiz,
             &mut encoder,
-            &mask_view,
+            alpha_src.as_ref(),
             &pyramid,
             alpha_level_slices,
         );
@@ -2341,8 +2283,7 @@ pub(crate) fn rasterize(
             .wait
             .parks_with_host()
             .then(|| gpu.page_pace_ops_budget());
-        let mut keep_buffers = vec![marks, offsets, indices, rows, args, small_rows, keys];
-        keep_buffers.extend(extra_scratch);
+        let keep_buffers = vec![marks, offsets, indices, rows, args, small_rows, keys];
         gpu.batch
             .finish_node(encoder, est_ops, keep_buffers, keep_textures, page_budget)?;
         if gpu.wait.parks_with_host() && gpu.page_queue.full(0, gpu.page_pace_ops_budget()) {
@@ -2373,7 +2314,6 @@ pub(crate) fn rasterize(
         for buffer in unbatched_uniforms
             .into_iter()
             .chain([marks, offsets, indices, rows, args, small_rows, keys])
-            .chain(extra_scratch)
         {
             spare.keep(buffer, None);
         }

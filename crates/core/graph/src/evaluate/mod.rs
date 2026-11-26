@@ -391,9 +391,10 @@ struct Members {
     links: Vec<Link>,
 }
 
-/// One fusion in a group: the producer inlined, and the pairs of the
-/// consumer's input it fed and the producer's output that fed it.
-type Link = (NodeId, Vec<(u32, u32)>);
+/// One fusion in a group: the producer inlined, the pairs of the
+/// consumer's input it fed and the producer's output that fed it, and the
+/// stencil halo radius (`0` for pointwise / indexed, `1..=2` for tiled stencil).
+type Link = (NodeId, Vec<(u32, u32)>, u32);
 
 /// A fused version kept while its constituents are unchanged.
 struct Fused {

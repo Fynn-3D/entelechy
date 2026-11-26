@@ -109,8 +109,12 @@ Packages built from existing modes, with no engine feature of their own.
   and `.dds` containers in [formats](crates/interface/formats/src/texture.rs)
   and [import](crates/interface/import/src/texture.rs), native
   `TEXTURE_COMPRESSION_BC` multi-mip 2D and `Texture2DArray` residency with
-  multi-mip GPU-to-GPU compressed layer `join`, GPU compute 2D/2D-array/3D
-  mipmap generation (`MipGenPipelines`), hardware trilinear & 16x anisotropic
+  multi-mip GPU-to-GPU compressed layer `join`, 1-pass direct `textureStore`
+  GPU compute 2D/2D-array/3D mipmap chain generation (`MipGenPipelines`,
+  writing all mip levels directly into core-WebGPU storage-writable formats
+  `Rgba8Unorm`/`Rgba8Snorm`/`Rgba16Float`/`Rgba32Float`/`R32Float` in one
+  compute pass with zero staging buffer or per-level copies, retaining the
+  staging path for non-storage formats), hardware trilinear & 16x anisotropic
   samplers (`textureSampleLevel` / `textureSampleGrad`, optional
   `FLOAT32_FILTERABLE` with software mip fallback)
   ([texture](crates/backends/gpu/src/texture.rs),
@@ -181,7 +185,14 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
 
 - Fusion: [`fuse`](crates/core/ir/src/fuse.rs), `fuse_outputs`,
   `fuse_indexed` (a producer called at the rows its reader reads:
-  `offset_read`, `row_reads`) and `counted` (an input only counted);
+  `offset_read`, `row_reads`), `fuse_stencil` (a loop-free 2D `Grid`
+  producer read within a sound interval-analyzed halo radius `1..=2`
+  via `stencil_radius` / `stencil_radius_with_peers`, emitted as an
+  ordinary `#tile_r{R}_{k}(pos, dom)` IR helper that the GPU backend lowers
+  to cooperative `16x16`/`8x8` `var<workgroup>` shared-memory tile caching
+  with a uniform `workgroupBarrier()` within a `14 KiB` core-WebGPU budget
+  in [map](crates/backends/gpu/src/wgsl/map.rs)), and `counted` (an input
+  only counted);
   recognizes self-coordinate `at(grid_or_volume, coord())` reads as
   pointwise, fuses across all eight narrow storage encodings (`f16`,
   `unorm8`, `unorm16`, `snorm8`, `u8`, `i8`, `u16`, `i16`) by inserting
@@ -194,7 +205,8 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   and stops fusing past node, instruction and carried-word bounds
   ([composition](crates/core/graph/tests/composition.rs));
   bit-identical ([test](crates/backends/cpu/tests/fusion.rs), on every
-  backend [offset](crates/interface/session/tests/offset.rs)). A reduce,
+  backend [offset](crates/interface/session/tests/offset.rs), GPU tiled
+  stencil parity in [parity](crates/backends/gpu/tests/parity.rs)). A reduce,
   scan, scatter, prefix, group, async or native node is never fused.
 - A node placed as many times as a row says: `TimesRow` in the
   [graph](crates/core/graph/src/lib.rs), read in `expand_times`
@@ -222,16 +234,19 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   `LoadOp::Load` while recording a Phase-1 `alive` bitmask in the second
   half of `marks` so Phase 3 skips culled and Phase-1 triangles with a
   single bit test; `native.cover@1` seeds from prior canvas depth),
-  sample cutout `mask` inputs through the shared 2D tiled `DeviceImage`
-  hardware texture mirror (`textureSampleLevel` when `FLOAT32_FILTERABLE`
-  is available, tiled `textureLoad` otherwise) paired with a lazily cached
-  conservative `Rgba8Unorm` MIN/MAX alpha pyramid (`AlphaMinMaxPyramid`,
-  culling 100% transparent triangles and tagging provably opaque
-  micro-triangles in `small_rows` to bypass `mask_alpha`), apply exact
-  1-pixel-box coverage and depth rejection before compaction, dispatch
-  surviving micro-triangles via `dispatch_workgroups_indirect` with
-  Phase-1 `depth_tex` early-Z for cutout triangles, and resolve each
-  pixel with a single `fragment()` evaluation.
+  sample cutout `mask` inputs through a lazily cached 1-channel `R32Float`
+  alpha-only 2D tiled texture (4x lighter in texture cache than
+  `Rgba32Float`, extracted once alongside the conservative `Rgba8Unorm`
+  MIN/MAX alpha pyramid `AlphaMinMaxPyramid` in a single compute pass
+  without allocating a throwaway 1-mip color mirror; sampled via
+  `textureSampleLevel` when `FLOAT32_FILTERABLE` is available and tiled
+  `textureLoad` otherwise, culling 100% transparent triangles and tagging
+  provably opaque micro-triangles in `small_rows` to bypass `mask_alpha`),
+  load triangle clip words once per sort with row-hoisted micro-triangle
+  edge steps, apply exact 1-pixel-box coverage and depth rejection before
+  compaction, dispatch surviving micro-triangles via
+  `dispatch_workgroups_indirect` with Phase-1 `depth_tex` early-Z for cutout
+  triangles, and resolve each pixel with a single `fragment()` evaluation.
   The ray tracer (`native.trace@1` single-mesh, `native.trace@2` instanced
   multi-mesh) builds pure-Rust SAH BVHs on CPU/JIT
   ([rules](crates/core/rules/src/trace.rs)) and on GPU
@@ -298,9 +313,10 @@ avoids `select` ([prelude](crates/backends/gpu/src/wgsl/prelude.rs)).
   [modes](crates/backends/gpu/src/modes.rs),
   [later](crates/backends/gpu/src/later.rs)): per-node failure records and
   unclamped indirect-domain checks pack into one storage-aligned slab copied
-  once per batch and mapped immediately at submit time for that exact
-  submission index (preserving 2-frame overlap and letting `Submitted::wait`
-  skip redundant polls), `Pipeline.main` binds context, params, and failure
+  once per batch and mapped immediately at submit time on both native and
+  browser WebGPU (`Wait::parks_with_host`) targets (preserving 2-frame
+  overlap and letting `Submitted::wait` skip redundant waits once the batch
+  failure slab has resolved), `Pipeline.main` binds context, params, and failure
   storage with dynamic offsets backed by an evaluation-aged `BindGroupCache`
   and view-preserving `SpareMirrors` ([pool](crates/backends/gpu/src/pool.rs),
   [texture](crates/backends/gpu/src/texture.rs)), plain non-mipmapped

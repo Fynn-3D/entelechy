@@ -17,10 +17,32 @@ use crate::{
     validate,
 };
 
-/// Internal helper name emitted by [`fuse_outputs`] / [`fuse_indexed`] when a
-/// fused link crosses an [`Encoding::F16`] port, rounding IEEE-754 `f32 -> f16 -> f32`
-/// bit-for-bit identically to Host storage across every backend.
+/// Internal helper name emitted by [`fuse_outputs`] / [`fuse_indexed`] /
+/// [`fuse_stencil`] when a fused link crosses an [`Encoding::F16`] port,
+/// rounding IEEE-754 `f32 -> f16 -> f32` bit-for-bit identically to Host
+/// storage across every backend.
 pub const QUANTIZE_F16_FN: &str = "#quantize_f16";
+
+/// Prefix for internal helper functions emitted by [`fuse_stencil`]
+/// (`#tile_r{radius}_{slot}`), recognized by the GPU backend to cooperatively
+/// cache the producer's 2D tile + halo in workgroup shared memory.
+pub const TILE_FN_PREFIX: &str = "#tile_r";
+
+/// Maximum 2D stencil halo radius supported by [`stencil_radius`] and
+/// [`fuse_stencil`] (`1..=2`, covering 3x3 cross/box and 5x5 À-Trous stencils).
+pub const MAX_STENCIL_RADIUS: u32 = 2;
+
+/// Parses the halo radius `R` (`1..=MAX_STENCIL_RADIUS`) from a [`TILE_FN_PREFIX`]
+/// helper function name (`#tile_r{R}_{slot}`), returning `None` for any other name.
+pub fn tile_fn_radius(name: &str) -> Option<u32> {
+    let rest = name.strip_prefix(TILE_FN_PREFIX)?;
+    let (digits, suffix) = rest.split_once('_')?;
+    if suffix.is_empty() || !suffix.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let radius: u32 = digits.parse().ok()?;
+    (1..=MAX_STENCIL_RADIUS).contains(&radius).then_some(radius)
+}
 
 /// Why two modules cannot fuse.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -226,6 +248,526 @@ pub fn row_reads(module: &Module, input: u32) -> Option<usize> {
     let places: std::collections::BTreeSet<u32> =
         reads.addresses.iter().map(|address| address.0).collect();
     (!reads.refused && !places.is_empty()).then_some(places.len())
+}
+
+/// Sound interval analysis over a 2D `Grid` map's entry point: returns
+/// `Some(radius)` (`0..=MAX_STENCIL_RADIUS`) when every read of `input` is
+/// provably within integer offset `[-radius, +radius]` of `coord()` on both
+/// axes (optionally clamped to `[0, size(input) - 1]` / `[0, domain() - 1]`),
+/// with no helper-function reads and no filtered (`at_linear` / `at_repeat`)
+/// reads. `const_params` supplies known literal/default parameter values
+/// (excluding runtime-overridable graph parameters).
+pub fn stencil_radius(
+    module: &Module,
+    input: u32,
+    const_params: &BTreeMap<u32, Value>,
+) -> Option<u32> {
+    stencil_radius_with_peers(module, input, &[input], const_params)
+}
+
+/// Like [`stencil_radius`], also recognizing `size(peer)` for any input in
+/// `same_extent_inputs` (e.g. multiple outputs of the same producer) as the
+/// exact extent bound of `input`.
+pub fn stencil_radius_with_peers(
+    module: &Module,
+    input: u32,
+    same_extent_inputs: &[u32],
+    const_params: &BTreeMap<u32, Value>,
+) -> Option<u32> {
+    if module.manifest.mode != Mode::Map {
+        return None;
+    }
+    let is_grid = module
+        .manifest
+        .inputs
+        .get(input as usize)
+        .is_some_and(|port| port.shape() == crate::Shape::Grid);
+    let out_grid = module
+        .manifest
+        .outputs
+        .first()
+        .is_some_and(|port| port.shape() == crate::Shape::Grid);
+    if !is_grid || !out_grid {
+        return None;
+    }
+    let mut in_functions = InputUse::default();
+    for function in &module.functions {
+        let mut coords = BTreeSet::new();
+        use_in(&function.body, input, false, &mut coords, &mut in_functions);
+    }
+    if in_functions.sampled || in_functions.addressed {
+        return None;
+    }
+    let mut scan = StencilScan {
+        input,
+        same_extent_inputs,
+        const_params,
+        defs: BTreeMap::new(),
+        loop_indices: Vec::new(),
+        saw_read: false,
+        max_radius: 0,
+        refused: false,
+    };
+    scan.walk(&module.entry.body);
+    (!scan.refused && scan.saw_read && scan.max_radius <= MAX_STENCIL_RADIUS)
+        .then_some(scan.max_radius)
+}
+
+/// Whether stencil-fusing `input` of `module` requires extent params (`#count`
+/// / `#size`) because `module` calls `count(input)` anywhere or `size(input)`
+/// inside a helper function (where `Op::Domain` is disallowed).
+pub fn stencil_needs_extent(module: &Module, input: u32) -> bool {
+    fn walk(body: &[Instruction], input: u32, in_fn: bool) -> bool {
+        for instr in body {
+            match &instr.op {
+                Op::Count(i) if *i == input => return true,
+                Op::Size(i) if *i == input && in_fn => return true,
+                op => {
+                    if op.blocks().iter().any(|b| walk(&b.body, input, in_fn)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+    module.functions.iter().any(|f| walk(&f.body, input, true))
+        || walk(&module.entry.body, input, false)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Interval {
+    lo: i64,
+    hi: i64,
+}
+
+impl Interval {
+    const fn point(v: i64) -> Self {
+        Self { lo: v, hi: v }
+    }
+
+    fn join(self, other: Self) -> Self {
+        Self {
+            lo: self.lo.min(other.lo),
+            hi: self.hi.max(other.hi),
+        }
+    }
+
+    fn add(self, other: Self) -> Option<Self> {
+        Some(Self {
+            lo: self.lo.checked_add(other.lo)?,
+            hi: self.hi.checked_add(other.hi)?,
+        })
+    }
+
+    fn sub(self, other: Self) -> Option<Self> {
+        Some(Self {
+            lo: self.lo.checked_sub(other.hi)?,
+            hi: self.hi.checked_sub(other.lo)?,
+        })
+    }
+
+    fn mul(self, other: Self) -> Option<Self> {
+        let p0 = self.lo.checked_mul(other.lo)?;
+        let p1 = self.lo.checked_mul(other.hi)?;
+        let p2 = self.hi.checked_mul(other.lo)?;
+        let p3 = self.hi.checked_mul(other.hi)?;
+        Some(Self {
+            lo: p0.min(p1).min(p2).min(p3),
+            hi: p0.max(p1).max(p2).max(p3),
+        })
+    }
+
+    fn neg(self) -> Option<Self> {
+        Some(Self {
+            lo: self.hi.checked_neg()?,
+            hi: self.lo.checked_neg()?,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Axis {
+    Const(Interval),
+    Coord(Interval),
+    MaxCoord,
+    Extent,
+    Unknown,
+}
+
+impl Axis {
+    fn join(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Const(a), Self::Const(b)) => Self::Const(a.join(b)),
+            (Self::Coord(a), Self::Coord(b)) => Self::Coord(a.join(b)),
+            (Self::MaxCoord, Self::MaxCoord) => Self::MaxCoord,
+            (Self::Extent, Self::Extent) => Self::Extent,
+            _ => Self::Unknown,
+        }
+    }
+
+    fn is_zero(self) -> bool {
+        self == Self::Const(Interval::point(0))
+    }
+
+    fn is_one(self) -> bool {
+        self == Self::Const(Interval::point(1))
+    }
+
+    fn is_neg_one(self) -> bool {
+        self == Self::Const(Interval::point(-1))
+    }
+
+    fn add(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Const(a), Self::Const(b)) => a.add(b).map_or(Self::Unknown, Self::Const),
+            (Self::Coord(a), Self::Const(b)) | (Self::Const(b), Self::Coord(a)) => {
+                a.add(b).map_or(Self::Unknown, Self::Coord)
+            }
+            (Self::Extent, b) if b.is_neg_one() => Self::MaxCoord,
+            (a, Self::Extent) if a.is_neg_one() => Self::MaxCoord,
+            _ => Self::Unknown,
+        }
+    }
+
+    fn sub(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Const(a), Self::Const(b)) => a.sub(b).map_or(Self::Unknown, Self::Const),
+            (Self::Coord(a), Self::Const(b)) => a.sub(b).map_or(Self::Unknown, Self::Coord),
+            (Self::Extent, b) if b.is_one() => Self::MaxCoord,
+            _ => Self::Unknown,
+        }
+    }
+
+    fn mul(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Const(a), Self::Const(b)) => a.mul(b).map_or(Self::Unknown, Self::Const),
+            _ => Self::Unknown,
+        }
+    }
+
+    fn div_int(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Const(a), Self::Const(b)) if a.lo >= 0 && b.lo == b.hi && b.lo > 0 => {
+                Self::Const(Interval {
+                    lo: a.lo / b.lo,
+                    hi: a.hi / b.lo,
+                })
+            }
+            _ => Self::Unknown,
+        }
+    }
+
+    fn rem_int(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Const(a), Self::Const(b)) if a.lo >= 0 && b.lo == b.hi && b.lo > 0 => {
+                let d = b.lo;
+                if a.hi - a.lo < d && a.lo / d == a.hi / d {
+                    Self::Const(Interval {
+                        lo: a.lo % d,
+                        hi: a.hi % d,
+                    })
+                } else {
+                    Self::Const(Interval { lo: 0, hi: d - 1 })
+                }
+            }
+            _ => Self::Unknown,
+        }
+    }
+
+    fn clamp(self, lo: Self, hi: Self) -> Self {
+        match (self, lo, hi) {
+            (Self::Coord(iv), lo, Self::MaxCoord) if lo.is_zero() => Self::Coord(iv),
+            (Self::Const(v), Self::Const(l), Self::Const(h)) if l.lo == l.hi && h.lo == h.hi => {
+                Self::Const(Interval {
+                    lo: v.lo.clamp(l.lo, h.lo),
+                    hi: v.hi.clamp(l.lo, h.lo),
+                })
+            }
+            _ => Self::Unknown,
+        }
+    }
+
+    fn min(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Coord(iv), Self::MaxCoord) | (Self::MaxCoord, Self::Coord(iv)) => {
+                Self::Coord(iv)
+            }
+            (Self::Const(a), Self::Const(b)) => Self::Const(Interval {
+                lo: a.lo.min(b.lo),
+                hi: a.hi.min(b.hi),
+            }),
+            _ => Self::Unknown,
+        }
+    }
+
+    fn max(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Coord(iv), b) if b.is_zero() => Self::Coord(iv),
+            (a, Self::Coord(iv)) if a.is_zero() => Self::Coord(iv),
+            (Self::Const(a), Self::Const(b)) => Self::Const(Interval {
+                lo: a.lo.max(b.lo),
+                hi: a.hi.max(b.hi),
+            }),
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum AbsVal {
+    Scalar(Axis),
+    Vec2(Axis, Axis),
+    Unknown,
+}
+
+impl AbsVal {
+    fn from_float(f: f32) -> Axis {
+        if f.is_finite() && f.fract() == 0.0 && f.abs() <= 1_000_000.0 {
+            Axis::Const(Interval::point(f as i64))
+        } else {
+            Axis::Unknown
+        }
+    }
+
+    fn from_value(val: &Value) -> Self {
+        match val {
+            Value::Int(n) => Self::Scalar(Axis::Const(Interval::point(i64::from(*n)))),
+            Value::Float(f) => Self::Scalar(Self::from_float(*f)),
+            Value::Vec2([x, y]) => Self::Vec2(Self::from_float(*x), Self::from_float(*y)),
+            Value::IVec2([x, y]) => Self::Vec2(
+                Axis::Const(Interval::point(i64::from(*x))),
+                Axis::Const(Interval::point(i64::from(*y))),
+            ),
+            _ => Self::Unknown,
+        }
+    }
+
+    fn join(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Scalar(a), Self::Scalar(b)) => Self::Scalar(a.join(b)),
+            (Self::Vec2(ax, ay), Self::Vec2(bx, by)) => Self::Vec2(ax.join(bx), ay.join(by)),
+            _ => Self::Unknown,
+        }
+    }
+
+    fn scalar(self) -> Axis {
+        match self {
+            Self::Scalar(a) => a,
+            _ => Axis::Unknown,
+        }
+    }
+
+    fn map_axes(self, f: impl Fn(Axis) -> Axis) -> Self {
+        match self {
+            Self::Scalar(a) => Self::Scalar(f(a)),
+            Self::Vec2(x, y) => Self::Vec2(f(x), f(y)),
+            Self::Unknown => Self::Unknown,
+        }
+    }
+
+    fn zip2(self, other: Self, f: impl Fn(Axis, Axis) -> Axis) -> Self {
+        match (self, other) {
+            (Self::Scalar(a), Self::Scalar(b)) => Self::Scalar(f(a, b)),
+            (Self::Vec2(ax, ay), Self::Vec2(bx, by)) => Self::Vec2(f(ax, bx), f(ay, by)),
+            (Self::Vec2(ax, ay), Self::Scalar(b)) => Self::Vec2(f(ax, b), f(ay, b)),
+            (Self::Scalar(a), Self::Vec2(bx, by)) => Self::Vec2(f(a, bx), f(a, by)),
+            _ => Self::Unknown,
+        }
+    }
+
+    fn zip3(self, b: Self, c: Self, f: impl Fn(Axis, Axis, Axis) -> Axis) -> Self {
+        match (self, b, c) {
+            (Self::Scalar(va), Self::Scalar(vb), Self::Scalar(vc)) => Self::Scalar(f(va, vb, vc)),
+            (Self::Vec2(ax, ay), b, c) => {
+                let (bx, by) = match b {
+                    Self::Vec2(x, y) => (x, y),
+                    Self::Scalar(s) => (s, s),
+                    Self::Unknown => return Self::Unknown,
+                };
+                let (cx, cy) = match c {
+                    Self::Vec2(x, y) => (x, y),
+                    Self::Scalar(s) => (s, s),
+                    Self::Unknown => return Self::Unknown,
+                };
+                Self::Vec2(f(ax, bx, cx), f(ay, by, cy))
+            }
+            _ => Self::Unknown,
+        }
+    }
+}
+
+struct StencilScan<'a> {
+    input: u32,
+    same_extent_inputs: &'a [u32],
+    const_params: &'a BTreeMap<u32, Value>,
+    defs: BTreeMap<u32, AbsVal>,
+    loop_indices: Vec<Interval>,
+    saw_read: bool,
+    max_radius: u32,
+    refused: bool,
+}
+
+impl<'a> StencilScan<'a> {
+    fn get(&self, id: ValueId) -> AbsVal {
+        self.defs.get(&id.0).copied().unwrap_or(AbsVal::Unknown)
+    }
+
+    fn check_addr(&mut self, addr: ValueId) {
+        match self.get(addr) {
+            AbsVal::Vec2(Axis::Coord(ix), Axis::Coord(iy)) => {
+                let r = ix
+                    .lo
+                    .unsigned_abs()
+                    .max(ix.hi.unsigned_abs())
+                    .max(iy.lo.unsigned_abs())
+                    .max(iy.hi.unsigned_abs());
+                if r <= u64::from(MAX_STENCIL_RADIUS) {
+                    self.saw_read = true;
+                    self.max_radius = self.max_radius.max(r as u32);
+                } else {
+                    self.refused = true;
+                }
+            }
+            _ => self.refused = true,
+        }
+    }
+
+    fn walk(&mut self, instructions: &[Instruction]) {
+        for instr in instructions {
+            let val = match &instr.op {
+                Op::Coord if instr.ty == Type::Vec2 => AbsVal::Vec2(
+                    Axis::Coord(Interval::point(0)),
+                    Axis::Coord(Interval::point(0)),
+                ),
+                Op::Domain if instr.ty == Type::Vec2 => AbsVal::Vec2(Axis::Extent, Axis::Extent),
+                Op::Size(i) if *i == self.input || self.same_extent_inputs.contains(i) => {
+                    AbsVal::Vec2(Axis::Extent, Axis::Extent)
+                }
+                Op::Const(v) => AbsVal::from_value(v),
+                Op::Param(k) => self
+                    .const_params
+                    .get(k)
+                    .map_or(AbsVal::Unknown, AbsVal::from_value),
+                Op::Index => self
+                    .loop_indices
+                    .last()
+                    .copied()
+                    .map_or(AbsVal::Unknown, |iv| AbsVal::Scalar(Axis::Const(iv))),
+                Op::Extract(src, k) => match (self.get(*src), *k) {
+                    (AbsVal::Vec2(x, _), 0) => AbsVal::Scalar(x),
+                    (AbsVal::Vec2(_, y), 1) => AbsVal::Scalar(y),
+                    _ => AbsVal::Unknown,
+                },
+                Op::Construct(args)
+                    if args.len() == 2 && matches!(instr.ty, Type::Vec2 | Type::IVec2) =>
+                {
+                    AbsVal::Vec2(self.get(args[0]).scalar(), self.get(args[1]).scalar())
+                }
+                Op::Unary(crate::UnaryOp::Neg, a) => self.get(*a).map_axes(|ax| match ax {
+                    Axis::Const(iv) => iv.neg().map_or(Axis::Unknown, Axis::Const),
+                    _ => Axis::Unknown,
+                }),
+                Op::Binary(op, a, b) => {
+                    let (va, vb) = (self.get(*a), self.get(*b));
+                    match op {
+                        BinaryOp::Add => va.zip2(vb, Axis::add),
+                        BinaryOp::Sub => va.zip2(vb, Axis::sub),
+                        BinaryOp::Mul => va.zip2(vb, Axis::mul),
+                        BinaryOp::Div if instr.ty.is_int_kind() => va.zip2(vb, Axis::div_int),
+                        BinaryOp::Rem if instr.ty.is_int_kind() => va.zip2(vb, Axis::rem_int),
+                        _ => AbsVal::Unknown,
+                    }
+                }
+                Op::Intrinsic(intr, args) => match (intr, args.as_slice()) {
+                    (
+                        Intrinsic::ToFloat
+                        | Intrinsic::ToInt
+                        | Intrinsic::Floor
+                        | Intrinsic::Ceil
+                        | Intrinsic::Round
+                        | Intrinsic::Trunc,
+                        [a],
+                    ) => self.get(*a),
+                    (Intrinsic::AddWrap, [a, b]) => self.get(*a).zip2(self.get(*b), Axis::add),
+                    (Intrinsic::SubWrap, [a, b]) => self.get(*a).zip2(self.get(*b), Axis::sub),
+                    (Intrinsic::MulWrap, [a, b]) => self.get(*a).zip2(self.get(*b), Axis::mul),
+                    (Intrinsic::Clamp, [v, lo, hi]) => {
+                        self.get(*v).zip3(self.get(*lo), self.get(*hi), Axis::clamp)
+                    }
+                    (Intrinsic::Min, [a, b]) => self.get(*a).zip2(self.get(*b), Axis::min),
+                    (Intrinsic::Max, [a, b]) => self.get(*a).zip2(self.get(*b), Axis::max),
+                    _ => AbsVal::Unknown,
+                },
+                Op::Sample(i)
+                | Op::Part {
+                    input: i, at: None, ..
+                } if *i == self.input => {
+                    self.saw_read = true;
+                    AbsVal::Unknown
+                }
+                Op::At(i, addr)
+                | Op::Part {
+                    input: i,
+                    at: Some(addr),
+                    ..
+                } if *i == self.input => {
+                    self.check_addr(*addr);
+                    AbsVal::Unknown
+                }
+                Op::AtLinear(i, _) | Op::AtFiltered { input: i, .. } if *i == self.input => {
+                    self.refused = true;
+                    AbsVal::Unknown
+                }
+                Op::If {
+                    then, otherwise, ..
+                } => {
+                    self.walk(&then.body);
+                    self.walk(&otherwise.body);
+                    self.get(then.result).join(self.get(otherwise.result))
+                }
+                Op::Match {
+                    arms, otherwise, ..
+                } => {
+                    for (_, block) in arms {
+                        self.walk(&block.body);
+                    }
+                    self.walk(&otherwise.body);
+                    let mut acc = self.get(otherwise.result);
+                    for (_, block) in arms {
+                        acc = acc.join(self.get(block.result));
+                    }
+                    acc
+                }
+                Op::Loop {
+                    count, until, body, ..
+                } => {
+                    let hi = i64::from(*count).saturating_sub(1).max(0);
+                    self.loop_indices.push(Interval { lo: 0, hi });
+                    if let Some(until) = until {
+                        self.walk(&until.body);
+                    }
+                    self.walk(&body.body);
+                    self.loop_indices.pop();
+                    AbsVal::Unknown
+                }
+                Op::Each { count, body } => {
+                    let hi = i64::from(*count).saturating_sub(1).max(0);
+                    self.loop_indices.push(Interval { lo: 0, hi });
+                    self.walk(&body.body);
+                    self.loop_indices.pop();
+                    AbsVal::Unknown
+                }
+                op => {
+                    for block in op.blocks() {
+                        self.walk(&block.body);
+                    }
+                    AbsVal::Unknown
+                }
+            };
+            self.defs.insert(instr.id.0, val);
+        }
+    }
 }
 
 /// The entry's reads of one input, and every value's definition.
@@ -528,6 +1070,28 @@ pub fn fuse_indexed(
     fuse_links(consumer, links, producer, prefix, Reading::Indexed)
 }
 
+/// Fuses `producer` into `consumer` as a 2D stencil helper `#tile_r{radius}_{k}`:
+/// every read of a linked 2D `Grid` input (proven within halo `radius` by
+/// [`stencil_radius`]) becomes a clamped call to `#tile_r{radius}_{k}(pos, dom)`.
+/// On CPU/JIT this runs as ordinary validated IR; on GPU the WGSL emitter
+/// cooperatively fills a `var<workgroup>` tile + halo before `workgroupBarrier()`
+/// so every neighbor tap hits fast on-chip SRAM with zero intermediate DRAM I/O.
+pub fn fuse_stencil(
+    consumer: &Module,
+    links: &[(u32, u32)],
+    producer: &Module,
+    prefix: &str,
+    radius: u32,
+) -> Result<Validated, FuseError> {
+    fuse_links(
+        consumer,
+        links,
+        producer,
+        prefix,
+        Reading::Stencil { radius },
+    )
+}
+
 /// How a fused consumer reads its producer.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Reading {
@@ -536,6 +1100,33 @@ enum Reading {
     /// At addresses: the producer's body is a function of the row, called
     /// where the consumer reads.
     Indexed,
+    /// At 2D `Grid` neighborhood offsets within `[-radius, +radius]` of
+    /// `coord()`: the producer's body becomes a `#tile_r{radius}_{k}(pos, dom)`
+    /// function that the GPU caches in workgroup shared memory.
+    Stencil { radius: u32 },
+}
+
+fn body_uses_element(instructions: &[Instruction]) -> bool {
+    instructions.iter().any(|instr| {
+        matches!(instr.op, Op::Element)
+            || instr
+                .op
+                .blocks()
+                .iter()
+                .any(|block| body_uses_element(&block.body))
+    })
+}
+
+fn next_tile_slot(functions: &[Function]) -> u32 {
+    functions
+        .iter()
+        .filter_map(|f| {
+            let rest = f.name.strip_prefix(TILE_FN_PREFIX)?;
+            let (_, suffix) = rest.split_once('_')?;
+            suffix.parse::<u32>().ok()
+        })
+        .max()
+        .map_or(0, |m| m + 1)
 }
 
 fn fuse_links(
@@ -574,6 +1165,35 @@ fn fuse_links(
                     "consumer reads input `{name}` otherwise than at addresses written in its entry outside any loop"
                 )));
             }
+            Reading::Stencil { radius } => {
+                if !(1..=MAX_STENCIL_RADIUS).contains(&radius) {
+                    return Err(FuseError::new(format!(
+                        "stencil radius {radius} is outside 1..={MAX_STENCIL_RADIUS}"
+                    )));
+                }
+                if consumer_manifest.inputs[*input as usize].shape() != crate::Shape::Grid {
+                    return Err(FuseError::new(format!(
+                        "stencil fusion requires a Grid input, but `{name}` is {}",
+                        consumer_manifest.inputs[*input as usize].shape()
+                    )));
+                }
+                let mut in_functions = InputUse::default();
+                for function in &consumer.functions {
+                    let mut coords = BTreeSet::new();
+                    use_in(
+                        &function.body,
+                        *input,
+                        false,
+                        &mut coords,
+                        &mut in_functions,
+                    );
+                }
+                if in_functions.sampled || in_functions.addressed {
+                    return Err(FuseError::new(format!(
+                        "consumer reads stencil input `{name}` inside a helper function"
+                    )));
+                }
+            }
             _ => {}
         }
     }
@@ -587,6 +1207,31 @@ fn fuse_links(
     if consumer.manifest.mode != Mode::Map || producer.manifest.mode != Mode::Map {
         return Err(FuseError::new(
             "only map Kernels fuse; reductions and scans run on their own".into(),
+        ));
+    }
+    let producer_has_tile = producer
+        .functions
+        .iter()
+        .any(|f| tile_fn_radius(&f.name).is_some());
+    if producer_has_tile
+        && (reading != Reading::Pointwise
+            || consumer_manifest
+                .outputs
+                .first()
+                .is_none_or(|p| p.shape() != crate::Shape::Grid))
+    {
+        return Err(FuseError::declined(
+            "a tiled stencil Kernel fuses downstream only into a pointwise Grid consumer".into(),
+        ));
+    }
+    if matches!(reading, Reading::Stencil { .. })
+        && consumer_manifest
+            .outputs
+            .first()
+            .is_none_or(|p| p.shape() != crate::Shape::Grid)
+    {
+        return Err(FuseError::new(
+            "stencil fusion requires a 2D Grid consumer output".into(),
         ));
     }
     // Ports match by shape and layout; struct indices are module-local.
@@ -699,11 +1344,22 @@ fn fuse_links(
         producer_params.push(index);
     }
     // The producer's extent, for a count or size of a linked input and for
-    // the producer's own element in an indexed fusion.
+    // the producer's own element in an indexed fusion. Stencil fusion passes
+    // `Op::Domain` directly into `#tile_r*` and only allocates extent params
+    // when the consumer uses `count(input)` or `size(input)` in a helper fn.
     let counted_links = links
         .iter()
         .any(|(input, _)| input_use(consumer, *input).counted);
-    let extent = (reading == Reading::Indexed || counted_links).then(|| {
+    let stencil_extent = matches!(reading, Reading::Stencil { .. })
+        && links
+            .iter()
+            .any(|(input, _)| stencil_needs_extent(consumer, *input));
+    let needs_extent = match reading {
+        Reading::Pointwise => counted_links,
+        Reading::Indexed => true,
+        Reading::Stencil { .. } => stencil_extent,
+    };
+    let extent = needs_extent.then(|| {
         let shape = producer_manifest.outputs[links[0].1 as usize].shape();
         extent_pair(&mut params, prefix, shape)
     });
@@ -727,11 +1383,14 @@ fn fuse_links(
     };
 
     // Consumer ops: inputs after a fused one move down, and a fused one's
-    // count and size are the extent's params.
+    // count and size are the extent's params (or `Op::Domain` for Grid `size`
+    // in a stencil consumer's entry).
+    let is_stencil = matches!(reading, Reading::Stencil { .. });
     let consumer_ops = |op: &Op| -> Op {
         match (op, extent) {
             (Op::Count(i), Some((count, _))) if removed.contains(i) => Op::Param(count),
             (Op::Size(i), Some((_, size))) if removed.contains(i) => Op::Param(size),
+            (Op::Size(i), None) if is_stencil && removed.contains(i) => Op::Domain,
             _ => shift_inputs(op, |i| {
                 i - removed.iter().filter(|gone| **gone < i).count() as u32
             }),
@@ -756,11 +1415,15 @@ fn fuse_links(
             renumber.function(function)
         })
         .collect();
+    let mut tile_slot = next_tile_slot(&functions);
     functions.extend(producer.functions.iter().map(|function| {
         let mut renumber = Renumber::new(&producer_ops, &shift_struct, BTreeMap::new());
         // `function` has already shifted the argument types.
         let mut fused = renumber.function(function);
-        if function.name != QUANTIZE_F16_FN {
+        if let Some(radius) = tile_fn_radius(&function.name) {
+            fused.name = format!("{TILE_FN_PREFIX}{radius}_{tile_slot}");
+            tile_slot += 1;
+        } else if function.name != QUANTIZE_F16_FN {
             fused.name = rename(&function.name);
         }
         fused
@@ -904,6 +1567,126 @@ fn fuse_links(
             let mut consumer_renumber = Renumber::new(&consumer_ops, &identity, BTreeMap::new());
             consumer_renumber.called = called;
             consumer_renumber.count = count;
+            consumer_renumber.structs = Some(&structs);
+            let body = consumer_renumber.block(&consumer.entry.body);
+            let results = consumer_renumber.results(&consumer.entry.results);
+            let bindings = consumer_renumber.bindings(&consumer.entry.bindings);
+            (body, results, bindings)
+        }
+        Reading::Stencil { radius } => {
+            // Collect unique producer outputs actually read by the consumer.
+            let mut unique_outputs: Vec<u32> = Vec::new();
+            for &(input, output) in links {
+                let u = input_use(consumer, input);
+                if (u.sampled || u.addressed) && !unique_outputs.contains(&output) {
+                    unique_outputs.push(output);
+                }
+            }
+            if unique_outputs.is_empty() {
+                return Err(FuseError::declined(
+                    "stencil fusion requires at least one read linked input".into(),
+                ));
+            }
+            let slot = tile_slot;
+            let mut renumber = Renumber::new(&producer_ops, &shift_struct, BTreeMap::new());
+            let pos = ValueId(0);
+            let dom = ValueId(1);
+            let mut tile_body = vec![
+                Instruction {
+                    id: pos,
+                    ty: Type::Vec2,
+                    op: Op::Arg(0),
+                },
+                Instruction {
+                    id: dom,
+                    ty: Type::Vec2,
+                    op: Op::Arg(1),
+                },
+            ];
+            renumber.next = 2;
+            renumber.tile_pos = Some(pos);
+            renumber.tile_dom = Some(dom);
+            if body_uses_element(&producer.entry.body) {
+                let mut b = IrBuilder {
+                    out: &mut tile_body,
+                    next: &mut renumber.next,
+                };
+                let w_f = b.push(Type::Float, Op::Extract(dom, 0));
+                let w_i = b.intr(Type::Int, Intrinsic::ToInt, vec![w_f]);
+                let px_f = b.push(Type::Float, Op::Extract(pos, 0));
+                let px_i = b.intr(Type::Int, Intrinsic::ToInt, vec![px_f]);
+                let py_f = b.push(Type::Float, Op::Extract(pos, 1));
+                let py_i = b.intr(Type::Int, Intrinsic::ToInt, vec![py_f]);
+                let row = b.intr(Type::Int, Intrinsic::MulWrap, vec![py_i, w_i]);
+                let elem = b.intr(Type::Int, Intrinsic::AddWrap, vec![row, px_i]);
+                renumber.tile_elem = Some(elem);
+            }
+            tile_body.extend(renumber.block(&producer.entry.body));
+            let mut quantized = Vec::with_capacity(unique_outputs.len());
+            for &out_idx in &unique_outputs {
+                let output_port = &producer_manifest.outputs[out_idx as usize];
+                let element = shift_struct(output_port.element());
+                let raw = renumber.map(producer.entry.results[out_idx as usize]);
+                let value = if output_port.ty.schema.is_wide() {
+                    raw
+                } else {
+                    emit_quantize_value(
+                        &mut tile_body,
+                        &mut renumber.next,
+                        raw,
+                        element,
+                        &output_port.ty.schema,
+                        &structs,
+                        quantize_f16_fn,
+                    )
+                };
+                quantized.push((value, element));
+            }
+            let (tile_ret_ty, tile_result) = if quantized.len() == 1 {
+                (quantized[0].1, quantized[0].0)
+            } else {
+                let struct_idx = structs.len() as u32;
+                structs.push(StructDef {
+                    name: format!("#tile_out_{slot}"),
+                    fields: quantized
+                        .iter()
+                        .enumerate()
+                        .map(|(k, &(_, ty))| crate::Field {
+                            name: format!("o{k}"),
+                            ty,
+                        })
+                        .collect(),
+                    element: None,
+                });
+                let ty = Type::Struct(struct_idx);
+                let id = ValueId(renumber.next);
+                renumber.next += 1;
+                tile_body.push(Instruction {
+                    id,
+                    ty,
+                    op: Op::Construct(quantized.iter().map(|&(v, _)| v).collect()),
+                });
+                (ty, id)
+            };
+            let tile_fn = functions.len() as u32;
+            functions.push(Function {
+                name: format!("{TILE_FN_PREFIX}{radius}_{slot}"),
+                args: vec![Type::Vec2, Type::Vec2],
+                body: tile_body,
+                results: vec![tile_result],
+                bindings: producer_bindings(&renumber),
+            });
+            let mut stencil = BTreeMap::new();
+            for &(input, output) in links {
+                if let Some(field_pos) = unique_outputs.iter().position(|&o| o == output) {
+                    let element =
+                        shift_struct(producer_manifest.outputs[output as usize].element());
+                    let field = (unique_outputs.len() > 1).then_some(field_pos as u32);
+                    stencil.insert(input, (tile_fn, tile_ret_ty, field, element));
+                }
+            }
+            let mut consumer_renumber = Renumber::new(&consumer_ops, &identity, BTreeMap::new());
+            consumer_renumber.stencil = stencil;
             consumer_renumber.structs = Some(&structs);
             let body = consumer_renumber.block(&consumer.entry.body);
             let results = consumer_renumber.results(&consumer.entry.results);
@@ -1430,6 +2213,13 @@ struct Renumber<'a> {
     /// Inputs whose reads become calls: the function computing the
     /// element at a row, and the element's type.
     called: BTreeMap<u32, (u32, Type)>,
+    /// Inputs whose reads become 2D stencil tile calls:
+    /// `(tile_fn, tile_ret_ty, optional_struct_field, element_ty)`.
+    stencil: BTreeMap<u32, (u32, Type, Option<u32>, Type)>,
+    /// Cached tile calls per enclosing block, keyed by `(tile_fn, optional_mapped_addr)`
+    /// (`None` for self-coord `Op::Sample` reads), so multi-output producers
+    /// evaluate once per unique address.
+    tile_calls: Vec<BTreeMap<(u32, Option<u32>), ValueId>>,
     /// The param holding those inputs' count.
     count: u32,
     /// The calls made, by input and address, in each enclosing block.
@@ -1437,6 +2227,11 @@ struct Renumber<'a> {
     /// In a function of the row, the row: the element, and where its own
     /// samples read.
     own: Option<ValueId>,
+    /// In a stencil `#tile_r*` function: the evaluated 2D coordinate, domain,
+    /// and computed flat element index.
+    tile_pos: Option<ValueId>,
+    tile_dom: Option<ValueId>,
+    tile_elem: Option<ValueId>,
     /// The structs such a path is read against.
     structs: Option<&'a [StructDef]>,
     /// Original value ids in the consumer's entry that evaluate `Op::Coord`,
@@ -1457,9 +2252,14 @@ impl<'a> Renumber<'a> {
             types,
             replace,
             called: BTreeMap::new(),
+            stencil: BTreeMap::new(),
+            tile_calls: vec![BTreeMap::new()],
             count: 0,
             calls: vec![BTreeMap::new()],
             own: None,
+            tile_pos: None,
+            tile_dom: None,
+            tile_elem: None,
             structs: None,
             coords: BTreeSet::new(),
         }
@@ -1493,12 +2293,58 @@ impl<'a> Renumber<'a> {
 
     fn nested(&mut self, block: &Block) -> Block {
         self.calls.push(BTreeMap::new());
+        self.tile_calls.push(BTreeMap::new());
         let body = self.block(&block.body);
         self.calls.pop();
+        self.tile_calls.pop();
         Block {
             body,
             result: self.map(block.result),
         }
+    }
+
+    /// Calls `tile_fn(clamped_pos, domain())` once per unique `(tile_fn, address)`
+    /// within the enclosing block scopes.
+    fn tile_call(
+        &mut self,
+        out: &mut Vec<Instruction>,
+        tile_fn: u32,
+        tile_ret_ty: Type,
+        address: Option<ValueId>,
+        is_exact_coord: bool,
+    ) -> ValueId {
+        let key = (tile_fn, address.map(|a| a.0));
+        if let Some(value) = self
+            .tile_calls
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(&key))
+        {
+            return *value;
+        }
+        let dom = self.push(out, Type::Vec2, Op::Domain);
+        let pos = match address {
+            None => self.push(out, Type::Vec2, Op::Coord),
+            Some(addr) if is_exact_coord => addr,
+            Some(addr) => {
+                let floored =
+                    self.push(out, Type::Vec2, Op::Intrinsic(Intrinsic::Floor, vec![addr]));
+                let zero = self.push(out, Type::Vec2, Op::Const(Value::Vec2([0.0, 0.0])));
+                let one = self.push(out, Type::Vec2, Op::Const(Value::Vec2([1.0, 1.0])));
+                let hi = self.push(out, Type::Vec2, Op::Binary(BinaryOp::Sub, dom, one));
+                self.push(
+                    out,
+                    Type::Vec2,
+                    Op::Intrinsic(Intrinsic::Clamp, vec![floored, zero, hi]),
+                )
+            }
+        };
+        let value = self.push(out, tile_ret_ty, Op::Call(tile_fn, vec![pos, dom]));
+        self.tile_calls
+            .last_mut()
+            .expect("a block's tile calls")
+            .insert(key, value);
+        value
     }
 
     /// Appends an instruction with the next id.
@@ -1622,6 +2468,77 @@ impl<'a> Renumber<'a> {
                 };
                 self.ids.insert(instruction.id.0, source.0);
                 continue;
+            }
+            // A read of a stenciled Grid input becomes a call to `#tile_r*`.
+            let stencil_read = match &instruction.op {
+                Op::Sample(i) => Some((*i, None, None)),
+                Op::At(i, address) => Some((*i, Some(*address), None)),
+                Op::Part { input: i, at, path } => Some((*i, *at, Some(path))),
+                _ => None,
+            };
+            if let Some((i, orig_addr, path)) = stencil_read
+                && let Some(&(tile_fn, tile_ret_ty, field, elem_ty)) = self.stencil.get(&i)
+            {
+                let exact = orig_addr.is_none_or(|a| self.coords.contains(&a.0));
+                let mapped_addr = orig_addr.map(|a| self.map(a));
+                let tile_val = self.tile_call(&mut out, tile_fn, tile_ret_ty, mapped_addr, exact);
+                let value = match field {
+                    Some(k) => self.push(&mut out, elem_ty, Op::Extract(tile_val, k)),
+                    None => tile_val,
+                };
+                let source = match path {
+                    Some(path) => self.part(&mut out, value, elem_ty, path),
+                    None => value,
+                };
+                self.ids.insert(instruction.id.0, source.0);
+                continue;
+            }
+            // In a stencil `#tile_r*` helper function, `coord()`, `domain()`,
+            // `element()`, and `sample()` evaluate at the passed `(pos, dom)`.
+            if let Some(tile_pos) = self.tile_pos {
+                match &instruction.op {
+                    Op::Coord => {
+                        self.ids.insert(instruction.id.0, tile_pos.0);
+                        continue;
+                    }
+                    Op::Domain => {
+                        let dom = self.tile_dom.expect("tile domain arg");
+                        self.ids.insert(instruction.id.0, dom.0);
+                        continue;
+                    }
+                    Op::Element => {
+                        let elem = self.tile_elem.expect("tile element computed");
+                        self.ids.insert(instruction.id.0, elem.0);
+                        continue;
+                    }
+                    Op::Sample(i) => {
+                        let op = (self.ops)(&Op::At(*i, tile_pos));
+                        let id = self.push(&mut out, (self.types)(instruction.ty), op);
+                        self.ids.insert(instruction.id.0, id.0);
+                        continue;
+                    }
+                    Op::Part {
+                        input: i,
+                        at: None,
+                        path,
+                    } => {
+                        let mut path = path.clone();
+                        for step in &mut path {
+                            if let Step::Index(index) = step {
+                                *index = self.map(*index);
+                            }
+                        }
+                        let op = (self.ops)(&Op::Part {
+                            input: *i,
+                            at: Some(tile_pos),
+                            path,
+                        });
+                        let id = self.push(&mut out, (self.types)(instruction.ty), op);
+                        self.ids.insert(instruction.id.0, id.0);
+                        continue;
+                    }
+                    _ => {}
+                }
             }
             // In a function of the row, the element is the row, and a
             // sample of the producer's own input reads there.

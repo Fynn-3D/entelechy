@@ -564,10 +564,12 @@ fn a_clocked_frames_device_time_is_shared_out_to_the_nodes_that_ran() {
     let dir = std::env::temp_dir().join(format!("entelechy-node-clock-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
+    // Offset by 8 texels (past the 1..=2 tiled stencil fusion halo) so `wave`
+    // and `blur` stay two distinct GPU nodes with separate device timestamps.
     std::fs::write(
         dir.join("lib.ent"),
         "kernel t.wave@1 { requires { field.write; time.read; } output result: Image; compute { let p = coord(); return vec4(sin(p.x * 0.01 + time()), cos(p.y * 0.01), 0.0, 1.0); } }
-kernel t.blur@1 { requires { field.read; field.write; } input picture: Image; output result: Image; compute { let p = coord(); let n = size(picture); return (at(picture, p) + at(picture, min(p + vec2(1.0, 0.0), n - vec2(1.0, 1.0)))) * 0.5; } }",
+kernel t.blur@1 { requires { field.read; field.write; } input picture: Image; output result: Image; compute { let p = coord(); let n = size(picture); return (at(picture, p) + at(picture, min(p + vec2(8.0, 0.0), n - vec2(1.0, 1.0)))) * 0.5; } }",
     )
     .unwrap();
     std::fs::write(

@@ -27,8 +27,10 @@ pub use entelechy_abi::{
     Value,
 };
 pub use fuse::{
-    FuseError, InputUse, QUANTIZE_F16_FN, counted, counts_only, extent_params, fuse, fuse_indexed,
-    fuse_outputs, fused_name, input_use, offset_read, row_reads, samples_only,
+    FuseError, InputUse, MAX_STENCIL_RADIUS, QUANTIZE_F16_FN, TILE_FN_PREFIX, counted, counts_only,
+    extent_params, fuse, fuse_indexed, fuse_outputs, fuse_stencil, fused_name, input_use,
+    offset_read, row_reads, samples_only, stencil_needs_extent, stencil_radius,
+    stencil_radius_with_peers, tile_fn_radius,
 };
 pub use group::group_fault;
 pub use lanes::lanes;
