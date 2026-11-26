@@ -59,8 +59,9 @@ function scriptedProvider(steps) {
     async complete({ messages }) {
       const fn = steps[idx++];
       assert.ok(fn, `unexpected extra provider call #${idx}`);
-      const lastUser = JSON.parse(messages[messages.length - 1].content);
-      return fn(lastUser, idx);
+      const lastMsg = messages[messages.length - 1];
+      const lastUser = JSON.parse(lastMsg.content);
+      return fn(lastUser, idx, lastMsg.images || []);
     },
   };
 }
@@ -235,6 +236,107 @@ output result <- inv.result;
     assert.equal(liveRes.promoted, true);
     assert.equal(existsSync(join(dir, "kernels/invert.ent")), true);
     assert.match(readFileSync(scenePath, "utf8"), /custom\.invert@1/);
+
+    // Follow-up evolution: verify `local_files` lists `kernels/invert.ent` and
+    // the `inspect` action reads sibling `.ent` source + live `help("mix")`.
+    const inspectRes = await evolve(client, {
+      intent: "Blend inverted colors halfway with original using mix",
+      provider: scriptedProvider([
+        (ctx) => {
+          assert.ok(
+            ctx.local_files.includes("kernels/invert.ent"),
+            `expected kernels/invert.ent in local_files: ${JSON.stringify(ctx.local_files)}`,
+          );
+          return { action: "inspect", paths: ["kernels/invert.ent"], help: ["mix"] };
+        },
+        (ctx) => {
+          const docs = ctx.inspect_result.documents;
+          assert.equal(docs.length, 1);
+          assert.match(docs[0].text, /custom\.invert@1/);
+          const helps = ctx.inspect_result.help;
+          assert.equal(helps.length, 1);
+          assert.equal(helps[0].error, undefined);
+          return {
+            action: "propose",
+            summary: "Blend custom.invert@1 halfway via mix()",
+            path: "kernels/invert.ent",
+            text: docs[0].text.replace(
+              "return vec4(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);",
+              "return vec4(mix(c.rgb, vec3(1.0, 1.0, 1.0) - c.rgb, 0.5), c.a);",
+            ),
+          };
+        },
+      ]),
+    });
+    assert.equal(inspectRes.ok, true);
+    assert.equal(inspectRes.promoted, true);
+    assert.match(readFileSync(join(dir, "kernels/invert.ent"), "utf8"), /mix\(c\.rgb/);
+  } finally {
+    await client.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+async function testVisualReviewClosedLoop(bin, env) {
+  const { dir, scenePath } = tempScene("visual");
+  const client = EntelechyClient.spawn(bin, scenePath, { args: ["--backend", "cpu"], env });
+  try {
+    await client.evaluate({ time: 0.0 });
+    const stages = [];
+
+    const res = await evolve(client, {
+      intent: "Make the scene bright warm gold and verify visually before committing",
+      maxAttempts: 3,
+      visualReview: true,
+      gates: { steps: 1, forbid_nonfinite: true, include_png: true },
+      onEvent: (ev) => stages.push(ev.stage),
+      provider: scriptedProvider([
+        // Turn 1: Receives baseline live PNG in Stage 1 observe; proposes a dark draft.
+        (ctx, _turn, images) => {
+          assert.equal(ctx.visual_review, true);
+          assert.equal(images.length, 1, "Stage 1 observe must attach baseline PNG");
+          assert.ok(images[0].length > 20, "baseline PNG must be non-empty base64");
+          return {
+            action: "propose",
+            summary: "First draft (too dark)",
+            text: BASE_SCENE.replace("vec4(coord().x / 8.0, coord().y / 8.0, 0.5, 1.0)", "vec4(0.1, 0.05, 0.0, 1.0)"),
+          };
+        },
+        // Turn 2: Mechanical gates passed in shadow, NOT committed yet! Provider sees shadow PNG,
+        // rejects visually, and proposes bright gold instead.
+        (ctx, _turn, images) => {
+          assert.equal(ctx.visual_review_needed, true);
+          assert.equal(images.length, 1, "visual review must attach shadow PNG");
+          assert.equal(
+            readFileSync(scenePath, "utf8"),
+            BASE_SCENE,
+            "disk must remain untouched while awaiting visual acceptance",
+          );
+          return {
+            action: "propose",
+            summary: "Bright warm gold revision",
+            text: BASE_SCENE.replace("vec4(coord().x / 8.0, coord().y / 8.0, 0.5, 1.0)", "vec4(1.0, 0.82, 0.2, 1.0)"),
+          };
+        },
+        // Turn 3: Sees second shadow PNG, approves visually -> atomic commit!
+        (ctx, _turn, images) => {
+          assert.equal(ctx.visual_review_needed, true);
+          assert.equal(images.length, 1);
+          assert.equal(readFileSync(scenePath, "utf8"), BASE_SCENE, "disk still untouched before accept");
+          return {
+            action: "accept",
+            summary: "Warm gold verified visually; promote live",
+          };
+        },
+      ]),
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(res.promoted, true);
+    assert.equal(res.attempts, 2);
+    assert.ok(stages.includes("visual_review"));
+    assert.ok(stages.includes("promoted"));
+    assert.match(readFileSync(scenePath, "utf8"), /1\.0, 0\.82, 0\.2/);
   } finally {
     await client.close();
     rmSync(dir, { recursive: true, force: true });
@@ -306,7 +408,9 @@ async function main() {
   await testSearchRepairGateAndPromote(bin, env);
   console.log("ai bridge: search + compile repair + finite gate/trace + atomic promote ok");
   await testMultiDocumentShadowCreation(bin, env);
-  console.log("ai bridge: multi-document shadow trial & atomic promote ok");
+  console.log("ai bridge: multi-document shadow trial, inspect (.ent + help) & atomic promote ok");
+  await testVisualReviewClosedLoop(bin, env);
+  console.log("ai bridge: multimodal visual review (shadow PNG -> revise -> accept -> commit) ok");
   await testTcpLiveCoCreationAndZeroPollution(bin, env);
   console.log("ai bridge: live TCP co-creation & zero-pollution rollback ok");
   console.log("RESULT: ok");

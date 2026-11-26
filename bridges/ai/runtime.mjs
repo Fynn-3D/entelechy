@@ -18,8 +18,9 @@ You evolve a live Entelechy scene (.esn graph + .ent Kernels) through structured
 
 Core Entelechy rules:
 1. Reuse existing capabilities from the catalog ("use \\"<pkg>.entpkg\\";" or "node x: graph \\"<pkg>.entpkg/graphs/g.esn\\" { ... }") before writing new Kernels.
-2. Never invent language keywords or builtins. Every Kernel declares explicit "requires { ... }", typed inputs/params/outputs, and a bounded body.
-3. Every proposed change is verified inside an isolated in-memory shadow session via the protocol's \`trial\` operation before it ever touches disk or the live world.
+2. Never invent language keywords or builtins. If unsure of a builtin signature or syntax, inspect it via {"action":"help"} before proposing. Every Kernel declares explicit "requires { ... }", typed inputs/params/outputs, and a bounded body.
+3. For multi-file scenes (listed in \`local_files\`), read sibling .ent/.esn files via \`inspect\` before editing them. Prefer surgical \`edits\` or targeted \`documents\` changes.
+4. Every proposed change is verified inside an isolated in-memory shadow session via the protocol's \`trial\` operation before it ever touches disk or the live world.
 
 Reply with ONE JSON object matching one of these actions:
 
@@ -34,15 +35,29 @@ Reply with ONE JSON object matching one of these actions:
   "output": null
 }
 
-2) Propose a candidate scene/Kernel change to run through shadow verification gates:
+2) Inspect local scene documents (.ent/.esn) or look up live language/builtin help:
+{
+  "action": "inspect",
+  "paths": ["kernels/sim.ent"],
+  "help": ["at_linear"]
+}
+
+3) Propose a candidate scene/Kernel change to run through shadow verification gates:
 {
   "action": "propose",
   "summary": "Brief description of the change",
-  "text": "...full root scene.esn text (omit if using edits or documents)...",
+  "path": null,
+  "text": "...full document text (omit if using edits or documents)...",
   "edits": null,
   "documents": null
 }
-Note: for multi-file changes (such as adding a new local .ent Kernel file and wiring it in scene.esn), use "documents": [{"path": "kernels/foo.ent", "text": "..."}, {"text": "...root scene.esn..."}].`;
+Note: for multi-file changes (such as adding/editing a local .ent Kernel file and wiring it in scene.esn), use "documents": [{"path": "kernels/foo.ent", "text": "..."}, {"text": "...root scene.esn..."}].
+
+4) Accept a shadow-verified visual preview (ONLY when prompted with \`visual_review_needed: true\`):
+{
+  "action": "accept",
+  "summary": "Visual check passed; promote shadow change to the live world"
+}`;
 
 function extractKeywords(intent) {
   const words = String(intent || "")
@@ -106,15 +121,19 @@ function buildTrialRequest(proposal, gates, commit) {
 }
 
 /**
- * Runs the 5-stage L7 capability evolution loop against a live Entelechy client.
+ * Runs the closed-loop L7 capability evolution cycle against a live Entelechy client:
+ *   observe (+ optional PNG) -> search/inspect (catalog, local .ent docs, help) ->
+ *   shadow trial gates & auto-repair -> optional multimodal visual review -> atomic promote.
  *
  * @param {import("./client.mjs").EntelechyClient} client
  * @param {object} options
  * @param {string} options.intent - Natural-language goal.
  * @param {{ name?: string, complete: (req: { system: string, messages: Array<{role: string, content: string, images?: string[]}> }) => Promise<object> }} options.provider
  * @param {number} [options.maxAttempts=4] - Maximum shadow trial attempts.
- * @param {number} [options.maxSearches=3] - Maximum mid-loop catalog lookups.
+ * @param {number} [options.maxSearches=4] - Maximum mid-loop catalog lookups.
+ * @param {number} [options.maxInspects=6] - Maximum mid-loop document/help lookups.
  * @param {object} [options.gates] - Verification gates forwarded to `trial`.
+ * @param {boolean} [options.visualReview] - When true (default when `gates.include_png` is true), hold passing shadow renders for model visual confirmation (`accept` vs `propose`) before committing.
  * @param {boolean} [options.dryRun=false] - If true, verify in shadow without committing.
  * @param {number} [options.catalogLimit=24] - Max entries returned per catalog search.
  * @param {(event: object) => void} [options.onEvent] - Optional progress hook.
@@ -125,8 +144,10 @@ export async function evolve(
     intent,
     provider,
     maxAttempts = 4,
-    maxSearches = 3,
+    maxSearches = 4,
+    maxInspects = 6,
     gates = {},
+    visualReview = Boolean(gates.include_png),
     dryRun = false,
     catalogLimit = 24,
     onEvent = () => {},
@@ -139,13 +160,26 @@ export async function evolve(
     throw new Error("evolve requires a `provider` with a `complete` method");
   }
 
+  const effectiveGates = visualReview ? { ...gates, include_png: true } : gates;
+
   // Stage 1: Observe the running world via minimal protocol primitives.
   onEvent({ stage: "observe" });
   const [observation, document] = await Promise.all([
-    client.observe({ measure: true, checkOutputs: true }),
+    client.observe({
+      measure: true,
+      checkOutputs: true,
+      includePng: Boolean(effectiveGates.include_png),
+    }),
     client.document(),
   ]);
-  const { status, graph, last_frame: lastFrame, outputs } = observation;
+  const {
+    status,
+    graph,
+    local_files: localFiles,
+    last_frame: lastFrame,
+    outputs,
+    images: initialImages,
+  } = observation;
 
   // Stage 2: Initial capability discovery via `catalog`.
   const keywords = extractKeywords(intent);
@@ -157,6 +191,7 @@ export async function evolve(
 
   const worldContext = {
     intent,
+    visual_review: visualReview,
     status: {
       backend: status.backend,
       scene: status.scene,
@@ -172,6 +207,7 @@ export async function evolve(
         cold: status.memory?.cold,
       },
     },
+    local_files: localFiles,
     document: {
       path: document.path,
       version: document.version,
@@ -203,10 +239,11 @@ export async function evolve(
     outputs: outputs.map((o) => ({ name: o.name, nonfinite: o.nonfinite })),
     catalog: summarizeCatalog(initialCatalog),
     gates: {
-      steps: gates.steps ?? 2,
-      forbid_nonfinite: gates.forbid_nonfinite ?? true,
-      max_frame_ms: gates.max_frame_ms ?? null,
-      forbid_download: gates.forbid_download ?? false,
+      steps: effectiveGates.steps ?? 2,
+      forbid_nonfinite: effectiveGates.forbid_nonfinite ?? true,
+      max_frame_ms: effectiveGates.max_frame_ms ?? null,
+      forbid_download: effectiveGates.forbid_download ?? false,
+      include_png: Boolean(effectiveGates.include_png),
     },
   };
 
@@ -214,16 +251,23 @@ export async function evolve(
     {
       role: "user",
       content: JSON.stringify(worldContext, null, 2),
+      ...(initialImages?.length ? { images: initialImages } : {}),
     },
   ];
 
   const audit = [];
   let trialCount = 0;
   let searchCount = 0;
+  let inspectCount = 0;
+  let pendingVerified = null;
 
-  // Stage 3-5: Plan -> Search / Shadow Trial -> Auto-Repair -> Atomic Promote.
-  while (trialCount < maxAttempts) {
-    onEvent({ stage: "plan", attempt: trialCount + 1, maxAttempts });
+  // Stage 3-6: Plan -> Search/Inspect -> Shadow Trial -> Visual Review -> Atomic Promote.
+  while (trialCount < maxAttempts || pendingVerified !== null) {
+    onEvent({
+      stage: pendingVerified ? "visual_decision" : "plan",
+      attempt: pendingVerified ? trialCount : trialCount + 1,
+      maxAttempts,
+    });
     const action = await provider.complete({
       system: SYSTEM_PROMPT,
       messages,
@@ -235,7 +279,7 @@ export async function evolve(
         messages.push({
           role: "user",
           content: JSON.stringify({
-            notice: "Search budget exhausted; now emit a `propose` action.",
+            notice: "Search budget exhausted; now emit a `propose` or `accept` action.",
           }),
         });
         continue;
@@ -257,18 +301,155 @@ export async function evolve(
       continue;
     }
 
-    if (action?.action !== "propose") {
-      trialCount += 1;
-      audit.push({ kind: "invalid_action", action });
+    if (action?.action === "inspect") {
+      if (inspectCount >= maxInspects) {
+        messages.push({
+          role: "user",
+          content: JSON.stringify({
+            notice: "Inspect budget exhausted; now emit a `propose` or `accept` action.",
+          }),
+        });
+        continue;
+      }
+      inspectCount += 1;
+      const rawPaths = Array.isArray(action.paths)
+        ? action.paths
+        : action.path != null
+          ? [action.path]
+          : [];
+      const rawHelps = Array.isArray(action.help)
+        ? action.help
+        : action.help != null
+          ? [action.help]
+          : [];
+      onEvent({ stage: "inspect", index: inspectCount, paths: rawPaths, help: rawHelps });
+
+      const documents = [];
+      for (const p of rawPaths.slice(0, 6)) {
+        try {
+          const doc = await client.document({ path: String(p) });
+          documents.push({ path: doc.path, version: doc.version, text: doc.text });
+        } catch (err) {
+          documents.push({ path: String(p), error: err.payload?.message || err.message });
+        }
+      }
+
+      const helpResults = [];
+      for (const name of rawHelps.slice(0, 6)) {
+        try {
+          const h = await client.help({ name: String(name) });
+          helpResults.push({ name: String(name), result: h });
+        } catch (err) {
+          helpResults.push({
+            name: String(name),
+            error: err.payload?.message || err.message,
+            similar: err.payload?.similar || null,
+          });
+        }
+      }
+
+      audit.push({ kind: "inspect", paths: rawPaths, help: rawHelps });
+      messages.push({
+        role: "user",
+        content: JSON.stringify({ inspect_result: { documents, help: helpResults } }, null, 2),
+      });
+      continue;
+    }
+
+    if (action?.action === "accept") {
+      if (!pendingVerified) {
+        messages.push({
+          role: "user",
+          content: JSON.stringify({
+            error: "No verified shadow proposal is pending review; emit `propose` first.",
+          }),
+        });
+        continue;
+      }
+      const { proposal, trial: shadowTrial } = pendingVerified;
+      const finalSummary = action.summary || proposal.summary || "";
+      pendingVerified = null;
+
+      if (dryRun) {
+        audit.push({ kind: "accept", dryRun: true, summary: finalSummary });
+        onEvent({
+          stage: "verified",
+          attempt: trialCount,
+          frame_ms: shadowTrial.frame_ms,
+        });
+        return {
+          ok: true,
+          promoted: false,
+          dryRun: true,
+          attempts: trialCount,
+          summary: finalSummary,
+          trial: shadowTrial,
+          audit,
+        };
+      }
+
+      const commitReq = buildTrialRequest(proposal, { ...effectiveGates, include_png: false }, true);
+      const committed = await client.trial(commitReq);
+      audit.push({
+        kind: "accept",
+        summary: finalSummary,
+        passed: committed.passed,
+        committed: committed.committed,
+        frame_ms: committed.frame_ms,
+      });
+      if (committed.passed && committed.committed) {
+        onEvent({
+          stage: "promoted",
+          attempt: trialCount,
+          frame_ms: committed.frame_ms,
+          version: committed.version || null,
+        });
+        return {
+          ok: true,
+          promoted: true,
+          dryRun: false,
+          attempts: trialCount,
+          summary: finalSummary,
+          trial: committed,
+          audit,
+        };
+      }
+      // Rare race (e.g. disk changed during visual review): report back and retry if budget remains.
       messages.push({
         role: "user",
         content: JSON.stringify({
-          error: `Unsupported action "${action?.action}". Reply with {"action":"search",...} or {"action":"propose",...}.`,
+          commit_failed: true,
+          fault: committed.fault || null,
+          gates: committed.gates || [],
+          instruction: "Live session changed during review; emit a refreshed `propose`.",
         }),
       });
       continue;
     }
 
+    if (action?.action !== "propose") {
+      if (pendingVerified && trialCount >= maxAttempts) {
+        pendingVerified = null;
+        break;
+      }
+      trialCount += 1;
+      audit.push({ kind: "invalid_action", action });
+      messages.push({
+        role: "user",
+        content: JSON.stringify({
+          error: `Unsupported action "${action?.action}". Reply with \`search\`, \`inspect\`, \`propose\`, or \`accept\`.`,
+        }),
+      });
+      continue;
+    }
+
+    if (trialCount >= maxAttempts) {
+      // Model declined visual acceptance and had no remaining trial budget.
+      pendingVerified = null;
+      break;
+    }
+
+    pendingVerified = null;
     trialCount += 1;
     onEvent({
       stage: "trial",
@@ -277,7 +458,8 @@ export async function evolve(
       summary: action.summary || "",
     });
 
-    const trialReq = buildTrialRequest(action, gates, !dryRun);
+    const shouldCommitNow = !dryRun && !visualReview;
+    const trialReq = buildTrialRequest(action, effectiveGates, shouldCommitNow);
     let result;
     try {
       result = await client.trial(trialReq);
@@ -305,6 +487,40 @@ export async function evolve(
     });
 
     if (result.passed) {
+      if (visualReview) {
+        const shadowImages = [];
+        for (const out of result.outputs || []) {
+          if (out.png) shadowImages.push(out.png);
+        }
+        pendingVerified = { proposal: action, trial: result };
+        onEvent({
+          stage: "visual_review",
+          attempt: trialCount,
+          frame_ms: result.frame_ms,
+          images: shadowImages.length,
+        });
+        const reviewPayload = {
+          visual_review_needed: true,
+          attempt: trialCount,
+          remaining_attempts: maxAttempts - trialCount,
+          frame_ms: result.frame_ms,
+          downloaded_bytes: result.downloaded_bytes,
+          outputs: (result.outputs || []).map((o) => ({
+            name: o.name,
+            nonfinite: o.nonfinite,
+            diff: o.diff,
+          })),
+          instruction:
+            "All mechanical gates passed in shadow (live world and disk are NOT yet modified). Inspect the attached rendered shadow image(s): reply {\"action\":\"accept\",\"summary\":\"...\"} to promote atomically, OR reply {\"action\":\"propose\",...} to fix any visual defect.",
+        };
+        messages.push({
+          role: "user",
+          content: JSON.stringify(reviewPayload, null, 2),
+          ...(shadowImages.length ? { images: shadowImages } : {}),
+        });
+        continue;
+      }
+
       onEvent({
         stage: result.committed ? "promoted" : "verified",
         attempt: trialCount,
@@ -332,7 +548,7 @@ export async function evolve(
     });
 
     const images = [];
-    if (gates.include_png) {
+    if (effectiveGates.include_png) {
       for (const out of result.outputs || []) {
         if (out.png) images.push(out.png);
       }
@@ -356,7 +572,7 @@ export async function evolve(
         diff: o.diff,
       })),
       instruction:
-        "Inspect `failed_gates`, `fault` (line/column/fix), and `trace` (element bindings & calls), then emit a repaired `propose` action. Disk and the live scene were NOT modified.",
+        "Inspect `failed_gates`, `fault` (line/column/fix), and `trace` (element bindings & calls), then emit a repaired `propose` action (or `inspect` local files / `help`). Disk and the live scene were NOT modified.",
     };
     messages.push({
       role: "user",
