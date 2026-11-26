@@ -155,12 +155,42 @@ export class EntelechyClient {
     return this.request("catalog", fields);
   }
 
-  diagnose(fields = {}) {
-    return this.request("diagnose", fields);
-  }
-
   trial(fields = {}) {
     return this.request("trial", fields);
+  }
+
+  /**
+   * Client-side L7 world observation built strictly from minimal protocol
+   * primitives (`status`, `graph`, optional `evaluate`, and `read(summary)`).
+   */
+  async observe({ measure = false, checkOutputs = true } = {}) {
+    let status = await this.status();
+    if (status.loaded && (measure || status.last_frame == null)) {
+      await this.evaluate({ measure: true }).catch(() => {});
+      status = await this.status();
+    }
+    const graph = status.loaded ? await this.graph().catch(() => null) : null;
+    const outputs = [];
+    if (checkOutputs && graph?.outputs?.length) {
+      for (const out of graph.outputs) {
+        const name = typeof out === "string" ? out : out.name;
+        if (!name) continue;
+        const summary = await this.read({ output: name, format: "summary" }).catch(() => null);
+        if (summary) {
+          const nonfinite = (summary.fields || []).reduce(
+            (acc, f) => acc + (f.nonfinite || 0),
+            0,
+          );
+          outputs.push({ name, nonfinite, summary });
+        }
+      }
+    }
+    return {
+      status,
+      graph,
+      last_frame: status.last_frame,
+      outputs,
+    };
   }
 
   compose(fields = {}) {

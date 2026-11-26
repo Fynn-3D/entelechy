@@ -74,7 +74,9 @@ async function testSearchRepairGateAndPromote(bin, env) {
     const provider = scriptedProvider([
       // Turn 1: Observe world & search catalog for an Image desaturation capability.
       (ctx) => {
-        assert.equal(ctx.diagnosis.healthy, true);
+        assert.equal(ctx.status.loaded, true);
+        assert.equal(ctx.status.failing, null);
+        assert.equal(ctx.last_frame.downloaded_bytes, 0);
         assert.ok(ctx.catalog.packages.some((p) => p.name === "image"));
         return { action: "search", query: "saturation", input: "Image" };
       },
@@ -155,8 +157,11 @@ output result <- gray.result;
     assert.ok(res.trial.outputs[0].diff.changed > 0, "grayscale output must differ from color baseline");
     assert.match(readFileSync(scenePath, "utf8"), /image\.adjust@1/);
 
-    const postDiag = await client.diagnose({ measure: true });
-    assert.equal(postDiag.healthy, true);
+    const postObs = await client.observe({ measure: true });
+    assert.equal(postObs.status.loaded, true);
+    assert.equal(postObs.status.failing, null);
+    assert.equal(postObs.last_frame.downloaded_bytes, 0);
+    assert.equal(postObs.outputs[0].nonfinite, 0);
   } finally {
     await client.close();
     rmSync(dir, { recursive: true, force: true });

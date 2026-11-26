@@ -20,12 +20,72 @@ pub(crate) fn status(session: &Session) -> Result<Json, Json> {
         "nodes": session.graph().map_or(0, |graph| graph.nodes.len()),
         "loaded": session.graph().is_some(),
         "refused": session.why_no_scene(),
+        "failing": session.failing(),
         "fusion": session.fusion(),
         "revision": session.position().0,
         "frame": session.position().1,
         "grants": session.runtime().grants().iter().map(|c| c.name()).collect::<Vec<_>>(),
         "memory": memory_json(session),
+        "last_frame": last_frame_json(session),
     }))
+}
+
+/// Pure read-only facts from the most recent evaluated frame (no side effects).
+fn last_frame_json(session: &Session) -> Json {
+    let Some(rep) = session.last_report() else {
+        return Json::Null;
+    };
+    struct NodeRow {
+        node: String,
+        millis: f64,
+        backend: Option<&'static str>,
+        routed: Option<String>,
+        uploaded: u64,
+        downloaded: u64,
+    }
+    let device_ms = session
+        .device_times()
+        .map(|d| d.busy.as_secs_f64() * 1000.0);
+    let mut rows: Vec<NodeRow> = rep
+        .timings
+        .iter()
+        .map(|(node, dur)| {
+            let placed = rep.placements.iter().find(|p| p.node == *node);
+            NodeRow {
+                node: node.to_string(),
+                millis: dur.as_secs_f64() * 1000.0,
+                backend: placed.map(|p| p.backend),
+                routed: placed.and_then(|p| p.routed.as_deref().map(str::to_owned)),
+                uploaded: placed.map_or(0, |p| p.uploaded),
+                downloaded: placed.map_or(0, |p| p.downloaded),
+            }
+        })
+        .collect();
+    let nodes_ms: f64 = rows.iter().map(|r| r.millis).sum();
+    rows.sort_by(|a, b| b.millis.total_cmp(&a.millis));
+    let uploaded_bytes: u64 = rep.placements.iter().map(|p| p.uploaded).sum();
+    let downloaded_bytes: u64 = rep.placements.iter().map(|p| p.downloaded).sum();
+    json!({
+        "frame_ms": device_ms.unwrap_or(nodes_ms),
+        "nodes_ms": nodes_ms,
+        "device_ms": device_ms,
+        "uploaded_bytes": uploaded_bytes,
+        "downloaded_bytes": downloaded_bytes,
+        "fused_groups": rep.fused.len(),
+        "refused": rep.refused.iter().map(|rf| json!({
+            "node": rf.node.to_string(),
+            "members": rf.members.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "reason": rf.reason,
+        })).collect::<Vec<_>>(),
+        "nodes": rows.into_iter().map(|r| json!({
+            "node": r.node,
+            "millis": r.millis,
+            "backend": r.backend,
+            "routed": r.routed,
+            "uploaded": r.uploaded,
+            "downloaded": r.downloaded,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 /// How many of the largest held Fields `status` names.

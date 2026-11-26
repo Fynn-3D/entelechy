@@ -4,7 +4,8 @@
 //!
 //! Never accesses the Host directly: every world read, capability discovery,
 //! speculative shadow verification, and atomic promotion flows strictly
-//! through the Creation Protocol (`catalog`, `diagnose`, `trial`, `document`).
+//! through the minimal Creation Protocol (`status`, `graph`, `document`,
+//! `read`, `catalog`, `trial`).
 
 const STOP_WORDS = new Set([
   "a", "an", "the", "to", "for", "of", "in", "on", "with", "and", "or",
@@ -138,14 +139,13 @@ export async function evolve(
     throw new Error("evolve requires a `provider` with a `complete` method");
   }
 
-  // Stage 1: Observe the running world.
+  // Stage 1: Observe the running world via minimal protocol primitives.
   onEvent({ stage: "observe" });
-  const [status, document, diagnosis] = await Promise.all([
-    client.status(),
+  const [observation, document] = await Promise.all([
+    client.observe({ measure: true, checkOutputs: true }),
     client.document(),
-    client.diagnose({ measure: true, check_finite: true, top: 8 }),
   ]);
-  const graph = status.loaded ? await client.graph().catch(() => null) : null;
+  const { status, graph, last_frame: lastFrame, outputs } = observation;
 
   // Stage 2: Initial capability discovery via `catalog`.
   const keywords = extractKeywords(intent);
@@ -161,9 +161,16 @@ export async function evolve(
       backend: status.backend,
       scene: status.scene,
       loaded: status.loaded,
+      refused: status.refused,
+      failing: status.failing,
       revision: status.revision,
       frame: status.frame,
       grants: status.grants,
+      memory: {
+        used: status.memory?.used,
+        budget: status.memory?.budget,
+        cold: status.memory?.cold,
+      },
     },
     document: {
       path: document.path,
@@ -182,13 +189,18 @@ export async function evolve(
           outputs: graph.outputs,
         }
       : null,
-    diagnosis: {
-      healthy: diagnosis.healthy,
-      frame_ms: diagnosis.frame_ms,
-      hotspots: diagnosis.hotspots,
-      transfers: diagnosis.transfers,
-      recommendations: diagnosis.recommendations,
-    },
+    last_frame: lastFrame
+      ? {
+          frame_ms: lastFrame.frame_ms,
+          device_ms: lastFrame.device_ms,
+          uploaded_bytes: lastFrame.uploaded_bytes,
+          downloaded_bytes: lastFrame.downloaded_bytes,
+          fused_groups: lastFrame.fused_groups,
+          refused: lastFrame.refused,
+          nodes: (lastFrame.nodes || []).slice(0, 8),
+        }
+      : null,
+    outputs: outputs.map((o) => ({ name: o.name, nonfinite: o.nonfinite })),
     catalog: summarizeCatalog(initialCatalog),
     gates: {
       steps: gates.steps ?? 2,

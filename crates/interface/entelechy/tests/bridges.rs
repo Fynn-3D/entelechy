@@ -545,8 +545,8 @@ fn a_rig_entelechy_wrote_opens_in_blender() {
 }
 
 /// The L7 AI meta-runtime bridge drives `entelechy serve` over stdio and TCP,
-/// using `catalog`, `diagnose`, and `trial` shadow gates to search, auto-repair,
-/// reject NaN outputs with element traces, and atomically promote clean changes.
+/// using `status`, `catalog`, and `trial` shadow gates to observe, search,
+/// auto-repair, reject NaN outputs with element traces, and atomically promote clean changes.
 #[test]
 fn the_ai_meta_runtime_bridge_evolves_a_scene_through_shadow_gates() {
     let Some(node) = tool(&["node"]) else {

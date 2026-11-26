@@ -336,7 +336,7 @@ pub fn operations() -> Vec<Operation> {
             "status",
             "The session at a glance.",
             vec![],
-            "backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, memory (`used` and `budget`, the Host's bytes; `cold`, the nodes whose outputs are let go, made again when read; where the bytes are: `host`, `device`, `kept` (resident Fields' Host copies), `spare`, `loose` (Fields nothing holds), `backends` (what each keeps of its own) and `top`, the largest Fields with what holds each), versions (`entelechy`, `api`, `language`, `ir`, `package`)",
+            "backend, scene, watched, kernels (published Kernels), natives (the backend's native operations), nodes, loaded (whether a scene is), refused (why not, when not), failing (why the last frame failed, or null), revision (moved by every change but running), frame (the frames committed since that revision), fusion, grants, memory (`used` and `budget`, the Host's bytes; `cold`, the nodes whose outputs are let go, made again when read; where the bytes are: `host`, `device`, `kept` (resident Fields' Host copies), `spare`, `loose` (Fields nothing holds), `backends` (what each keeps of its own) and `top`, the largest Fields with what holds each), last_frame (read-only facts from the latest frame: `frame_ms`, `nodes_ms`, `device_ms`, `uploaded_bytes`, `downloaded_bytes`, `fused_groups`, `refused`, and per-node `nodes` sorted slowest-first; null before the first frame), versions (`entelechy`, `api`, `language`, `ir`, `package`)",
         ),
         op(
             "kernels",
@@ -546,28 +546,6 @@ pub fn operations() -> Vec<Operation> {
                 ),
             ]),
             "passed, committed, written, steps, gates, frame_ms, wall_ms, device_ms, uploaded_bytes, downloaded_bytes, timings, placements, outputs (summary, baseline diff, optional png), state_warning, fault (on compile/runtime failure), trace (auto-captured on fault or first nonfinite element); when committed, version, events, documents",
-        ),
-        op(
-            "diagnose",
-            "Structured health, hotspot, GPU transfer, fusion, output finiteness, memory, and actionable optimization report for the live session.",
-            with_context(vec![
-                may(
-                    "measure",
-                    Ty::Bool,
-                    "run one fresh measured evaluation before diagnosing (false by default; automatically measured once if no frame has run yet)",
-                ),
-                may(
-                    "check_finite",
-                    Ty::Bool,
-                    "scan every graph output for NaN/Inf values (true by default)",
-                ),
-                may(
-                    "top",
-                    Ty::Int,
-                    "maximum hotspots and memory entries returned (10 by default, 1 to 100)",
-                ),
-            ]),
-            "healthy, backend, loaded, revision, frame, failing, frame_ms, device_ms, hotspots, transfers (`uploaded_bytes`, `downloaded_bytes`, `stalls`), fusions (`fused_groups`, `refused`), outputs, memory, recommendations",
         ),
         op(
             "sync",

@@ -1,16 +1,17 @@
 # Entelechy L7 AI Meta-Runtime Bridge
 
 Model-agnostic, zero-dependency L7 capability compiler built strictly over the
-Entelechy Creation Protocol (`catalog`, `diagnose`, `trial`, `document`, `graph`,
-`trace`).
+minimal Entelechy Creation Protocol (`status`, `graph`, `document`, `read`,
+`catalog`, `trial`, `trace`).
 
 ## Architecture
 
-This bridge keeps all model orchestration outside the Host and Runtime layers:
+This bridge keeps all model orchestration and diagnosis heuristics outside the
+Host and Runtime layers:
 
 ```text
 Intent
-  -> [1. Observe]    status + graph + document + diagnose(measure: true)
+  -> [1. Observe]    status (with read-only last_frame facts) + graph + document + read(summary)
   -> [2. Search]     catalog(query, input, output, mode, package)
   -> [3. Plan]       pluggable LLM provider returns `search` or `propose` JSON
   -> [4. Shadow]     trial(..., commit: true) runs in an isolated in-memory

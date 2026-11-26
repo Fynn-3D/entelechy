@@ -335,7 +335,7 @@ fn coord_json(domain: entelechy_kernel::Domain, index: usize) -> Json {
     }
 }
 
-/// Summary statistics for one Field, used by `read`, `trial`, and `diagnose`.
+/// Summary statistics for one Field, used by `read` and `trial`.
 pub(crate) struct FieldStats {
     pub(crate) summary: Vec<Json>,
     pub(crate) nonfinite: u64,

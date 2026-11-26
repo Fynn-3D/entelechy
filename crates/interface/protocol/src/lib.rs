@@ -108,7 +108,6 @@ pub fn handle(session: &mut Session, request: &Json) -> Result<Json, Json> {
         "help" => inspect::help(&request),
         "compose" => create::compose(session, &request),
         "trial" => trial::trial(session, &request),
-        "diagnose" => trial::diagnose(session, &request),
         "sync" => create::sync(session),
         "prepare" => create::prepare(session, &request),
         "publish" => create::publish(session, &request),
@@ -771,8 +770,8 @@ output result <- pic.result;
     }
 
     #[test]
-    fn diagnose_and_catalog_report_structured_world_state() {
-        let (dir, mut session) = session("diagnose_catalog");
+    fn status_last_frame_and_catalog_report_objective_facts() {
+        let (dir, mut session) = session("status_catalog");
         // Add a local kernel file beside the scene for `catalog`.
         std::fs::write(
             dir.join("helpers.ent"),
@@ -790,13 +789,18 @@ output result <- pic.result;
         assert_eq!(cat["entries"][0]["id"], "local.double@1");
         assert_eq!(cat["entries"][0]["mode"], "map");
 
-        let diag = handle(&mut session, &json!({ "op": "diagnose", "measure": true })).unwrap();
-        assert_eq!(diag["healthy"], true);
-        assert_eq!(diag["loaded"], true);
-        assert!(!diag["hotspots"].as_array().unwrap().is_empty());
-        assert_eq!(diag["transfers"]["downloaded_bytes"], 0);
-        assert_eq!(diag["outputs"][0]["nonfinite"], 0);
-        assert!(diag["memory"]["budget"].as_u64().unwrap() > 0);
+        let before = handle(&mut session, &json!({ "op": "status" })).unwrap();
+        assert!(before["last_frame"].is_null());
+        assert!(before["failing"].is_null());
+
+        handle(&mut session, &json!({ "op": "evaluate", "measure": true })).unwrap();
+        let after = handle(&mut session, &json!({ "op": "status" })).unwrap();
+        assert_eq!(after["loaded"], true);
+        assert!(after["failing"].is_null());
+        assert!(after["last_frame"]["frame_ms"].as_f64().is_some());
+        assert_eq!(after["last_frame"]["downloaded_bytes"], 0);
+        assert!(!after["last_frame"]["nodes"].as_array().unwrap().is_empty());
+        assert!(after["memory"]["budget"].as_u64().unwrap() > 0);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
